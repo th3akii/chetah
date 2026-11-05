@@ -79,3 +79,19 @@ basic-SELECT milestone only.
   `tests/MyOrm.CodeGen.Tests/{schema.json,Generated/MyOrm.Schema.g.cs}`.
 - Revisit trigger: if hand-maintained alternatives or richer type needs appear
   (timestamptz, arrays), expect the type map and possibly the format to grow.
+
+## D003 — Provider-neutral query snapshots
+
+**Date:** 2026-11-05 (Stage 2, Core contract)
+
+`SelectQuery` is a sealed record describing sources, joins, projection, filters,
+grouping, ordering and pagination. `new SelectQuery(table)` and `table.SelectAll()`
+still describe a full-table read. Clause collections and membership values are
+snapshotted into read-only lists; deriving a query with `with` cannot change an
+existing query's collections.
+
+`SqlExpression` records carry CLR type and SQL nullability separately. Columns
+identify a source ID and raw schema name; values are data, never SQL fragments.
+The PostgreSQL layer remains responsible for validation, rendering and binding
+parameters. This Core contract alone does not enable fluent query refinement;
+the compiler and typed builder integration are separate implementation steps.
