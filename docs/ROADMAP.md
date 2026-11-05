@@ -67,12 +67,17 @@ Roughly: single-row and multi-row inserts, updates and deletes with mandatory sc
 
 ### Stage 4 — Schema Source of Truth and Typing
 
-**Status:** Undecided
+**Status:** In progress (Milestone 002 implemented: JSON schema → CLI generator → typed models; see [`TYPED_MODELS.md`](TYPED_MODELS.md) and [`DECISIONS.md`](DECISIONS.md) D002)
 **Goal:** Describe tables and columns once, and derive both query metadata and strongly typed models from it.
 
-This stage carries the largest unresolved decision in the project: what the schema representation is, and how models are produced and kept in sync. Both the format and the mechanism remain open in [`SPEC.md` §4 and §7](SPEC.md).
+This stage's open questions from the original draft were answered in Milestone 002:
+the format is JSON, the mechanism is the `MyOrm.CodeGen` CLI, and the sync
+discipline is "regenerate the single `MyOrm.Schema.g.cs`" (rationale in
+[`DECISIONS.md`](DECISIONS.md) D002). What remains open: whether the generated
+shape still fits once `Where`/`Insert` chains consume the typed columns.
 
-**Gating question:** what problem does generation solve that a hand-written description does not, given actual usage so far?
+**Gating question:** consumed for D001 — does `T` → generated table metadata
+resolution hold up as the query chain grows?
 
 ### Stage 5 — Relationships and Joins
 
@@ -94,6 +99,20 @@ This stage carries the largest unresolved decision in the project: what the sche
 **Goal:** Optional tooling for applying schema changes.
 
 Deliberately conditional: it is included only if the project reaches a point where manual schema management is a real cost. Migrations may never be built, and that is an acceptable outcome.
+
+### Stage 7.5 — Constraint Metadata (noted by author, not started)
+
+**Status:** Candidate
+**Goal:** Carry keys and constraints — primary keys, foreign keys, unique, and other column constraints — in the schema so generated metadata can express them (needed before `Where`/`Insert` can reason about keys).
+
+**Gating question:** which constraint set is actually needed by the next consuming milestone rather than ambitious completeness?
+
+### Stage 7.6 — Schema Format Ergonomics (noted by author, not started)
+
+**Status:** Candidate
+**Goal:** Reduce the verbosity of the JSON schema (repeated `"name": …` keys per column). Possible shapes: a column shorthand (`"columns": ["id:integer!", "name:text!"]`), or a different format — decided when actual friction demands it.
+
+**Gating question:** does the verbose form actually pain-worth-shipping the next N schemas, or is a shorthand justified by real usage?
 
 ### Stage 8 — Distribution and Documentation
 

@@ -156,12 +156,7 @@ objects or table definitions change.
 ## Step 4 — map
 
 ```csharp
-public record User(int Id, string Name, int Age);
-
-var rows = await db.QueryAsync(query, r => new User(
-    r.GetInt32(r.GetOrdinal("id")),
-    r.GetString(r.GetOrdinal("name")),
-    r.GetInt32(r.GetOrdinal("age"))));
+var rows = await db.QueryAsync(UsersTable.Table.SelectAll(), UsersTable.Map);
 ```
 
 For each row, `r` is an `NpgsqlDataReader` positioned on it:
@@ -171,16 +166,30 @@ For each row, `r` is an `NpgsqlDataReader` positioned on it:
 - `r.GetInt32(...)` reads that column's value (with the correct provider
   type),
 - `new User(...)` constructs the record.
+- `user.Id`, `user.Name`, `user.Age` are typed properties; nullable columns
+  arrive as nullable CLR types (`int?`).
 
-The delegate is the caller's explicit mapping contract. There is no reflection
-or automatic name matching at this stage — deliberate simplification for the
-first milestone; an automatic mapper is the natural third layer once a second
-use of `QueryAsync` shows what convention is worth copying.
+Milestone 001 required the caller to hand-write that delegate:
+
+```csharp
+// Milestone 001 (superseded by generated code, kept for context):
+var rows = await db.QueryAsync(query, r => new User(
+    r.GetInt32(r.GetOrdinal("id")),
+    r.GetString(r.GetOrdinal("name")),
+    r.GetInt32(r.GetOrdinal("age"))));
+```
+
+The delegate remains the explicit mapping contract — there is no automatic name
+matching or reflection at runtime. Since milestone 002 the delegate itself is
+**generated** from `myorm-schema.json` instead of written by hand; see
+[`TYPED_MODELS.md`](TYPED_MODELS.md). The hand-written form still works and
+remains the escape hatch for ad-hoc queries.
 
 ## Test anchoring
 
-The same flow decomposes into the three places tests live
-(`tests/MyOrm.Core.Tests`, `tests/MyOrm.Postgres.Tests`):
+The same flow decomposes into the four places tests live
+(`tests/MyOrm.Core.Tests`, `tests/MyOrm.Postgres.Tests`,
+`tests/MyOrm.CodeGen.Tests`):
 
 - **Describe** — `TableTests`: metadata shape, guards on empty names.
 - **Compile** — `PostgresCompilerTests`: exact SQL text, identifier escaping.
@@ -188,6 +197,18 @@ The same flow decomposes into the three places tests live
   when the `MYORM_CONNECTION_STRING` environment variable is set (the same
   variable `BasicExample` uses), creates/drops only a dedicated
   `myorm_test_users` table, seeds two rows, and asserts the mapped records.
+- **Typed pipeline** (milestone 002) — `MyOrm.CodeGen.Tests`: schema
+  parsing/validation, generated source details, and
+  `TypedSelectRoundTripTests` over the dedicated `test_widgets` table.
+
+## Running the generator
+
+```sh
+dotnet run --project src/MyOrm.CodeGen -- --schema examples/BasicExample/myorm-schema.json --out examples/BasicExample/Generated
+```
+
+See [`TYPED_MODELS.md`](TYPED_MODELS.md) for options, naming rules, and what is
+emitted.
 
 ## Running the example
 
@@ -199,13 +220,13 @@ export MYORM_CONNECTION_STRING="Host=localhost;Username=postgres;Password=<secre
 dotnet run --project examples/BasicExample
 ```
 
-Without the variable the example still prints the generated SQL and setup
-help, then exits.
+Without the variable the example prints setup help, then exits.
 
 ## Deliberate limits (first milestone)
 
 Not implemented, not hidden: `WHERE`/`JOIN`/`ORDER BY`/`LIMIT`,
-`INSERT`/`UPDATE`/`DELETE`, column types/nullability, parameters, transactions,
-migrations, typed model generation, and dialects other than PostgreSQL. The
-boundaries above (Core data objects / dialect compiler / executor) were chosen
-so those additions extend rather than reshape the code.
+`INSERT`/`UPDATE`/`DELETE`, parameters, transactions, migrations, and dialects
+other than PostgreSQL. (Typed model generation, column types/nullability —
+absent in milestone 001 — arrived in milestone 002.) The boundaries above
+(Core data objects / dialect compiler / executor) were chosen so those
+additions extend rather than reshape the code.
