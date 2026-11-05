@@ -43,18 +43,23 @@ This roadmap sketches a direction, not a commitment. It exists to keep the next 
 
 **Follow-up to this milestone:** review API ergonomics and decide the next milestone from observed friction, not from this document.
 
-## 4. Post-MVP Candidates
+## 4. Post-MVP Stages
 
-Nothing in this section is approved. Each stage lists the question that must be answered before it starts.
+Some stages are delivered and recorded here for history; the rest are not
+approved. Delivered stages carry a "Delivered" status line with their scope so
+the written record matches reality; candidate stages remain "must not be
+treated as a plan" until a concrete decision is made. Only delivered stages may
+be described as shipped.
 
 ### Stage 2 — Query Refinement
 
-**Status:** Candidate
+**Status:** Delivered 2026-11-05 (lambda `Where`, column projection, ordering, pagination, `DISTINCT`, explicit INNER/LEFT joins with correct outer-row nulls, `GROUP BY`/`HAVING` and aggregate functions; see [`BASIC_SELECT.md`](BASIC_SELECT.md), [`TYPED_MODELS.md`](TYPED_MODELS.md), [`DECISIONS.md`](DECISIONS.md))
+
 **Goal:** Make reads useful for realistic queries.
 
-Roughly: filtering conditions, ordering, pagination, and column projection. Value parameters are already a design principle; this stage is where their handling is proven at scale.
+Delivered shape: `db.Select<T>()` chains into an immutable query pipeline translated from C# lambdas into provider-neutral expression nodes, compiled to one parameterized PostgreSQL statement, and executed with compiled mappers. Unsupported C# expressions fail before any connection is opened; user values never enter SQL text.
 
-**Gating question:** does the MVP query description still feel right when conditions are added, or does it need reshaping first?
+**Original gating question** (does the MVP query description still feel right once conditions are added? — answered: the immutable-snapshot query record held; scopes that were originally candidates were explicitly approved by the author for this stage: lambda predicates instead of a typed-column DSL, and explicit INNER/LEFT joins pulled forward from Stage 5).
 
 ### Stage 3 — Write Operations
 
@@ -81,7 +86,7 @@ resolution hold up as the query chain grows?
 
 ### Stage 5 — Relationships and Joins
 
-**Status:** Candidate
+**Status:** Partially delivered — explicit INNER/LEFT joins (including self and repeated joins) landed with Stage 2; automatic relationship modeling and the remaining join kinds (RIGHT/FULL/CROSS) stay candidates.
 **Goal:** Express joins and related data without hiding the underlying SQL.
 
 **Gating question:** how much relationship modeling is warranted before it starts dictating the schema design?

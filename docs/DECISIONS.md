@@ -30,14 +30,19 @@ basic-SELECT milestone only.
 
 **Consequences:**
 
-> **Delivered 2026-11-05** — the typed-model prerequisites now exist:
+> **Delivered 2026-11-05** — the typed-model prerequisites exist:
 > `db.Select<T>().ToListAsync()` resolves T through the generated
 > `MyOrmSchema.Bindings` registry (`TableBinding<T>` in `MyOrm.Postgres`);
 > consumers construct `new PostgresDb(connectionString, MyOrmSchema.Bindings)`.
-> Unfiltered only; `Where`/`Join`/`Limit` chains remain future stages.
+> With Stage 2 the chain goes further: `Where`, `Select` projections, ordering,
+> pagination, `Distinct`, explicit joins and `GroupBy`/`Having` all compose
+> over this resolution (see D003 for the query snapshot contract).
 
-- Underneath, `PostgresCompiler.ToSql` and `PostgresDb` keep their roles:
-  `Select<T>()` is a lookup plus the same compile→execute pipeline.
+- Underneath, `PostgresCompiler.Compile` and `PostgresDb` keep their roles:
+  `Select<T>()` is a registry lookup; execution compiles the query into a
+  `CompiledQuery` (SQL text plus ordered parameters). Parameter types are
+  validated before a connection opens, values are bound after opening and
+  immediately before execution.
 - Resolution is registry-based (generated file), not reflection discovery —
   revisit trigger: if multiple tables per model type are ever needed, extend
   the registry schema.
@@ -74,7 +79,9 @@ basic-SELECT milestone only.
 **Consequences:**
 
 - `Column` in `MyOrm.Core` is no longer sealed and gained `Column<T>` — typed
-  column metadata for upcoming `Where`/`Select` chains.
+  column metadata; with Stage 2 the generated `Table`/`PropertyColumns`
+  metadata itself feeds the fluent chains, so `Where(...)` now consumes it
+  directly.
 - `examples`, `tests`, and generated files: `examples/BasicExample/{myorm-schema.json,Generated/MyOrm.Schema.g.cs}`;
   `tests/MyOrm.CodeGen.Tests/{schema.json,Generated/MyOrm.Schema.g.cs}`.
 - Revisit trigger: if hand-maintained alternatives or richer type needs appear
@@ -95,3 +102,52 @@ identify a source ID and raw schema name; values are data, never SQL fragments.
 The PostgreSQL layer remains responsible for validation, rendering and binding
 parameters. This Core contract alone does not enable fluent query refinement;
 the compiler and typed builder integration are separate implementation steps.
+
+## D004 — Lambda translation over a finite expression surface
+
+**Date:** 2026-11-05 (Stage 2, query refinement)
+
+**Decision:** Stage 2 read queries are translated from C# lambdas into the
+Core expression nodes by a finite, explicit translator. The surface it accepts
+is decided: comparisons (null-safe via `IS [NOT] DISTINCT FROM`, with lifted
+C# comparisons never leaking SQL UNKNOWN), boolean logic, nullable
+`HasValue`/`Value`/`??`/`?:`, numeric casts (rendered as SQL `CAST`, never
+silently discarded), `string.Contains/StartsWith/EndsWith` single-string
+overloads (pattern parameters, wildcards escaped), membership `Contains` via a
+parameterized `IN` snapshot, and the `Sql.*` aggregate markers
+(`Count/Sum/Average/Min/Max`). Everything else fails with
+`NotSupportedException` naming the expression — no client-side evaluation
+fallback, no arbitrary getter invocation, no dynamic SQL.
+
+**Rationale:**
+
+- The frozen Core nodes stay concrete (no visitor framework, no plugin
+  function registry); extending later means editing the translator + compiler
+  jointly, which keeps validation honest.
+- Values captured in a lambda are folded at the fluent call (constants and
+  captured closure locals/field chains only — no arbitrary getters, no static
+  field traversal) and snapshotted, so later mutations cannot change an
+  already-built query. Numeric casts on scalars translate to SQL `CAST`
+  semantics; membership items convert with the capturing code's own CLR cast
+  semantics.
+- Aggregates are expression-only markers that throw if invoked outside a query
+  translation; aggregates are legal in SELECT/HAVING/ORDER BY of a grouped
+  query and nowhere else.
+- Explicit INNER/LEFT joins carry correct outer-row semantics through a hidden
+  presence marker appended to the right side's derived source, so absence (and
+  all-NULL matched rows) is distinguishable without primary-key assumptions.
+- `RIGHT`/`FULL`/`CROSS` joins and automatic relationship loading stay
+  unimplemented; joins must precede grouping, `DISTINCT` and pagination.
+
+**Consequences:**
+
+- `db.Select<T>()` is the primary typed entry point; `Compile()` returns the
+  inspectable compiled query (SQL text + ordered parameters) without touching a
+  database, and `ToListAsync()` executes it. Explicit `QueryAsync` with a
+  hand-written query and mapper remains supported alongside the typed chains.
+- `ProjectionMapper` plans output slots once and compiles a reader delegate
+  once per execution; full single-table reads keep using the generated
+  name-based `Map`, everything else uses generated `MapAt` with ordinal
+  offsets.
+- Revisit trigger: when a real query needs an expression outside the surface,
+  extend the translator surface explicitly rather than adding evaluation.
