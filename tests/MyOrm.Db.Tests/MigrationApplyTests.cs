@@ -32,6 +32,52 @@ public class MigrationApplyTests
         """;
 
     [PostgresFact]
+    public async Task AltersDropsAndRenames_ApplyAgainstTheLiveDatabase()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        const string before = """
+            { "tables": [
+              { "name": "users", "columns": [
+                { "name": "id", "type": "integer", "nullable": false },
+                { "name": "adress", "type": "text" } ] },
+              { "name": "legacy", "columns": [
+                { "name": "keep", "type": "text" },
+                { "name": "extra", "type": "text" } ] },
+              { "name": "notes", "columns": [ { "name": "body", "type": "text" } ] } ] }
+            """;
+        // Rename is not paired: `adress` becomes a drop, `address` an add.
+        const string after = """
+            { "tables": [
+              { "name": "users", "columns": [
+                { "name": "id", "type": "bigint", "nullable": false },
+                { "name": "address", "type": "text" } ] },
+              { "name": "legacy", "columns": [ { "name": "keep", "type": "text" } ] } ] }
+            """;
+
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(Parse(before)));
+        await fixture.ExecuteAsync("INSERT INTO users VALUES (1, 'Main St')");
+        await fixture.ExecuteAsync("INSERT INTO legacy VALUES ('kept', 'gone')");
+        await fixture.ExecuteAsync("INSERT INTO notes VALUES ('n')");
+
+        var output = new StringWriter();
+        Assert.Equal(0, await fixture.Runner(output).ApplyAsync(Parse(after)));
+
+        // Widened type, dropped/added column, dropped column and dropped table all really applied.
+        Assert.Equal("bigint", (string?)await fixture.ScalarAsync("""
+            SELECT data_type FROM information_schema.columns
+            WHERE table_schema = current_schema() AND table_name = 'users' AND column_name = 'id'
+            """));
+        Assert.Equal(0, await fixture.CountAsync(ColumnExists("users", "adress")));
+        Assert.Equal(1, await fixture.CountAsync(ColumnExists("users", "address")));
+        // The rename is a drop+add, so the old values are gone rather than moved.
+        Assert.Equal("1|", (string?)await fixture.ScalarAsync("SELECT id || '|' || coalesce(address, '') FROM users"));
+        Assert.Equal(0, await fixture.CountAsync(ColumnExists("legacy", "extra")));
+        Assert.Equal("kept", (string?)await fixture.ScalarAsync("SELECT keep FROM legacy"));
+        Assert.Equal(0, await fixture.CountAsync(TableExists("notes")));
+        Assert.Equal(2, await fixture.CountAsync("SELECT count(*) FROM myorm_migrations"));
+    }
+
+    [PostgresFact]
     public async Task Apply_CreatesSchemaAndRecordsTheMigration()
     {
         await using var fixture = await Fixture.CreateAsync();
