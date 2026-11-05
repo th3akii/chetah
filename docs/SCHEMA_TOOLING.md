@@ -1,9 +1,9 @@
-# Schema tooling and migrations — plan (Stage 7)
+# Schema tooling and migrations (Stage 7)
 
-> **Status:** Approved plan, not yet implemented.
-> Approved by the author 2026-11-05; execution deliberately deferred to a later
-> session. Companion documents: [`ROADMAP.md`](ROADMAP.md) (Stage 7),
-> [`DECISIONS.md`](DECISIONS.md), [`SPEC.md`](SPEC.md).
+> **Status:** Implemented 2026-11-05 in `src/MyOrm.Db` (`myorm-db`) and verified
+> against live PostgreSQL. The decisions below are recorded in
+> [`DECISIONS.md`](DECISIONS.md) D005. Companion documents:
+> [`ROADMAP.md`](ROADMAP.md) (Stage 7), [`SPEC.md`](SPEC.md).
 
 ## Why
 
@@ -65,11 +65,21 @@ A diff/push tool in the drizzle-kit mental model, with cheap inspection added:
 
 ## Commands
 
+```sh
+dotnet run --project src/MyOrm.Db -- diff  --schema <schema.json> [--connection <conn>] [--migrations <dir>]
+dotnet run --project src/MyOrm.Db -- apply --schema <schema.json> [--connection <conn>] [--migrations <dir>]
+```
+
 - `diff` — prints the DDL the catalog comparison produces, flags destructive
   items, writes nothing.
 - `apply` — runs the destructive confirmation gate, writes the record files,
   executes the migration in one transaction, records it in
   `myorm_migrations`.
+
+The connection string defaults to `MYORM_CONNECTION_STRING`; migrations default
+to `migrations/` beside the schema file. Both commands resolve the managed
+schema with `current_schema()` (the connection's search path) and fail loudly
+when the search path names no existing schema.
 
 Day-to-day flow: edit `myorm-schema.json` → regenerate code (existing flow when
 typed models change) → `myorm-db diff` to review → `myorm-db apply` to adopt.
@@ -89,21 +99,45 @@ typed models change) → `myorm-db diff` to review → `myorm-db apply` to adopt
   non-interactive/CI mode, indexes/constraints (Stage 7.5), schema-JSON
   ergonomics (Stage 7.6), other dialects (Stage 6), concurrent applies.
 
-## Verification approach (for implementing session)
+Implementation notes as built:
 
-Disposable PostgreSQL fixtures, same pattern as Stage 2 acceptance: unique
-schema per run, never touching shared tables, configured runs distinguished
-from skipped ones.
+- Types compare on PostgreSQL type names (`int4`, `int8`, `text`, `bool`,
+  `uuid`, `timestamp`), so a column that differs in spelling (e.g.
+  `timestamptz`) is reported as a gated type change rather than silently
+  accepted. Type modifiers (`timestamp(3)`) are not compared.
+- Adding a `NOT NULL` column to an already-populated table has no default to
+  draw on; the statement fails, the transaction rolls back, and the journal
+  entry is retried after the schema is corrected. Defaults are not expressed by
+  the schema file yet.
+- Managed tables are those in the resolved schema; `myorm_migrations` itself is
+  never diffed. Tables in other schemas are untouched.
 
-Scenarios: fresh database created via `apply`; journal/snapshot/.sql contents
-match what ran; `myorm_migrations` rows appear with the right hash/name;
-column add after interactive confirm; destructive gate honored (decline → no
-writes); rename reported as drop+add under the same gate; drift detected by
-`diff` before any action; failed apply leaves database unchanged with journal
-present and migration row absent, then a rerun succeeds; hash-mismatch
-refusal after a hand edit.
+## Verification
+
+Disposable PostgreSQL fixtures, the same pattern as Stage 2 acceptance: unique
+schema per run, never touching shared tables, configured runs (a set
+`MYORM_CONNECTION_STRING`) distinguished from skipped ones.
+
+`tests/MyOrm.Db.Tests` covers:
+
+- **Offline diff** — fresh-create column order, add/drop column, drop table,
+  rename as gated drop+add, widening free / narrowing gated, `SET NOT NULL`
+  gated only when the column holds NULLs, `DROP NOT NULL` free, no-op on a
+  matching catalog.
+- **Record layout** — SQL file, snapshot, journal entry and hash; hand-edit
+  changes the hash; baseline record has no statements; same stamp and slug get
+  distinct ids.
+- **Live apply** — fresh database created via `apply`, journal/snapshot/SQL
+  matching what ran, `myorm_migrations` rows with the right hash and name,
+  `diff` reporting drift without writing, declined destructive gate writing
+  nothing, failed statement rolling back with the journal entry present and no
+  migration row (rerun succeeds after the fix), hand-edited SQL refused, and an
+  existing database recorded as a baseline.
+
+The CLI itself was exercised against a live database for the same flow,
+including both destructive-gate outcomes (non-interactive refusal, interactive
+`yes`).
 
 ## Decisions log handoff
 
-The locked decisions above transfer into `DECISIONS.md` as a new entry when
-code lands (the log records decisions as they are made, not in advance).
+Transferred to [`DECISIONS.md`](DECISIONS.md) D005 when the code landed.

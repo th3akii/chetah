@@ -100,12 +100,14 @@ resolution hold up as the query chain grows?
 
 ### Stage 7 — Schema Tooling and Migrations
 
-**Status:** Next — approved 2026-11-05 as a diff/push schema tool whose applied changes are recorded as plain SQL migrations; implementation deliberately deferred to a later session. Plan: [`SCHEMA_TOOLING.md`](SCHEMA_TOOLING.md).
+**Status:** Delivered 2026-11-05 — `src/MyOrm.Db` (`myorm-db`) implements the approved diff/push tool: catalog introspection, plain-SQL journal with snapshots, `myorm_migrations` applied-state, and a destructive confirmation gate. See [`SCHEMA_TOOLING.md`](SCHEMA_TOOLING.md) and [`DECISIONS.md`](DECISIONS.md) D005.
 **Goal:** Optional tooling for applying schema changes.
 
 The original conditional is resolved: manual schema management is now real friction (Stage 2 live fixtures seed databases by hand), so the tool is approved, with exactly the author-noted must-have below in scope.
 
-Author-noted must-have before this becomes real: **drift detection** — the schema file is the source of truth for generated code, but nothing notices when the database has drifted (a renamed column like `adress` → `address` turns into a runtime `42703` error only when a query runs). Any tooling stage also needs either an apply path or a check that flags the mismatch before execution.
+Author-noted must-have, delivered as the mandatory `diff` command: **drift detection** — the schema file is the source of truth for generated code, but nothing notices when the database has drifted (a renamed column like `adress` → `address` turns into a runtime `42703` error only when a query runs). `diff` flags the mismatch before execution, and `apply` establishes it.
+
+Still open after this stage: constraints/indexes (Stage 7.5), schema-JSON ergonomics (7.6), renames as paired migrations, rollback, and non-interactive applies.
 
 ### Stage 7.5 — Constraint Metadata (noted by author, not started)
 

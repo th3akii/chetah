@@ -237,9 +237,11 @@ Backward compatibility of milestone 001 is covered by the unchanged
 
 ## Deliberate limits
 
-Not implemented, not hidden: writes (`INSERT`/`UPDATE`/`DELETE`), migrations,
-schema introspection, SQL Server, Roslyn source generators, automatic
-relationship management, RIGHT/FULL/CROSS joins. Query lambdas outside the
+Not implemented, not hidden: writes (`INSERT`/`UPDATE`/`DELETE`), SQL Server,
+Roslyn source generators, automatic relationship management,
+RIGHT/FULL/CROSS joins. Schema-to-database tooling and catalog introspection
+live in `src/MyOrm.Db` instead — see [`SCHEMA_TOOLING.md`](SCHEMA_TOOLING.md).
+Query lambdas outside the
 frozen translator surface fail explicitly (no evaluation fallback). The
 `timestamp with time zone` type and other PostgreSQL types are not in
 the type map yet. Mapping trusts the schema's

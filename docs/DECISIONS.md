@@ -151,3 +151,56 @@ fallback, no arbitrary getter invocation, no dynamic SQL.
   offsets.
 - Revisit trigger: when a real query needs an expression outside the surface,
   extend the translator surface explicitly rather than adding evaluation.
+
+## D005 — Diff/push schema tool, recorded as SQL migrations
+
+**Date:** 2026-11-05 (Stage 7)
+
+**Decision:** Schema changes are applied by a separate CLI project,
+`src/MyOrm.Db` (`myorm-db`), which never diffs file-to-file: it introspects the
+live PostgreSQL catalog and compares that against `myorm-schema.json`. Each
+applied change is also written to disk as plain SQL with journal metadata, so
+the statements that hit the database are always reviewable.
+
+**Details** (locked with the author before implementation; full plan in
+[`SCHEMA_TOOLING.md`](SCHEMA_TOOLING.md)):
+
+- The generator stays single-purpose (D002): `MyOrm.CodeGen` owns the schema
+  parser and typed-model output, `MyOrm.Db` owns catalog work. The two commands
+  are `diff` (print, write nothing) and `apply`.
+- One apply path for fresh and existing databases. No `create` command. On an
+  empty database the first entry is the full CREATE script; on an existing
+  database it is an introspective baseline (snapshot only, no DDL).
+- `migrations/` holds `<UTC-stamp>_<slug>.sql` plus `meta/_journal.json` and
+  `meta/<id>_snapshot.json`. Statements are separated by
+  `--> statement-breakpoint`; journal entries carry the id, slug, sha256 of the
+  SQL payload and statement count. `apply` re-verifies each pending file's hash
+  and refuses to run a hand-edited migration.
+- `myorm_migrations` (`id bigserial`, `hash`, `name`, `applied_at
+  timestamptz`) records what has been applied in the schema the connection
+  resolves (`current_schema()`, i.e. the search path). The journal records what
+  has been generated; only the table decides what ran.
+- Each migration runs in one transaction together with its `myorm_migrations`
+  row. A failed statement rolls everything back, the entry stays in the journal,
+  and the next `apply` retries it.
+- Destructive statements — DROP TABLE, DROP COLUMN, non-widening type changes,
+  and `nullable → NOT NULL` on a column that already holds NULLs — require an
+  interactive `yes`. Non-interactive runs refuse instead of assuming consent.
+- Renames are not paired; they surface as drop + add under the same gate.
+  Foreign objects (constraints, indexes) are left untouched.
+- v1 is deliberately narrow: no rollback, seeds, indexes/constraints (Stage
+  7.5), CI mode, or other dialects. Types compare on PostgreSQL type names, so
+  type modifiers are not diffed.
+
+**Consequences:**
+
+- MyOrm gains a deployment tool, not a runtime feature: `MyOrm.Postgres` is
+  unchanged and takes no dependency on it.
+- The schema file is now the source of truth for three things — generated
+  models, query metadata, and the database itself. Drift is detected by `diff`
+  before a query ever fails at runtime.
+- Known ceiling: a `NOT NULL` column added to a populated table has no default
+  to draw on, so the statement fails and the run rolls back until the schema is
+  corrected.
+- Revisit trigger: extend `SchemaDiff` when real friction appears (rename
+  pairing, defaults, constraint diffing) rather than growing a migration DSL.
