@@ -1,0 +1,15 @@
+{
+  "tables": [
+    {
+      "name": "test_widgets",
+      "columns": [
+        { "name": "id", "type": "integer", "nullable": false },
+        { "name": "label", "type": "text" },
+        { "name": "quantity", "type": "bigint", "nullable": false },
+        { "name": "active", "type": "boolean", "nullable": false },
+        { "name": "token", "type": "uuid" },
+        { "name": "created", "type": "timestamp", "nullable": false }
+      ]
+    }
+  ]
+}

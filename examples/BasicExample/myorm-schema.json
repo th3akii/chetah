@@ -1,0 +1,22 @@
+{
+  "tables": [
+    {
+      "name": "users",
+      "model": "User",
+      "columns": [
+        { "name": "id", "type": "integer", "nullable": false },
+        { "name": "name", "type": "text", "nullable": false },
+        { "name": "age", "type": "integer" }
+      ]
+    },
+    {
+      "name": "manual_user_test",
+      "model": "ManualUsers",
+      "columns": [
+        { "name": "id", "type": "uuid", "nullable": false },
+        { "name": "name", "type": "text", "nullable": false},
+        { "name": "adress", "type": "text" }
+      ]
+    }
+  ]
+}

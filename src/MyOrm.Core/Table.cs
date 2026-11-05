@@ -1,7 +1,13 @@
 ﻿namespace MyOrm;
 
 /// <summary>A named column of a table. Types and constraints will be added when needed.</summary>
-public sealed record Column(string Name);
+public record Column(string Name);
+
+/// <summary>A column carrying its CLR type, so generated table classes can expose typed access.</summary>
+public sealed record Column<T> : Column
+{
+    public Column(string name) : base(name) { }
+}
 
 /// <summary>A database table: its name and the columns it exposes.</summary>
 public sealed class Table
