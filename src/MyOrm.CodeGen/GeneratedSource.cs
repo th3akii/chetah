@@ -36,7 +36,7 @@ public static class GeneratedSource
 
         foreach (var table in schema.Tables)
             sb.AppendLine(
-                $"    public static readonly MyOrm.Postgres.TableBinding<{table.ModelName}> {table.ModelName}Binding = new({table.AccessorName}.Table, {table.AccessorName}.Map);");
+                $"    public static readonly MyOrm.Postgres.TableBinding<{table.ModelName}> {table.ModelName}Binding = new({table.AccessorName}.Table, {table.AccessorName}.Map, {table.AccessorName}.MapAt, {table.AccessorName}.PropertyColumns);");
 
         sb.AppendLine();
         sb.AppendLine("    public static readonly System.Collections.Generic.IReadOnlyDictionary<System.Type, MyOrm.Postgres.ITableBinding> Bindings =");
@@ -65,7 +65,16 @@ public static class GeneratedSource
             + string.Join(", ", table.Columns.Select(c => Identifier(c.Name) + ".Name"))
             + ");");
         sb.AppendLine();
+        sb.AppendLine("    public static readonly System.Collections.Generic.IReadOnlyDictionary<string, string> PropertyColumns =");
+        sb.AppendLine("        new System.Collections.Generic.Dictionary<string, string>(System.StringComparer.Ordinal)");
+        sb.AppendLine("        {");
+        foreach (var column in table.Columns)
+            sb.AppendLine($"            [nameof({table.ModelName}.{Identifier(column.Name)})] = {CSharpStringLiteral(column.Name)},");
+        sb.AppendLine("        };");
+        sb.AppendLine();
+
         RenderMap(sb, table);
+        RenderMapAt(sb, table);
         sb.AppendLine("}");
         sb.AppendLine();
 
@@ -86,19 +95,39 @@ public static class GeneratedSource
         if (table.Columns.Any(c => c.Nullable))
             sb.AppendLine();
 
+        RenderReads(sb, table, (column, _) => column.Nullable
+            ? OrdinalLocal(column.Name)
+            : $"reader.GetOrdinal({CSharpStringLiteral(column.Name)})");
+
+        sb.AppendLine("    }");
+        sb.AppendLine();
+    }
+
+    /// <summary>Generated mapper keyed by schema order at an ordinal offset, for projected/joined results.</summary>
+    private static void RenderMapAt(StringBuilder sb, TableSchema table)
+    {
+        sb.AppendLine($"    public static {table.ModelName} MapAt(NpgsqlDataReader reader, int offset)");
+        sb.AppendLine("    {");
+        RenderReads(sb, table, (_, index) => $"offset + {index}");
+        sb.AppendLine("    }");
+        sb.AppendLine();
+    }
+
+    /// <summary>Shared constructor argument list: one read expression per schema column.</summary>
+    private static void RenderReads(StringBuilder sb, TableSchema table, Func<ColumnSchema, int, string> ordinal)
+    {
         sb.AppendLine("        return new " + table.ModelName + "(");
         for (var i = 0; i < table.Columns.Count; i++)
         {
             var column = table.Columns[i];
+            var ord = ordinal(column, i);
             var expression = column.Nullable
-                ? $"reader.IsDBNull({OrdinalLocal(column.Name)}) ? null : {string.Format(column.Type.Read, OrdinalLocal(column.Name))}"
-                : string.Format(column.Type.Read, $"reader.GetOrdinal({CSharpStringLiteral(column.Name)})");
+                ? $"reader.IsDBNull({ord}) ? null : {string.Format(column.Type.Read, ord)}"
+                : string.Format(column.Type.Read, ord);
             var comma = i == table.Columns.Count - 1 ? "" : ",";
             sb.AppendLine($"            {expression}{comma}");
         }
         sb.AppendLine("        );");
-        sb.AppendLine("    }");
-        sb.AppendLine();
     }
 
     private static string PropertyType(ColumnSchema column) =>

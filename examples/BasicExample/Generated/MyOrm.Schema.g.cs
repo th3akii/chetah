@@ -17,6 +17,14 @@ public static class UsersTable
 
     public static readonly MyOrm.Table Table = new("users", Id.Name, Name.Name, Age.Name);
 
+    public static readonly System.Collections.Generic.IReadOnlyDictionary<string, string> PropertyColumns =
+        new System.Collections.Generic.Dictionary<string, string>(System.StringComparer.Ordinal)
+        {
+            [nameof(User.Id)] = "id",
+            [nameof(User.Name)] = "name",
+            [nameof(User.Age)] = "age",
+        };
+
     public static User Map(NpgsqlDataReader reader)
     {
         var ageOrdinal = reader.GetOrdinal("age");
@@ -25,6 +33,15 @@ public static class UsersTable
             reader.GetInt32(reader.GetOrdinal("id")),
             reader.GetString(reader.GetOrdinal("name")),
             reader.IsDBNull(ageOrdinal) ? null : reader.GetInt32(ageOrdinal)
+        );
+    }
+
+    public static User MapAt(NpgsqlDataReader reader, int offset)
+    {
+        return new User(
+            reader.GetInt32(offset + 0),
+            reader.GetString(offset + 1),
+            reader.IsDBNull(offset + 2) ? null : reader.GetInt32(offset + 2)
         );
     }
 
@@ -40,6 +57,14 @@ public static class ManualUserTestTable
 
     public static readonly MyOrm.Table Table = new("manual_user_test", Id.Name, Name.Name, Adress.Name);
 
+    public static readonly System.Collections.Generic.IReadOnlyDictionary<string, string> PropertyColumns =
+        new System.Collections.Generic.Dictionary<string, string>(System.StringComparer.Ordinal)
+        {
+            [nameof(ManualUsers.Id)] = "id",
+            [nameof(ManualUsers.Name)] = "name",
+            [nameof(ManualUsers.Adress)] = "adress",
+        };
+
     public static ManualUsers Map(NpgsqlDataReader reader)
     {
         var adressOrdinal = reader.GetOrdinal("adress");
@@ -51,20 +76,75 @@ public static class ManualUserTestTable
         );
     }
 
+    public static ManualUsers MapAt(NpgsqlDataReader reader, int offset)
+    {
+        return new ManualUsers(
+            reader.GetGuid(offset + 0),
+            reader.GetString(offset + 1),
+            reader.IsDBNull(offset + 2) ? null : reader.GetString(offset + 2)
+        );
+    }
+
 }
 
 public sealed record ManualUsers(Guid Id, string Name, string? Adress);
 
+public static class OrdersTable
+{
+    public static readonly MyOrm.Column<int> Id = new("id");
+    public static readonly MyOrm.Column<int> UserId = new("user_id");
+    public static readonly MyOrm.Column<int> Amount = new("amount");
+    public static readonly MyOrm.Column<string?> Note = new("note");
+
+    public static readonly MyOrm.Table Table = new("orders", Id.Name, UserId.Name, Amount.Name, Note.Name);
+
+    public static readonly System.Collections.Generic.IReadOnlyDictionary<string, string> PropertyColumns =
+        new System.Collections.Generic.Dictionary<string, string>(System.StringComparer.Ordinal)
+        {
+            [nameof(Order.Id)] = "id",
+            [nameof(Order.UserId)] = "user_id",
+            [nameof(Order.Amount)] = "amount",
+            [nameof(Order.Note)] = "note",
+        };
+
+    public static Order Map(NpgsqlDataReader reader)
+    {
+        var noteOrdinal = reader.GetOrdinal("note");
+
+        return new Order(
+            reader.GetInt32(reader.GetOrdinal("id")),
+            reader.GetInt32(reader.GetOrdinal("user_id")),
+            reader.GetInt32(reader.GetOrdinal("amount")),
+            reader.IsDBNull(noteOrdinal) ? null : reader.GetString(noteOrdinal)
+        );
+    }
+
+    public static Order MapAt(NpgsqlDataReader reader, int offset)
+    {
+        return new Order(
+            reader.GetInt32(offset + 0),
+            reader.GetInt32(offset + 1),
+            reader.GetInt32(offset + 2),
+            reader.IsDBNull(offset + 3) ? null : reader.GetString(offset + 3)
+        );
+    }
+
+}
+
+public sealed record Order(int Id, int UserId, int Amount, string? Note);
+
 public static class MyOrmSchema
 {
-    public static readonly MyOrm.Postgres.TableBinding<User> UserBinding = new(UsersTable.Table, UsersTable.Map);
-    public static readonly MyOrm.Postgres.TableBinding<ManualUsers> ManualUsersBinding = new(ManualUserTestTable.Table, ManualUserTestTable.Map);
+    public static readonly MyOrm.Postgres.TableBinding<User> UserBinding = new(UsersTable.Table, UsersTable.Map, UsersTable.MapAt, UsersTable.PropertyColumns);
+    public static readonly MyOrm.Postgres.TableBinding<ManualUsers> ManualUsersBinding = new(ManualUserTestTable.Table, ManualUserTestTable.Map, ManualUserTestTable.MapAt, ManualUserTestTable.PropertyColumns);
+    public static readonly MyOrm.Postgres.TableBinding<Order> OrderBinding = new(OrdersTable.Table, OrdersTable.Map, OrdersTable.MapAt, OrdersTable.PropertyColumns);
 
     public static readonly System.Collections.Generic.IReadOnlyDictionary<System.Type, MyOrm.Postgres.ITableBinding> Bindings =
         new System.Collections.Generic.Dictionary<System.Type, MyOrm.Postgres.ITableBinding>
         {
             [typeof(User)] = UserBinding,
             [typeof(ManualUsers)] = ManualUsersBinding,
+            [typeof(Order)] = OrderBinding,
         };
 }
 

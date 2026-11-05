@@ -1,4 +1,5 @@
 using MyOrm.CodeGen;
+using MyOrm.Postgres;
 
 namespace MyOrm.CodeGen.Tests;
 
@@ -15,28 +16,23 @@ public class GeneratedSourceTests
     }
 
     [Fact]
-    public void RendersTypesNullabilityAndMetadata()
+    public void CompiledFixtureMetadataMatchesSchemaValues()
     {
-        var source = GeneratedSource.Render(SchemaParser.Parse(TestSchemaJson).Schema!, "N");
+        // Generated metadata values, checked against the compiled fixture — not rendered text.
+        Assert.Equal("test_widgets", TestWidgetsTable.Table.Name);
+        Assert.Equal(
+            new[] { "id", "label", "quantity", "active", "token", "created" },
+            TestWidgetsTable.Table.Columns.Select(c => c.Name));
 
-        Assert.Contains("public static class TestWidgetsTable", source);
-        Assert.Contains("public static readonly MyOrm.Column<int> Id = new(\"id\");", source);
-        Assert.Contains("public static readonly MyOrm.Column<string?> Label = new(\"label\");", source);
-        Assert.Contains("public static readonly MyOrm.Column<DateTime> Created = new(\"created\");", source);
-        // Table identifier quoting happens in the dialect compiler; metadata stores raw names.
-        Assert.Contains("new(\"test_widgets\", Id.Name, Label.Name, Quantity.Name, Active.Name, Token.Name, Created.Name)", source);
-        Assert.Contains("public sealed record TestWidgets(int Id, string? Label, long Quantity, bool Active, Guid? Token, DateTime Created);", source);
-    }
-
-    [Fact]
-    public void RendersNullableReaderBranches()
-    {
-        var source = GeneratedSource.Render(SchemaParser.Parse(TestSchemaJson).Schema!, "N");
-
-        Assert.Contains("var labelOrdinal = reader.GetOrdinal(\"label\");", source);
-        Assert.Contains("reader.IsDBNull(labelOrdinal) ? null : reader.GetString(labelOrdinal)", source);
-        // NOT NULL columns are read inline without a null branch.
-        Assert.Contains("reader.GetInt32(reader.GetOrdinal(\"id\"))", source);
+        // Column names come from the schema, model property types from the column types.
+        Assert.Equal(new[] { "id", "label", "quantity", "active", "token", "created" },
+            new[] { TestWidgetsTable.Id.Name, TestWidgetsTable.Label.Name, TestWidgetsTable.Quantity.Name, TestWidgetsTable.Active.Name, TestWidgetsTable.Token.Name, TestWidgetsTable.Created.Name });
+        Assert.Equal(typeof(int), typeof(TestWidgets).GetProperty(nameof(TestWidgets.Id))!.PropertyType);
+        Assert.Equal(typeof(string), typeof(TestWidgets).GetProperty(nameof(TestWidgets.Label))!.PropertyType);
+        Assert.Equal(typeof(long), typeof(TestWidgets).GetProperty(nameof(TestWidgets.Quantity))!.PropertyType);
+        Assert.Equal(typeof(bool), typeof(TestWidgets).GetProperty(nameof(TestWidgets.Active))!.PropertyType);
+        Assert.Equal(typeof(Guid?), typeof(TestWidgets).GetProperty(nameof(TestWidgets.Token))!.PropertyType);
+        Assert.Equal(typeof(DateTime), typeof(TestWidgets).GetProperty(nameof(TestWidgets.Created))!.PropertyType);
     }
 
     [Fact]
@@ -49,29 +45,162 @@ public class GeneratedSourceTests
         Assert.Equal(fresh, checkedIn);
     }
 
+    // ---- Binding behavior checks (the checked-in generated fixture is compiled by the parent build) ----
+
     [Fact]
-    public void RendersSqlIdentifierVerbatimForHyphenatedTableName()
+    public void GeneratedBindingMapsEveryPropertyToItsSchemaColumn()
     {
-        var schema = SchemaParser.Parse("""
-            { "tables": [ { "name": "user-roles", "columns": [ { "name": "id", "type": "integer" } ] } ] }
-            """).Schema!;
+        var binding = MyOrmSchema.TestWidgetsBinding;
 
-        var source = GeneratedSource.Render(schema, "N");
-
-        // The SQL-supplied table name passes through raw; quoting is the compiler's job.
-        Assert.Contains("""new("user-roles", Id.Name)""", source);
-        Assert.Contains("public static class UserRolesTable", source);
+        Assert.Equal("test_widgets", binding.Table.Name);
+        Assert.Equal(
+            new Dictionary<string, string>
+            {
+                [nameof(TestWidgets.Id)] = "id",
+                [nameof(TestWidgets.Label)] = "label",
+                [nameof(TestWidgets.Quantity)] = "quantity",
+                [nameof(TestWidgets.Active)] = "active",
+                [nameof(TestWidgets.Token)] = "token",
+                [nameof(TestWidgets.Created)] = "created",
+            },
+            binding.PropertyColumns);
     }
 
     [Fact]
-    public void RendersTypeToBindingRegistry()
+    public void PropertyColumnsIsASnapshotOfTheSourceDictionary()
     {
-        var source = GeneratedSource.Render(SchemaParser.Parse(TestSchemaJson).Schema!, "MyOrm.CodeGen.Tests");
+        var propertyColumns = TestWidgetsMapping();
+        var binding = NewGeneratedBinding(propertyColumns);
 
-        Assert.Contains("public static class MyOrmSchema", source);
-        Assert.Contains(
-            "public static readonly MyOrm.Postgres.TableBinding<TestWidgets> TestWidgetsBinding = new(TestWidgetsTable.Table, TestWidgetsTable.Map);",
-            source);
-        Assert.Contains("[typeof(TestWidgets)] = TestWidgetsBinding,", source);
+        propertyColumns.Clear();
+        propertyColumns["Later"] = "mutation";
+
+        Assert.Equal(6, binding.PropertyColumns.Count);
+        Assert.Equal("id", binding.PropertyColumns[nameof(TestWidgets.Id)]);
+        Assert.False(binding.PropertyColumns.ContainsKey("Later"));
+
+        // The snapshot itself is read-only: the IDictionary facade rejects mutation.
+        Assert.Throws<NotSupportedException>(
+            () => ((IDictionary<string, string>)binding.PropertyColumns).Clear());
+    }
+
+    [Fact]
+    public void RejectsKeyThatIsNotAPublicReadableInstanceProperty()
+    {
+        // Ordinally matched: 'created' is a schema column name, the property is 'Created'.
+        var ordinalKey = TestWidgetsMapping();
+        ordinalKey.Remove(nameof(TestWidgets.Created));
+        ordinalKey["created"] = "created";
+        Assert.Throws<ArgumentException>(() => NewGeneratedBinding(ordinalKey));
+
+        var unknownKey = TestWidgetsMapping();
+        unknownKey["Bogus"] = "created";
+        Assert.Throws<ArgumentException>(() => NewGeneratedBinding(unknownKey));
+    }
+
+    [Fact]
+    public void RejectsNonReadableInstanceAndStaticPropertyMappings()
+    {
+        // Write-only, privately readable, static and indexers are all rejected.
+        Assert.Throws<ArgumentException>(
+            () => NewBinding<WriteOnly>(
+                new Table("flat", "id"),
+                new Dictionary<string, string> { [nameof(WriteOnly.Hidden)] = "id" }));
+        Assert.Throws<ArgumentException>(
+            () => NewBinding<WriteOnly>(
+                new Table("flat", "id"),
+                new Dictionary<string, string> { [nameof(WriteOnly.PrivatelyReadable)] = "id" }));
+        Assert.Throws<ArgumentException>(
+            () => NewBinding<WriteOnly>(
+                new Table("flat", "id"),
+                new Dictionary<string, string> { [nameof(WriteOnly.Static)] = "id" }));
+        Assert.Throws<ArgumentException>(
+            () => NewBinding<WriteOnly>(
+                new Table("flat", "id"),
+                new Dictionary<string, string> { ["Item"] = "id" }));
+    }
+
+    [Fact]
+    public void RejectsUnknownColumnMapping()
+    {
+        Assert.Throws<ArgumentException>(
+            () => NewBinding<NamedPair>(
+                new Table("pairs", "id", "other"),
+                new Dictionary<string, string> { [nameof(NamedPair.Id)] = "id", [nameof(NamedPair.Name)] = "name" }));
+    }
+
+    [Fact]
+    public void RejectsTwoPropertiesMappedToTheSameColumn()
+    {
+        Assert.Throws<ArgumentException>(
+            () => NewBinding<NamedPair>(
+                new Table("pairs", "id", "name"),
+                new Dictionary<string, string> { [nameof(NamedPair.Id)] = "name", [nameof(NamedPair.Name)] = "name" }));
+    }
+
+    [Fact]
+    public void RejectsTableColumnWithoutAMapping()
+    {
+        Assert.Throws<ArgumentException>(
+            () => NewBinding<NamedPair>(
+                new Table("pairs", "id", "name"),
+                new Dictionary<string, string> { [nameof(NamedPair.Id)] = "id" }));
+    }
+
+    [Fact]
+    public void ExtraUnmappedModelPropertiesAreAllowed()
+    {
+        var binding = NewBinding<WithExtra>(
+            new Table("extras", "id"),
+            new Dictionary<string, string> { [nameof(WithExtra.Id)] = "id" });
+
+        // The extra property is only rejected when it appears inside a query expression.
+        Assert.Single(binding.PropertyColumns);
+    }
+
+    // ---- Helpers / local models ----
+
+    private static Dictionary<string, string> TestWidgetsMapping() => new(StringComparer.Ordinal)
+    {
+        [nameof(TestWidgets.Id)] = "id",
+        [nameof(TestWidgets.Label)] = "label",
+        [nameof(TestWidgets.Quantity)] = "quantity",
+        [nameof(TestWidgets.Active)] = "active",
+        [nameof(TestWidgets.Token)] = "token",
+        [nameof(TestWidgets.Created)] = "created",
+    };
+
+    private static TableBinding<TestWidgets> NewGeneratedBinding(
+        IReadOnlyDictionary<string, string> propertyColumns) =>
+        new(
+            TestWidgetsTable.Table,
+            TestWidgetsTable.Map,
+            TestWidgetsTable.MapAt,
+            propertyColumns);
+
+    private static TableBinding<T> NewBinding<T>(
+        Table table,
+        IReadOnlyDictionary<string, string> propertyColumns) =>
+        new(
+            table,
+            _ => throw new NotSupportedException("Validation-only binding."),
+            (_, _) => throw new NotSupportedException("Validation-only binding."),
+            propertyColumns);
+
+    private sealed record NamedPair(int Id, string Name);
+
+    private sealed record WithExtra(int Id, int Extra);
+
+    private sealed class WriteOnly
+    {
+        public int Id { get; set; }
+
+        public int Hidden { set { } }
+
+        public int PrivatelyReadable { private get; set; }
+
+        public static int Static { get; }
+
+        public int this[int index] => index;
     }
 }

@@ -10,6 +10,25 @@
         { "name": "token", "type": "uuid" },
         { "name": "created", "type": "timestamp", "nullable": false }
       ]
+    },
+    {
+      "name": "users",
+      "model": "Stage2User",
+      "columns": [
+        { "name": "id", "type": "integer", "nullable": false },
+        { "name": "name", "type": "text", "nullable": false },
+        { "name": "age", "type": "integer" }
+      ]
+    },
+    {
+      "name": "orders",
+      "model": "Stage2Order",
+      "columns": [
+        { "name": "id", "type": "integer", "nullable": false },
+        { "name": "user_id", "type": "integer", "nullable": false },
+        { "name": "amount", "type": "integer", "nullable": false },
+        { "name": "note", "type": "text" }
+      ]
     }
   ]
 }

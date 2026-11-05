@@ -17,6 +17,16 @@
         { "name": "name", "type": "text", "nullable": false},
         { "name": "adress", "type": "text" }
       ]
+    },
+    {
+      "name": "orders",
+      "model": "Order",
+      "columns": [
+        { "name": "id", "type": "integer", "nullable": false },
+        { "name": "user_id", "type": "integer", "nullable": false },
+        { "name": "amount", "type": "integer", "nullable": false },
+        { "name": "note", "type": "text" }
+      ]
     }
   ]
 }
