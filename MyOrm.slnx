@@ -6,10 +6,12 @@
     <Project Path="src/MyOrm.Core/MyOrm.Core.csproj" />
     <Project Path="src/MyOrm.Postgres/MyOrm.Postgres.csproj" />
     <Project Path="src/MyOrm.CodeGen/MyOrm.CodeGen.csproj" />
+    <Project Path="src/MyOrm.Db/MyOrm.Db.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/MyOrm.Core.Tests/MyOrm.Core.Tests.csproj" />
     <Project Path="tests/MyOrm.Postgres.Tests/MyOrm.Postgres.Tests.csproj" />
     <Project Path="tests/MyOrm.CodeGen.Tests/MyOrm.CodeGen.Tests.csproj" />
+    <Project Path="tests/MyOrm.Db.Tests/MyOrm.Db.Tests.csproj" />
   </Folder>
 </Solution>
