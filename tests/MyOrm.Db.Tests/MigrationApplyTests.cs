@@ -127,6 +127,68 @@ public class MigrationApplyTests
     }
 
     [PostgresFact]
+    public async Task DroppedColumnWithAttachedObjects_IsRefused()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        const string withEmail = """
+            { "tables": [ { "name": "users", "columns": [
+              { "name": "id", "type": "integer", "nullable": false },
+              { "name": "email", "type": "text" } ] } ] }
+            """;
+        const string withoutEmail = """
+            { "tables": [ { "name": "users", "columns": [ { "name": "id", "type": "integer", "nullable": false } ] } ] }
+            """;
+
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(Parse(withEmail)));
+        await fixture.ExecuteAsync("CREATE INDEX idx_users_email ON users (email)");
+        await fixture.ExecuteAsync("ALTER TABLE users ADD CONSTRAINT users_email_key UNIQUE (email)");
+
+        var diff = new StringWriter();
+        Assert.Equal(0, await fixture.Runner(diff).DiffAsync(Parse(withoutEmail)));
+        Assert.Contains("refused", diff.ToString(), StringComparison.Ordinal);
+        Assert.Contains("idx_users_email", diff.ToString(), StringComparison.Ordinal);
+
+        var output = new StringWriter();
+        Assert.Equal(1, await fixture.Runner(output).ApplyAsync(Parse(withoutEmail)));
+
+        Assert.Contains("Refusing to apply", output.ToString(), StringComparison.Ordinal);
+        Assert.Equal(1, await fixture.CountAsync(ColumnExists("users", "email")));
+        Assert.Equal(1, await fixture.CountAsync(
+            "SELECT count(*) FROM pg_indexes WHERE schemaname = current_schema() AND indexname = 'idx_users_email'"));
+        Assert.Equal(1, await fixture.CountAsync(
+            "SELECT count(*) FROM pg_constraint WHERE conrelid = 'users'::regclass AND conname = 'users_email_key'"));
+        Assert.Single(new MigrationStore(fixture.MigrationsDirectory).ReadJournal().Entries);
+        Assert.Equal(1, await fixture.CountAsync("SELECT count(*) FROM myorm_migrations"));
+    }
+
+    [PostgresFact]
+    public async Task DroppedTableWithAttachedObjects_IsRefused()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        const string withNotes = """
+            { "tables": [
+              { "name": "users", "columns": [ { "name": "id", "type": "integer", "nullable": false } ] },
+              { "name": "notes", "columns": [ { "name": "body", "type": "text" } ] } ] }
+            """;
+        const string withoutNotes = """
+            { "tables": [ { "name": "users", "columns": [ { "name": "id", "type": "integer", "nullable": false } ] } ] }
+            """;
+
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(Parse(withNotes)));
+        await fixture.ExecuteAsync("CREATE INDEX idx_notes_body ON notes (body)");
+
+        var output = new StringWriter();
+        Assert.Equal(1, await fixture.Runner(output).ApplyAsync(Parse(withoutNotes)));
+
+        Assert.Contains("Refusing to apply", output.ToString(), StringComparison.Ordinal);
+        Assert.Equal(1, await fixture.CountAsync(TableExists("notes")));
+        Assert.Equal(1, await fixture.CountAsync(
+            "SELECT count(*) FROM pg_indexes WHERE schemaname = current_schema() AND indexname = 'idx_notes_body'"));
+        Assert.Single(new MigrationStore(fixture.MigrationsDirectory).ReadJournal().Entries);
+        Assert.Equal(1, await fixture.CountAsync("SELECT count(*) FROM myorm_migrations"));
+    }
+
+    [PostgresFact]
     public async Task ExistingDatabase_IsRecordedAsBaseline()
     {
         await using var fixture = await Fixture.CreateAsync();

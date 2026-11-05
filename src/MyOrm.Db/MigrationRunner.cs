@@ -53,6 +53,8 @@ internal sealed class MigrationRunner
 
         foreach (var operation in plan.Operations)
         {
+            if (operation.Blocked)
+                _output.WriteLine($"-- refused: would remove {string.Join(", ", operation.Dependents!)}");
             _output.WriteLine(operation.Destructive
                 ? $"-- destructive: {operation.Reason}"
                 : "-- safe");
@@ -60,7 +62,9 @@ internal sealed class MigrationRunner
             _output.WriteLine();
         }
 
-        _output.WriteLine($"{plan.Operations.Count} statement(s); nothing was written.");
+        _output.WriteLine(plan.Blocked.Count > 0
+            ? $"{plan.Operations.Count} statement(s); {plan.Blocked.Count} refused, nothing was written."
+            : $"{plan.Operations.Count} statement(s); nothing was written.");
         return 0;
     }
 
@@ -117,6 +121,16 @@ internal sealed class MigrationRunner
         {
             _output.WriteLine("Schema is in sync with the database.");
             return 0;
+        }
+
+        var blocked = plan.Blocked;
+        if (blocked.Count > 0)
+        {
+            _output.WriteLine("Refusing to apply: these statements would remove objects the schema file does not express.");
+            foreach (var operation in blocked)
+                _output.WriteLine($"  - {operation.Statement};  would remove {string.Join(", ", operation.Dependents!)}");
+            _output.WriteLine("No migration was written. Remove those objects yourself before this schema change.");
+            return 1;
         }
 
         var destructive = plan.Destructive;

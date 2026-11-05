@@ -1,10 +1,17 @@
 namespace MyOrm.Db;
 
 /// <summary>One DDL statement the plan wants to execute. <paramref name="Reason"/> is the
-/// destructive justification and is null for safe statements.</summary>
-internal sealed record Operation(string Statement, string Slug, string? Reason)
+/// destructive justification and is null for safe statements; <paramref name="Dependents"/> names
+/// foreign objects whose removal the statement would cause, which blocks the plan.</summary>
+internal sealed record Operation(
+    string Statement,
+    string Slug,
+    string? Reason,
+    IReadOnlyList<string>? Dependents = null)
 {
     public bool Destructive => Reason is not null;
+
+    public bool Blocked => Dependents is { Count: > 0 };
 }
 
 internal sealed record MigrationPlan(IReadOnlyList<Operation> Operations)
@@ -13,6 +20,10 @@ internal sealed record MigrationPlan(IReadOnlyList<Operation> Operations)
 
     public IReadOnlyList<Operation> Destructive =>
         Operations.Where(operation => operation.Destructive).ToArray();
+
+    /// <summary>Statements that would silently remove a constraint or index. Never executed.</summary>
+    public IReadOnlyList<Operation> Blocked =>
+        Operations.Where(operation => operation.Blocked).ToArray();
 
     /// <summary>Names the migration file: one operation, or the first plus a count.</summary>
     public string Slug => Operations.Count switch
@@ -89,16 +100,33 @@ internal static class SchemaDiff
                 operations.Add(new Operation(
                     $"ALTER TABLE {Quote(table.Name)} DROP COLUMN {Quote(column.Name)}",
                     $"drop_{table.Name}_{column.Name}",
-                    "removes the column and its values"));
+                    "removes the column and its values",
+                    Dependents(live, table.Name, column.Name)));
         }
 
         foreach (var table in live.Tables.Where(table => desired.Table(table.Name) is null))
             operations.Add(new Operation(
                 $"DROP TABLE {Quote(table.Name)}",
                 $"drop_{table.Name}",
-                "removes the table and its rows"));
+                "removes the table and its rows",
+                Dependents(live, table.Name, null)));
 
         return new MigrationPlan(operations);
+    }
+
+    /// <summary>Foreign objects the statement would take down with it. PostgreSQL removes attached
+    /// constraints and indexes silently, so any dependency blocks the drop instead of riding along.</summary>
+    private static IReadOnlyList<string>? Dependents(CatalogState live, string table, string? column)
+    {
+        var dependents = live.Foreign
+            .Where(foreign => foreign.Table == table
+                && (column is null || foreign.Column is null || foreign.Column == column))
+            .Select(foreign => $"{foreign.Kind} {Quote(foreign.Name)}")
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+        return dependents.Length == 0 ? null : dependents;
     }
 
     internal static string Quote(string identifier) => "\"" + identifier.Replace("\"", "\"\"") + "\"";

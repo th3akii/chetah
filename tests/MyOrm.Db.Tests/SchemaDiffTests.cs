@@ -141,6 +141,58 @@ public class SchemaDiffTests
         Assert.Empty(plan.Destructive);
     }
 
+    [Fact]
+    public async Task DropColumn_WithAttachedObjects_IsBlocked()
+    {
+        var desired = Desired("""{ "tables": [ { "name": "users", "columns": [ { "name": "id", "type": "integer", "nullable": false } ] } ] }""");
+        var live = Live(Table("users", ("id", "int4", true), ("email", "text", false))) with
+        {
+            ForeignObjects =
+            [
+                new ForeignObject("users", "email", "index", "idx_users_email"),
+                new ForeignObject("users", "email", "constraint", "users_email_key"),
+                new ForeignObject("users", null, "constraint", "users_check"),
+                new ForeignObject("users", "id", "index", "idx_users_id"),
+            ],
+        };
+
+        var plan = await SchemaDiff.ComputeAsync(desired, live, NoNulls);
+
+        var operation = Assert.Single(plan.Operations);
+        Assert.True(operation.Blocked);
+        Assert.True(operation.Destructive);
+        // The retained column's index is not a dependency; the table-level object is.
+        Assert.Equal(
+            new[] { "constraint \"users_check\"", "constraint \"users_email_key\"", "index \"idx_users_email\"" },
+            operation.Dependents);
+    }
+
+    [Fact]
+    public async Task DropTable_WithAttachedObjects_IsBlocked()
+    {
+        var live = Live(Table("users", ("id", "int4", true))) with
+        {
+            ForeignObjects = [new ForeignObject("users", "id", "constraint", "users_pkey")],
+        };
+
+        var plan = await SchemaDiff.ComputeAsync(new CatalogState([]), live, NoNulls);
+
+        Assert.True(Assert.Single(plan.Operations).Blocked);
+        Assert.Single(plan.Blocked);
+    }
+
+    [Fact]
+    public async Task DropTable_WithoutAttachedObjects_StaysAllowed()
+    {
+        var plan = await SchemaDiff.ComputeAsync(
+            new CatalogState([]),
+            Live(Table("users", ("id", "int4", true))),
+            NoNulls);
+
+        Assert.False(Assert.Single(plan.Operations).Blocked);
+        Assert.Empty(plan.Blocked);
+    }
+
     private static CatalogState Desired(string json) => SchemaCatalog.FromSchema(SchemaParser.Parse(json).Schema!);
 
     private static CatalogState Live(params TableState[] tables) => new(tables);

@@ -93,8 +93,13 @@ typed models change) → `myorm-db diff` to review → `myorm-db apply` to adopt
 - **Renames are not paired:** a rename comes out as drop+add and passes the
   same destructive gate. Automatic rename pairing stays open until real
   friction appears.
-- **Foreign objects are left alone:** constraints, indexes, or other objects
-  the schema file does not express are reported and untouched, never dropped.
+- **Foreign objects are left alone:** constraints and standalone indexes the
+  schema file does not express are read from `pg_constraint`/`pg_index`, and a
+  plan that would remove one is refused before anything is written. `DROP
+  COLUMN` takes the column's indexes and constraints with it silently, and
+  `DROP TABLE` takes every object on the table, so both are blocked with the
+  object names reported by `diff` and `apply`. Removing them stays a manual
+  step until Stage 7.5 can express them.
 - **Not in scope:** down/rollback migrations, seeds/data migrations,
   non-interactive/CI mode, indexes/constraints (Stage 7.5), schema-JSON
   ergonomics (Stage 7.6), other dialects (Stage 6), concurrent applies.
@@ -111,6 +116,11 @@ Implementation notes as built:
   the schema file yet.
 - Managed tables are those in the resolved schema; `myorm_migrations` itself is
   never diffed. Tables in other schemas are untouched.
+- A constraint with no column list (a table-level object) blocks any column
+  drop on that table: the schema file cannot say whether it references the
+  column, so the refusal is deliberately conservative. A foreign key owned by
+  another table is not read — PostgreSQL rejects the dependent drop itself and
+  the transaction rolls back.
 
 ## Verification
 
@@ -123,7 +133,8 @@ schema per run, never touching shared tables, configured runs (a set
 - **Offline diff** — fresh-create column order, add/drop column, drop table,
   rename as gated drop+add, widening free / narrowing gated, `SET NOT NULL`
   gated only when the column holds NULLs, `DROP NOT NULL` free, no-op on a
-  matching catalog.
+  matching catalog, and drops of a column or table that carries a constraint or
+  index blocked (a retained column's index is not a dependency).
 - **Record layout** — SQL file, snapshot, journal entry and hash; hand-edit
   changes the hash; baseline record has no statements; same stamp and slug get
   distinct ids.
@@ -133,6 +144,10 @@ schema per run, never touching shared tables, configured runs (a set
   nothing, failed statement rolling back with the journal entry present and no
   migration row (rerun succeeds after the fix), hand-edited SQL refused, and an
   existing database recorded as a baseline.
+- **Live dependency refusal** — a table with a real index and unique
+  constraint, and a real index on a second table: neither column drop nor table
+  drop is applied, the objects survive, and no journal entry or
+  `myorm_migrations` row is added.
 
 The CLI itself was exercised against a live database for the same flow,
 including both destructive-gate outcomes (non-interactive refusal, interactive

@@ -187,7 +187,10 @@ the statements that hit the database are always reviewable.
   and `nullable → NOT NULL` on a column that already holds NULLs — require an
   interactive `yes`. Non-interactive runs refuse instead of assuming consent.
 - Renames are not paired; they surface as drop + add under the same gate.
-  Foreign objects (constraints, indexes) are left untouched.
+  Foreign objects (constraints and standalone indexes) are read from the
+  catalog and never removed: a statement that would take one down — dropping
+  its column or its table — is refused with the object names before anything is
+  written.
 - v1 is deliberately narrow: no rollback, seeds, indexes/constraints (Stage
   7.5), CI mode, or other dialects. Types compare on PostgreSQL type names, so
   type modifiers are not diffed.
