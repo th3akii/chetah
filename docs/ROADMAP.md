@@ -25,7 +25,7 @@ This roadmap sketches a direction, not a commitment. It exists to keep the next 
 
 ## 3. Milestone 1 — MVP: Basic SELECT
 
-**Status:** In progress
+**Status:** Delivered (2026-11-05 — commit `d31c7ce`, verified against live PostgreSQL; now the foundation layer under Milestones 002–003)
 **Goal:** Prove the full path from a minimal C# query description to a real PostgreSQL result set.
 
 **Deliverables**
@@ -100,10 +100,12 @@ resolution hold up as the query chain grows?
 
 ### Stage 7 — Schema Tooling and Migrations
 
-**Status:** Undecided
+**Status:** Next — approved 2026-11-05 as a diff/push schema tool whose applied changes are recorded as plain SQL migrations; implementation deliberately deferred to a later session. Plan: [`SCHEMA_TOOLING.md`](SCHEMA_TOOLING.md).
 **Goal:** Optional tooling for applying schema changes.
 
-Deliberately conditional: it is included only if the project reaches a point where manual schema management is a real cost. Migrations may never be built, and that is an acceptable outcome.
+The original conditional is resolved: manual schema management is now real friction (Stage 2 live fixtures seed databases by hand), so the tool is approved, with exactly the author-noted must-have below in scope.
+
+Author-noted must-have before this becomes real: **drift detection** — the schema file is the source of truth for generated code, but nothing notices when the database has drifted (a renamed column like `adress` → `address` turns into a runtime `42703` error only when a query runs). Any tooling stage also needs either an apply path or a check that flags the mismatch before execution.
 
 ### Stage 7.5 — Constraint Metadata (noted by author, not started)
 
