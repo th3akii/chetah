@@ -1,0 +1,13 @@
+<Solution>
+  <Folder Name="/examples/">
+    <Project Path="examples/BasicExample/BasicExample.csproj" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/MyOrm.Core/MyOrm.Core.csproj" />
+    <Project Path="src/MyOrm.Postgres/MyOrm.Postgres.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/MyOrm.Core.Tests/MyOrm.Core.Tests.csproj" />
+    <Project Path="tests/MyOrm.Postgres.Tests/MyOrm.Postgres.Tests.csproj" />
+  </Folder>
+</Solution>
