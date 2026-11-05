@@ -18,15 +18,17 @@ public class MigrationStoreTests : IDisposable
     {
         var snapshot = new CatalogState([new TableState("t", [new ColumnState("id", "int4", true)])]);
 
-        var entry = _store.Write("20260101000000", "create_t", ["CREATE TABLE \"t\" (\"id\" integer NOT NULL)"], snapshot);
+        var entry = _store.Write("20260101000000", "create_t", [Statement("CREATE TABLE \"t\" (\"id\" integer NOT NULL)")], snapshot);
 
         Assert.Equal("20260101000000_create_t", entry.Id);
         Assert.Equal(1, entry.Statements);
+        Assert.Equal("statement", Assert.Single(entry.Operations!).Kind);
+        Assert.Equal("CREATE TABLE \"t\" (\"id\" integer NOT NULL)", Assert.Single(entry.Operations!).Statement);
         Assert.Equal(MigrationStore.Hash(_store.ReadSql(entry.Id)), entry.Hash);
         Assert.True(File.Exists(Path.Combine(_directory, "meta", entry.Id + "_snapshot.json")));
-        Assert.Equal(entry, Assert.Single(_store.ReadJournal().Entries));
+        Assert.Equal(entry, Assert.Single(_store.ReadJournal().Entries) with { Operations = entry.Operations });
 
-        var statements = _store.Write("20260101000001", "two", ["SELECT 1", "SELECT 2"], snapshot);
+        var statements = _store.Write("20260101000001", "two", [Statement("SELECT 1"), Statement("SELECT 2")], snapshot);
         Assert.Equal(2, statements.Statements);
         Assert.Contains("--> statement-breakpoint", _store.ReadSql(statements.Id), StringComparison.Ordinal);
     }
@@ -44,7 +46,7 @@ public class MigrationStoreTests : IDisposable
     [Fact]
     public void HandEdit_ChangesTheHash()
     {
-        var entry = _store.Write("20260101000000", "create_t", ["CREATE TABLE \"t\" (\"id\" integer NOT NULL)"], new CatalogState([]));
+        var entry = _store.Write("20260101000000", "create_t", [Statement("CREATE TABLE \"t\" (\"id\" integer NOT NULL)")], new CatalogState([]));
 
         File.AppendAllText(_store.SqlPath(entry.Id), "DROP TABLE \"t\";\n");
 
@@ -62,4 +64,7 @@ public class MigrationStoreTests : IDisposable
         Assert.NotEqual(first.Id, second.Id);
         Assert.Equal(2, _store.ReadJournal().Entries.Count);
     }
+
+    private static Operation Statement(string sql) =>
+        new(sql, "test", null, Target: new OperationTarget("statement", "t", null));
 }

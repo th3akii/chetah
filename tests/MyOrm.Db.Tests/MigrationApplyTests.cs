@@ -1,3 +1,4 @@
+using System.Text.Json;
 using MyOrm.CodeGen;
 using Npgsql;
 
@@ -18,6 +19,16 @@ public class MigrationApplyTests
         { "tables": [ { "name": "users", "columns": [
           { "name": "id", "type": "integer", "nullable": false },
           { "name": "name", "type": "text", "nullable": false } ] } ] }
+        """;
+
+    private const string EmailSchema = """
+        { "tables": [ { "name": "users", "columns": [
+          { "name": "id", "type": "integer", "nullable": false },
+          { "name": "email", "type": "text" } ] } ] }
+        """;
+
+    private const string IdOnlySchema = """
+        { "tables": [ { "name": "users", "columns": [ { "name": "id", "type": "integer", "nullable": false } ] } ] }
         """;
 
     [PostgresFact]
@@ -91,7 +102,9 @@ public class MigrationApplyTests
             --> statement-breakpoint
 
             DEFINITELY NOT SQL
-            """, statements: 2);
+            """,
+            new JournalOperation(OperationKinds.CreateTable, "rollback_probe", null, false, "CREATE TABLE \"rollback_probe\" (id integer NOT NULL)"),
+            new JournalOperation("statement", "", null, false, "DEFINITELY NOT SQL"));
 
         var output = new StringWriter();
         Assert.Equal(1, await fixture.Runner(output).ApplyAsync(Parse(schema)));
@@ -101,10 +114,12 @@ public class MigrationApplyTests
         Assert.Equal(0, await fixture.CountAsync("SELECT count(*) FROM myorm_migrations"));
         Assert.Single(new MigrationStore(fixture.MigrationsDirectory).ReadJournal().Entries);
 
-        // The recorded-but-unapplied migration is retried once the SQL is fixed.
-        fixture.WriteEntry(id, "broken", "CREATE TABLE \"rollback_probe\" (id integer NOT NULL)\n", statements: 1);
+        // The recorded-but-unapplied migration is retried once the SQL is fixed. Nothing destructive
+        // is recorded, so the confirmation gate must not be consulted.
+        fixture.WriteEntry(id, "broken", "CREATE TABLE \"rollback_probe\" (id integer NOT NULL)\n",
+            new JournalOperation(OperationKinds.CreateTable, "rollback_probe", null, false, "CREATE TABLE \"rollback_probe\" (id integer NOT NULL)"));
 
-        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(Parse(schema)));
+        Assert.Equal(0, await fixture.Runner(new StringWriter(), _ => throw new InvalidOperationException("no confirmation expected")).ApplyAsync(Parse(schema)));
         Assert.Equal(1, await fixture.CountAsync(TableExists("rollback_probe")));
         Assert.Equal(1, await fixture.CountAsync("SELECT count(*) FROM myorm_migrations"));
     }
@@ -115,7 +130,8 @@ public class MigrationApplyTests
         await using var fixture = await Fixture.CreateAsync();
         const string id = "20260101000000_tampered";
 
-        fixture.WriteEntry(id, "tampered", "CREATE TABLE \"tampered\" (id integer NOT NULL)\n", statements: 1);
+        fixture.WriteEntry(id, "tampered", "CREATE TABLE \"tampered\" (id integer NOT NULL)\n",
+            new JournalOperation(OperationKinds.CreateTable, "tampered", null, false, "CREATE TABLE \"tampered\" (id integer NOT NULL)"));
         File.AppendAllText(Path.Combine(fixture.MigrationsDirectory, id + ".sql"), "DROP TABLE \"tampered\";\n");
 
         var output = new StringWriter();
@@ -127,29 +143,86 @@ public class MigrationApplyTests
     }
 
     [PostgresFact]
+    public async Task PendingDestructiveMigration_WithANewDependency_IsRefused()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(Parse(EmailSchema)));
+        await fixture.ExecuteAsync("CREATE INDEX idx_users_email ON users (email)");
+
+        // A drop recorded before the index existed, replayed after someone added it.
+        fixture.WriteEntry(
+            "20260101000000_drop_email",
+            "drop_email",
+            "ALTER TABLE \"users\" DROP COLUMN \"email\"\n",
+            new JournalOperation(OperationKinds.DropColumn, "users", "email", true, "ALTER TABLE \"users\" DROP COLUMN \"email\""));
+
+        var output = new StringWriter();
+        Assert.Equal(1, await fixture.Runner(output, _ => throw new InvalidOperationException("dependency refusal must precede confirmation"))
+            .ApplyAsync(Parse(EmailSchema)));
+
+        Assert.Contains("Refusing to replay", output.ToString(), StringComparison.Ordinal);
+        Assert.Contains("idx_users_email", output.ToString(), StringComparison.Ordinal);
+        Assert.Equal(1, await fixture.CountAsync(ColumnExists("users", "email")));
+        Assert.Equal(1, await fixture.CountAsync(
+            "SELECT count(*) FROM pg_indexes WHERE schemaname = current_schema() AND indexname = 'idx_users_email'"));
+    }
+
+    [PostgresFact]
+    public async Task PendingDestructiveMigration_RequiresConfirmation()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(Parse(EmailSchema)));
+
+        fixture.WriteEntry(
+            "20260101000000_drop_email",
+            "drop_email",
+            "ALTER TABLE \"users\" DROP COLUMN \"email\"\n",
+            new JournalOperation(OperationKinds.DropColumn, "users", "email", true, "ALTER TABLE \"users\" DROP COLUMN \"email\""));
+
+        var denied = new StringWriter();
+        Assert.Equal(1, await fixture.Runner(denied, _ => false).ApplyAsync(Parse(IdOnlySchema)));
+
+        Assert.Contains("Aborted", denied.ToString(), StringComparison.Ordinal);
+        Assert.Equal(1, await fixture.CountAsync(ColumnExists("users", "email")));
+        Assert.Equal(1, await fixture.CountAsync("SELECT count(*) FROM myorm_migrations"));
+
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(Parse(IdOnlySchema)));
+        Assert.Equal(0, await fixture.CountAsync(ColumnExists("users", "email")));
+        Assert.Equal(2, await fixture.CountAsync("SELECT count(*) FROM myorm_migrations"));
+    }
+
+    [PostgresFact]
+    public async Task PendingEntryWithoutMetadata_RequiresConfirmation()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(Parse(UsersSchema)));
+
+        fixture.WriteEntry("20260101000000_unknown", "unknown", "CREATE TABLE \"probe\" (id integer NOT NULL)\n");
+
+        var denied = new StringWriter();
+        Assert.Equal(1, await fixture.Runner(denied, _ => false).ApplyAsync(Parse(UsersSchema)));
+
+        Assert.Contains("no recorded operation metadata", denied.ToString(), StringComparison.Ordinal);
+        Assert.Equal(0, await fixture.CountAsync(TableExists("probe")));
+        Assert.Equal(1, await fixture.CountAsync("SELECT count(*) FROM myorm_migrations"));
+    }
+
+    [PostgresFact]
     public async Task DroppedColumnWithAttachedObjects_IsRefused()
     {
         await using var fixture = await Fixture.CreateAsync();
-        const string withEmail = """
-            { "tables": [ { "name": "users", "columns": [
-              { "name": "id", "type": "integer", "nullable": false },
-              { "name": "email", "type": "text" } ] } ] }
-            """;
-        const string withoutEmail = """
-            { "tables": [ { "name": "users", "columns": [ { "name": "id", "type": "integer", "nullable": false } ] } ] }
-            """;
 
-        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(Parse(withEmail)));
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(Parse(EmailSchema)));
         await fixture.ExecuteAsync("CREATE INDEX idx_users_email ON users (email)");
         await fixture.ExecuteAsync("ALTER TABLE users ADD CONSTRAINT users_email_key UNIQUE (email)");
 
         var diff = new StringWriter();
-        Assert.Equal(0, await fixture.Runner(diff).DiffAsync(Parse(withoutEmail)));
+        Assert.Equal(0, await fixture.Runner(diff).DiffAsync(Parse(IdOnlySchema)));
         Assert.Contains("refused", diff.ToString(), StringComparison.Ordinal);
         Assert.Contains("idx_users_email", diff.ToString(), StringComparison.Ordinal);
 
         var output = new StringWriter();
-        Assert.Equal(1, await fixture.Runner(output).ApplyAsync(Parse(withoutEmail)));
+        Assert.Equal(1, await fixture.Runner(output).ApplyAsync(Parse(IdOnlySchema)));
 
         Assert.Contains("Refusing to apply", output.ToString(), StringComparison.Ordinal);
         Assert.Equal(1, await fixture.CountAsync(ColumnExists("users", "email")));
@@ -244,19 +317,29 @@ public class MigrationApplyTests
         internal MigrationRunner Runner(StringWriter output, Func<IReadOnlyList<Operation>, bool>? confirm = null) =>
             new(ConnectionString, MigrationsDirectory, output, confirm ?? (_ => true));
 
-        /// <summary>Hand-writes a journal entry and its SQL file, as a previous run would have.</summary>
-        internal void WriteEntry(string id, string slug, string sql, int statements)
+        /// <summary>Hand-writes a journal entry and its SQL file, as a previous run would have.
+        /// No operations writes an entry with no metadata.</summary>
+        internal void WriteEntry(string id, string slug, string sql, params JournalOperation[] operations)
         {
             var meta = Path.Combine(MigrationsDirectory, "meta");
             Directory.CreateDirectory(meta);
             File.WriteAllText(Path.Combine(MigrationsDirectory, id + ".sql"), sql);
-            File.WriteAllText(Path.Combine(meta, "_journal.json"), $$"""
-                {
-                  "entries": [
-                    { "id": "{{id}}", "slug": "{{slug}}", "hash": "{{MigrationStore.Hash(sql)}}", "statements": {{statements}} }
-                  ]
-                }
-                """);
+
+            var statementCount = sql
+                .Split(MigrationStore.StatementBreakpoint)
+                .Count(part => part.Trim().Length > 0 && !part.Trim().StartsWith("--", StringComparison.Ordinal));
+
+            var entry = new JournalEntry(
+                id,
+                slug,
+                MigrationStore.Hash(sql),
+                statementCount,
+                operations.Length == 0 ? null : operations);
+            File.WriteAllText(
+                Path.Combine(meta, "_journal.json"),
+                JsonSerializer.Serialize(
+                    new Journal([entry]),
+                    new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true }) + "\n");
         }
 
         internal async Task ExecuteAsync(string sql)

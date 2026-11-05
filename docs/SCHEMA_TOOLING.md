@@ -59,9 +59,18 @@ A diff/push tool in the drizzle-kit mental model, with cheap inspection added:
 
    Statements inside a file are separated by `--> statement-breakpoint`.
    Each journal entry stores the UTC stamp, slug, sha256 of the SQL payload,
-   and statement count. `apply` verifies each file's hash against the journal
+   statement count, and per-statement operation metadata (kind, table, column,
+   destructive flag). `apply` verifies each file's hash against the journal
    before executing, so hand-edits cannot silently diverge from what was
    recorded. Snapshots exist for auditability; diffing always uses the catalog.
+
+   A pending entry is replayed only after re-validation: its recorded drops are
+   checked against the *current* catalog (a drop would now remove an index or
+   constraint → refused), and any recorded destructive statement is confirmed
+   again before it runs. A hash match proves the file is unchanged, not that the
+   database is; replaying against a different database (*e.g.* with redirected
+   stdin) therefore cannot slip a destructive change through. Entries without
+   metadata cannot be checked and require confirmation.
 
 ## Commands
 
@@ -100,6 +109,11 @@ typed models change) → `myorm-db diff` to review → `myorm-db apply` to adopt
   `DROP TABLE` takes every object on the table, so both are blocked with the
   object names reported by `diff` and `apply`. Removing them stays a manual
   step until Stage 7.5 can express them.
+- **Pending migrations are re-validated, not trusted:** the same dependency
+  check and the destructive confirmation run again on every replay, against the
+  catalog as it is now. A recorded `DROP` that has since gained a dependent
+  index is refused; a recorded destructive change is confirmed again, and a
+  non-interactive replay refuses rather than assuming consent.
 - **Not in scope:** down/rollback migrations, seeds/data migrations,
   non-interactive/CI mode, indexes/constraints (Stage 7.5), schema-JSON
   ergonomics (Stage 7.6), other dialects (Stage 6), concurrent applies.
@@ -148,6 +162,11 @@ schema per run, never touching shared tables, configured runs (a set
   constraint, and a real index on a second table: neither column drop nor table
   drop is applied, the objects survive, and no journal entry or
   `myorm_migrations` row is added.
+- **Live replay validation** — a pending destructive entry replayed after an
+  index was added to its target column is refused before confirmation; a pending
+  destructive entry is refused when the confirmation gate says no and applied
+  when it says yes; a pending entry without metadata is refused unless
+  confirmed; a safe pending entry is replayed without consulting the gate.
 
 The CLI itself was exercised against a live database for the same flow,
 including both destructive-gate outcomes (non-interactive refusal, interactive

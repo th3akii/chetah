@@ -1,10 +1,20 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 
 namespace MyOrm.Db;
 
-internal sealed record JournalEntry(string Id, string Slug, string Hash, int Statements);
+/// <summary>One recorded statement, reduced to what replay validation needs. <see cref="Statement"/>
+/// is repeated here so a refused replay can name the SQL without re-parsing the file.</summary>
+internal sealed record JournalOperation(string Kind, string Table, string? Column, bool Destructive, string Statement);
+
+internal sealed record JournalEntry(
+    string Id,
+    string Slug,
+    string Hash,
+    int Statements,
+    IReadOnlyList<JournalOperation>? Operations = null);
 
 internal sealed record Journal(IReadOnlyList<JournalEntry> Entries);
 
@@ -15,7 +25,12 @@ internal sealed class MigrationStore
     internal const string StatementBreakpoint = "--> statement-breakpoint";
     private const string BaselineSql = "-- baseline: existing database recorded as-is; no DDL was executed.";
 
-    private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { WriteIndented = true };
+    private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
+    {
+        WriteIndented = true,
+        // The record is meant to be read and reviewed; escaping quotes as \u0022 makes it noise.
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+    };
 
     private readonly string _metaDirectory;
 
@@ -44,19 +59,28 @@ internal sealed class MigrationStore
     public static string Hash(string sql) => Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(sql)));
 
     /// <summary>Writes the SQL file, the snapshot after it, and the journal entry recording both.
-    /// Zero statements writes a baseline record: snapshot only, no DDL.</summary>
-    public JournalEntry Write(string stamp, string slug, IReadOnlyList<string> statements, CatalogState snapshot)
+    /// Zero operations writes a baseline record: snapshot only, no DDL.</summary>
+    public JournalEntry Write(string stamp, string slug, IReadOnlyList<Operation> operations, CatalogState snapshot)
     {
         var journal = ReadJournal();
         var id = UniqueId(journal, stamp, slug);
-        var sql = (statements.Count == 0
+        var sql = (operations.Count == 0
             ? BaselineSql
-            : string.Join($"\n\n{StatementBreakpoint}\n\n", statements)) + "\n";
+            : string.Join($"\n\n{StatementBreakpoint}\n\n", operations.Select(operation => operation.Statement))) + "\n";
 
         Directory.CreateDirectory(MigrationsDirectory);
         Directory.CreateDirectory(_metaDirectory);
 
-        var entry = new JournalEntry(id, slug, Hash(sql), statements.Count);
+        var recorded = operations
+            .Select(operation => new JournalOperation(
+                operation.Target?.Kind ?? "statement",
+                operation.Target?.Table ?? "",
+                operation.Target?.Column,
+                operation.Destructive,
+                operation.Statement))
+            .ToArray();
+
+        var entry = new JournalEntry(id, slug, Hash(sql), operations.Count, recorded.Length == 0 ? null : recorded);
         File.WriteAllText(SqlPath(id), sql);
         File.WriteAllText(Path.Combine(_metaDirectory, id + "_snapshot.json"), JsonSerializer.Serialize(snapshot, Json) + "\n");
         File.WriteAllText(JournalPath, JsonSerializer.Serialize(new Journal([.. journal.Entries, entry]), Json) + "\n");

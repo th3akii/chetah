@@ -92,6 +92,9 @@ internal sealed class MigrationRunner
                 return 1;
             }
 
+            if (!await ValidatePendingAsync(connection, entry, cancellationToken))
+                return 1;
+
             if (!await ApplyMigrationAsync(connection, entry, sql, cancellationToken))
             {
                 _output.WriteLine($"Migration {entry.Id} was rolled back. It stays in the journal and is retried by the next apply.");
@@ -140,7 +143,7 @@ internal sealed class MigrationRunner
             return 1;
         }
 
-        var migration = _store.Write(Stamp(), plan.Slug, plan.Operations.Select(operation => operation.Statement).ToArray(), desired);
+        var migration = _store.Write(Stamp(), plan.Slug, plan.Operations, desired);
 
         if (!await ApplyMigrationAsync(connection, migration, _store.ReadSql(migration.Id), cancellationToken))
         {
@@ -150,6 +153,65 @@ internal sealed class MigrationRunner
 
         _output.WriteLine($"Applied {migration.Id}: {plan.Operations.Count} statement(s) written to {_store.SqlPath(migration.Id)}.");
         return 0;
+    }
+
+    /// <summary>A pending entry was recorded earlier and is being replayed now — possibly against a
+    /// database that changed since. Re-check the recorded drops against the current catalog and ask
+    /// before executing anything destructive; a hash match alone proves nothing about the live state.</summary>
+    private async Task<bool> ValidatePendingAsync(
+        NpgsqlConnection connection,
+        JournalEntry entry,
+        CancellationToken cancellationToken)
+    {
+        if (entry.Statements == 0)
+            return true;
+
+        if (entry.Operations is null)
+        {
+            _output.WriteLine($"Migration {entry.Id} carries no recorded operation metadata, so what it does cannot be checked.");
+            if (_confirm([new Operation(entry.Id, entry.Slug, "a recorded migration with unknown contents")]))
+                return true;
+
+            _output.WriteLine("Aborted: the recorded migration was not confirmed. Nothing was executed.");
+            return false;
+        }
+
+        var drops = entry.Operations
+            .Where(operation => operation.Kind is OperationKinds.DropColumn or OperationKinds.DropTable)
+            .ToArray();
+
+        if (drops.Length > 0)
+        {
+            var live = await PostgresCatalog.ReadAsync(connection, cancellationToken);
+            foreach (var drop in drops)
+            {
+                var dependents = SchemaDiff.Dependents(
+                    live,
+                    drop.Table,
+                    drop.Kind == OperationKinds.DropTable ? null : drop.Column);
+                if (dependents is null)
+                    continue;
+
+                _output.WriteLine(
+                    $"Refusing to replay {entry.Id}: {drop.Statement} would remove {string.Join(", ", dependents)}.");
+                _output.WriteLine("Nothing was executed. Remove those objects yourself first.");
+                return false;
+            }
+        }
+
+        var destructive = entry.Operations
+            .Where(operation => operation.Destructive)
+            .Select(operation => new Operation(operation.Statement, entry.Slug, "recorded destructive change"))
+            .ToArray();
+
+        if (destructive.Length == 0)
+            return true;
+
+        if (_confirm(destructive))
+            return true;
+
+        _output.WriteLine("Aborted: the recorded destructive change was not confirmed. Nothing was executed.");
+        return false;
     }
 
     private async Task<NpgsqlConnection> OpenAsync(CancellationToken cancellationToken)

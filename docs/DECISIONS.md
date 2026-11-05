@@ -182,7 +182,10 @@ the statements that hit the database are always reviewable.
   has been generated; only the table decides what ran.
 - Each migration runs in one transaction together with its `myorm_migrations`
   row. A failed statement rolls everything back, the entry stays in the journal,
-  and the next `apply` retries it.
+  and the next `apply` retries it. A retry is not a blind replay: the entry's
+  recorded operations are re-checked against the current catalog (a drop that
+  now has dependents is refused) and any destructive statement is confirmed
+  again. Entries without recorded metadata require confirmation.
 - Destructive statements — DROP TABLE, DROP COLUMN, non-widening type changes,
   and `nullable → NOT NULL` on a column that already holds NULLs — require an
   interactive `yes`. Non-interactive runs refuse instead of assuming consent.

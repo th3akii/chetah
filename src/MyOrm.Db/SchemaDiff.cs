@@ -1,5 +1,22 @@
 namespace MyOrm.Db;
 
+/// <summary>The vocabulary the journal records, so a pending migration can be re-validated
+/// against the live catalog instead of being replayed blindly.</summary>
+internal static class OperationKinds
+{
+    public const string CreateTable = "create_table";
+    public const string AddColumn = "add_column";
+    public const string DropColumn = "drop_column";
+    public const string DropTable = "drop_table";
+    public const string AlterType = "alter_type";
+    public const string SetNotNull = "set_not_null";
+    public const string DropNotNull = "drop_not_null";
+}
+
+/// <summary>What a statement acts on. Only the drop kinds drive replay validation, but every
+/// statement records its target so the journal stays self-describing.</summary>
+internal sealed record OperationTarget(string Kind, string Table, string? Column);
+
 /// <summary>One DDL statement the plan wants to execute. <paramref name="Reason"/> is the
 /// destructive justification and is null for safe statements; <paramref name="Dependents"/> names
 /// foreign objects whose removal the statement would cause, which blocks the plan.</summary>
@@ -7,7 +24,8 @@ internal sealed record Operation(
     string Statement,
     string Slug,
     string? Reason,
-    IReadOnlyList<string>? Dependents = null)
+    IReadOnlyList<string>? Dependents = null,
+    OperationTarget? Target = null)
 {
     public bool Destructive => Reason is not null;
 
@@ -52,7 +70,11 @@ internal static class SchemaDiff
             var liveTable = live.Table(table.Name);
             if (liveTable is null)
             {
-                operations.Add(new Operation(CreateTable(table), $"create_{table.Name}", null));
+                operations.Add(new Operation(
+                    CreateTable(table),
+                    $"create_{table.Name}",
+                    null,
+                    Target: new OperationTarget(OperationKinds.CreateTable, table.Name, null)));
                 continue;
             }
 
@@ -64,7 +86,8 @@ internal static class SchemaDiff
                     operations.Add(new Operation(
                         $"ALTER TABLE {Quote(table.Name)} ADD COLUMN {ColumnDefinition(column)}",
                         $"add_{table.Name}_{column.Name}",
-                        null));
+                        null,
+                        Target: new OperationTarget(OperationKinds.AddColumn, table.Name, column.Name)));
                     continue;
                 }
 
@@ -74,7 +97,8 @@ internal static class SchemaDiff
                     operations.Add(new Operation(
                         $"ALTER TABLE {Quote(table.Name)} ALTER COLUMN {Quote(column.Name)} TYPE {column.SqlType}",
                         $"type_{table.Name}_{column.Name}",
-                        widening ? null : $"{liveColumn.Type} → {column.Type} can lose data"));
+                        widening ? null : $"{liveColumn.Type} → {column.Type} can lose data",
+                        Target: new OperationTarget(OperationKinds.AlterType, table.Name, column.Name)));
                 }
 
                 if (liveColumn.NotNull == column.NotNull)
@@ -85,7 +109,8 @@ internal static class SchemaDiff
                     operations.Add(new Operation(
                         $"ALTER TABLE {Quote(table.Name)} ALTER COLUMN {Quote(column.Name)} DROP NOT NULL",
                         $"nullable_{table.Name}_{column.Name}",
-                        null));
+                        null,
+                        Target: new OperationTarget(OperationKinds.DropNotNull, table.Name, column.Name)));
                     continue;
                 }
 
@@ -93,7 +118,8 @@ internal static class SchemaDiff
                 operations.Add(new Operation(
                     $"ALTER TABLE {Quote(table.Name)} ALTER COLUMN {Quote(column.Name)} SET NOT NULL",
                     $"notnull_{table.Name}_{column.Name}",
-                    populated ? "the column already contains NULLs" : null));
+                    populated ? "the column already contains NULLs" : null,
+                    Target: new OperationTarget(OperationKinds.SetNotNull, table.Name, column.Name)));
             }
 
             foreach (var column in liveTable.Columns.Where(column => table.Column(column.Name) is null))
@@ -101,7 +127,8 @@ internal static class SchemaDiff
                     $"ALTER TABLE {Quote(table.Name)} DROP COLUMN {Quote(column.Name)}",
                     $"drop_{table.Name}_{column.Name}",
                     "removes the column and its values",
-                    Dependents(live, table.Name, column.Name)));
+                    Dependents(live, table.Name, column.Name),
+                    new OperationTarget(OperationKinds.DropColumn, table.Name, column.Name)));
         }
 
         foreach (var table in live.Tables.Where(table => desired.Table(table.Name) is null))
@@ -109,14 +136,15 @@ internal static class SchemaDiff
                 $"DROP TABLE {Quote(table.Name)}",
                 $"drop_{table.Name}",
                 "removes the table and its rows",
-                Dependents(live, table.Name, null)));
+                Dependents(live, table.Name, null),
+                new OperationTarget(OperationKinds.DropTable, table.Name, null)));
 
         return new MigrationPlan(operations);
     }
 
     /// <summary>Foreign objects the statement would take down with it. PostgreSQL removes attached
     /// constraints and indexes silently, so any dependency blocks the drop instead of riding along.</summary>
-    private static IReadOnlyList<string>? Dependents(CatalogState live, string table, string? column)
+    internal static IReadOnlyList<string>? Dependents(CatalogState live, string table, string? column)
     {
         var dependents = live.Foreign
             .Where(foreign => foreign.Table == table
