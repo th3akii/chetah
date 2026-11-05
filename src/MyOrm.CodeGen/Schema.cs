@@ -59,7 +59,7 @@ public static class SchemaParser
             return SchemaParserResult.Fail("Schema must contain a \"tables\" array.");
 
         var tables = new List<TableSchema>();
-        var csharpNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var csharpNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "MyOrmSchema", "Bindings" };
 
         foreach (var tableElement in tablesElement.EnumerateArray())
         {

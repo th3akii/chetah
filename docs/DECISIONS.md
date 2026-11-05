@@ -30,17 +30,17 @@ basic-SELECT milestone only.
 
 **Consequences:**
 
+> **Delivered 2026-11-05** — the typed-model prerequisites now exist:
+> `db.Select<T>().ToListAsync()` resolves T through the generated
+> `MyOrmSchema.Bindings` registry (`TableBinding<T>` in `MyOrm.Postgres`);
+> consumers construct `new PostgresDb(connectionString, MyOrmSchema.Bindings)`.
+> Unfiltered only; `Where`/`Join`/`Limit` chains remain future stages.
+
 - Underneath, `PostgresCompiler.ToSql` and `PostgresDb` keep their roles:
-  this changes the API surface on top of the query representation, not the
-  compile→execute pipeline.
-- Prerequisite: typed model generation (column types + `Table`↔model
-  resolution) from the planned next milestones; until then the
-  `users.SelectAll()` entry point remains the only working syntax, and
-  `examples/BasicExample` + `docs/BASIC_SELECT.md` describe it as MVP
-  scaffolding, superseded by this decision once typed models exist.
-- Revisit trigger: if auto-resolution of table metadata from `T` proves
-  awkward (metadata-independent discovery, multiple tables per model), this
-  entry is expected to be revised — the preference is directional, not final.
+  `Select<T>()` is a lookup plus the same compile→execute pipeline.
+- Resolution is registry-based (generated file), not reflection discovery —
+  revisit trigger: if multiple tables per model type are ever needed, extend
+  the registry schema.
 
 ## D002 — JSON schema file + CLI generator, explicit generated mappers
 

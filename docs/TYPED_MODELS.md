@@ -114,24 +114,39 @@ Type map: `integer`→`int`, `bigint`→`long`, `text`→`string`,
 
 ## Step 4 — typed SELECT
 
-The generated metadata feeds the untouched milestone-001 pipeline:
+The generated metadata feeds the untouched milestone-001 pipeline. The
+database-centric API from [`DECISIONS.md`](DECISIONS.md) D001 resolves `T`
+through the generated registry:
 
 ```csharp
-var db = new PostgresDb(connectionString);
-var users = await db.QueryAsync(UsersTable.Table.SelectAll(), UsersTable.Map);
+var db = new PostgresDb(connectionString, MyOrmSchema.Bindings);
+var users = await db.Select<User>().ToListAsync();
 foreach (var user in users)
     Console.WriteLine($"{user.Id} {user.Name} ({user.Age})"); // IntelliSense on all three
 ```
 
-- SQL identifiers come only from `UsersTable.Table` metadata; quoting remains
-  the compiler's job. No user string ever reaches the SQL text.
+The generated file also emits `public static class MyOrmSchema`: one
+`TableBinding{Model}` per table plus a `Bindings` dictionary from `Type` to
+binding. `db.Select<T>()` resolves `T` against that dictionary and throws an
+`InvalidOperationException` with guidance if `T` is unknown or the registry was
+not passed to the database.
+
+SQL identifiers come only from the binding's `Table` metadata; quoting remains
+the compiler's job. No user string ever reaches the SQL text.
+
+Explicit `QueryAsync` remains available and equivalent:
+
+```csharp
+// Same query, same mapper, spelled out:
+var users = await db.QueryAsync(UsersTable.Table.SelectAll(), UsersTable.Map);
+```
+
 - Mapping is the generated `Map` function: one `GetOrdinal` per nullable
   column, typed reader calls, explicit `IsDBNull` handling. Hand-written per
   row in the generator rather than reflective, so it is debuggable and free of
   per-row reflection cost.
-- The database-centric `db.Select<User>()` API from
-  [`DECISIONS.md`](DECISIONS.md) D001 remains the target; it will compose on
-  top of exactly these generated pieces.
+- `Select<T>()` is unfiltered in this stage; typed `Where(...)` chains are the
+  next stage.
 
 ## Tests
 

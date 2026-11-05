@@ -11,13 +11,8 @@ namespace MyOrm.CodeGen.Tests;
 /// </summary>
 public class TypedSelectRoundTripTests
 {
-    [Fact]
-    public async Task QueryAsync_MapsRowsWithGeneratedModelAndMapper()
+    internal static async Task SetupTestWidgetsTable(string connectionString)
     {
-        var connectionString = Environment.GetEnvironmentVariable("MYORM_CONNECTION_STRING");
-        if (connectionString is null)
-            return;
-
         await using (var connection = new NpgsqlConnection(connectionString))
         {
             await connection.OpenAsync();
@@ -36,6 +31,16 @@ public class TypedSelectRoundTripTests
                 """, connection);
             await setup.ExecuteNonQueryAsync();
         }
+    }
+
+    [Fact]
+    public async Task QueryAsync_MapsRowsWithGeneratedModelAndMapper()
+    {
+        var connectionString = Environment.GetEnvironmentVariable("MYORM_CONNECTION_STRING");
+        if (connectionString is null)
+            return;
+
+        await SetupTestWidgetsTable(connectionString);
 
         var db = new PostgresDb(connectionString);
 
@@ -51,5 +56,23 @@ public class TypedSelectRoundTripTests
         // SQL identifiers come from generated table metadata, not raw input.
         Assert.Equal("test_widgets", TestWidgetsTable.Table.Name);
         Assert.Equal(["id", "label", "quantity", "active", "token", "created"], TestWidgetsTable.Table.Columns.Select(c => c.Name));
+    }
+
+    [Fact]
+    public async Task Select_MapsRowsWithGeneratedRegistry()
+    {
+        var connectionString = Environment.GetEnvironmentVariable("MYORM_CONNECTION_STRING");
+        if (connectionString is null)
+            return;
+
+        await SetupTestWidgetsTable(connectionString);
+
+        var db = new PostgresDb(connectionString, MyOrmSchema.Bindings);
+        var rows = (await db.Select<TestWidgets>().ToListAsync()).OrderBy(w => w.Id).ToArray();
+
+        Assert.Equal(2, rows.Length);
+        Assert.Equal(new TestWidgets(1, "doohickey", 5000000000, true, Guid.Parse("d212a748-360c-4cf8-a3d6-a52a4d32f24b"), new DateTime(2024, 1, 2, 3, 4, 5)), rows[0]);
+        Assert.Null(rows[1].Label);
+        Assert.Null(rows[1].Token);
     }
 }

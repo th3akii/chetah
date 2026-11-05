@@ -39,3 +39,14 @@ public static class TestWidgetsTable
 
 public sealed record TestWidgets(int Id, string? Label, long Quantity, bool Active, Guid? Token, DateTime Created);
 
+public static class MyOrmSchema
+{
+    public static readonly MyOrm.Postgres.TableBinding<TestWidgets> TestWidgetsBinding = new(TestWidgetsTable.Table, TestWidgetsTable.Map);
+
+    public static readonly System.Collections.Generic.IReadOnlyDictionary<System.Type, MyOrm.Postgres.ITableBinding> Bindings =
+        new System.Collections.Generic.Dictionary<System.Type, MyOrm.Postgres.ITableBinding>
+        {
+            [typeof(TestWidgets)] = TestWidgetsBinding,
+        };
+}
+

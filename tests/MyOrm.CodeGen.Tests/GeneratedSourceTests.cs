@@ -62,4 +62,16 @@ public class GeneratedSourceTests
         Assert.Contains("""new("user-roles", Id.Name)""", source);
         Assert.Contains("public static class UserRolesTable", source);
     }
+
+    [Fact]
+    public void RendersTypeToBindingRegistry()
+    {
+        var source = GeneratedSource.Render(SchemaParser.Parse(TestSchemaJson).Schema!, "MyOrm.CodeGen.Tests");
+
+        Assert.Contains("public static class MyOrmSchema", source);
+        Assert.Contains(
+            "public static readonly MyOrm.Postgres.TableBinding<TestWidgets> TestWidgetsBinding = new(TestWidgetsTable.Table, TestWidgetsTable.Map);",
+            source);
+        Assert.Contains("[typeof(TestWidgets)] = TestWidgetsBinding,", source);
+    }
 }

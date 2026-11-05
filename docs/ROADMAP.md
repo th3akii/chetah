@@ -67,7 +67,7 @@ Roughly: single-row and multi-row inserts, updates and deletes with mandatory sc
 
 ### Stage 4 — Schema Source of Truth and Typing
 
-**Status:** In progress (Milestone 002 implemented: JSON schema → CLI generator → typed models; see [`TYPED_MODELS.md`](TYPED_MODELS.md) and [`DECISIONS.md`](DECISIONS.md) D002)
+**Status:** Delivered for reads (Milestones 002–003: JSON schema → CLI generator → typed models → `db.Select<T>()`; see [`TYPED_MODELS.md`](TYPED_MODELS.md), [`DECISIONS.md`](DECISIONS.md) D002)
 **Goal:** Describe tables and columns once, and derive both query metadata and strongly typed models from it.
 
 This stage's open questions from the original draft were answered in Milestone 002:

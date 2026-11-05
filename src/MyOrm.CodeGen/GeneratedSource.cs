@@ -23,7 +23,30 @@ public static class GeneratedSource
         foreach (var table in schema.Tables)
             RenderTable(sb, table);
 
+        RenderRegistry(sb, schema);
+
         return sb.ToString();
+    }
+
+    /// <summary>The Type→binding registry the consumer passes to PostgresDb.</summary>
+    private static void RenderRegistry(StringBuilder sb, Schema schema)
+    {
+        sb.AppendLine("public static class MyOrmSchema");
+        sb.AppendLine("{");
+
+        foreach (var table in schema.Tables)
+            sb.AppendLine(
+                $"    public static readonly MyOrm.Postgres.TableBinding<{table.ModelName}> {table.ModelName}Binding = new({table.AccessorName}.Table, {table.AccessorName}.Map);");
+
+        sb.AppendLine();
+        sb.AppendLine("    public static readonly System.Collections.Generic.IReadOnlyDictionary<System.Type, MyOrm.Postgres.ITableBinding> Bindings =");
+        sb.AppendLine("        new System.Collections.Generic.Dictionary<System.Type, MyOrm.Postgres.ITableBinding>");
+        sb.AppendLine("        {");
+        foreach (var table in schema.Tables)
+            sb.AppendLine($"            [typeof({table.ModelName})] = {table.ModelName}Binding,");
+        sb.AppendLine("        };");
+        sb.AppendLine("}");
+        sb.AppendLine();
     }
 
     private static void RenderTable(StringBuilder sb, TableSchema table)

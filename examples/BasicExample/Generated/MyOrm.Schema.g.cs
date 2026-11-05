@@ -55,3 +55,16 @@ public static class ManualUserTestTable
 
 public sealed record ManualUsers(Guid Id, string Name, string? Adress);
 
+public static class MyOrmSchema
+{
+    public static readonly MyOrm.Postgres.TableBinding<User> UserBinding = new(UsersTable.Table, UsersTable.Map);
+    public static readonly MyOrm.Postgres.TableBinding<ManualUsers> ManualUsersBinding = new(ManualUserTestTable.Table, ManualUserTestTable.Map);
+
+    public static readonly System.Collections.Generic.IReadOnlyDictionary<System.Type, MyOrm.Postgres.ITableBinding> Bindings =
+        new System.Collections.Generic.Dictionary<System.Type, MyOrm.Postgres.ITableBinding>
+        {
+            [typeof(User)] = UserBinding,
+            [typeof(ManualUsers)] = ManualUsersBinding,
+        };
+}
+
