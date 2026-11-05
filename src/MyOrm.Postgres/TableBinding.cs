@@ -49,8 +49,6 @@ public sealed class TableBinding<T> : ITableBinding
 
     internal Func<NpgsqlDataReader, T> Mapper => _map;
 
-    internal Func<NpgsqlDataReader, int, T> MapperAt => _mapAt;
-
     object ITableBinding.Map(NpgsqlDataReader reader) => _map(reader)!;
 
     object ITableBinding.MapAt(NpgsqlDataReader reader, int offset) => _mapAt(reader, offset)!;
