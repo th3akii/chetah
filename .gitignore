@@ -480,3 +480,7 @@ $RECYCLE.BIN/
 
 # Vim temporary swap files
 *.swp
+
+# .NET SDK/NuGet scratch logs. They belong in %TEMP%; a mangled temp path can
+# drop them anywhere, so never let one reach a commit.
+Microsoft.NET.Workload_*.log
