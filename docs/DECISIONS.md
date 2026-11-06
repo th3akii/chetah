@@ -194,13 +194,18 @@ the statements that hit the database are always reviewable.
   while renaming its key produces `ALTER TABLE … RENAME`, and a genuine
   replacement has to be declared with `--drop-add` before it becomes drop + add
   under the destructive gate. Objects the schema file cannot express (check and
-  exclusion constraints, multi-column keys, expression indexes) are read from
-  the catalog and never removed: a statement that would take one down is refused
-  with the object names before anything is written.
-- v1 was deliberately narrow: no rollback, seeds, indexes/constraints (Stage
-  7.5), CI mode, or other dialects. Constraints, indexes, defaults and identity
-  columns are expressible now (D006); types compare on PostgreSQL type names, so
-  type modifiers are not diffed.
+  exclusion constraints, expression and partial indexes, foreign keys from
+  another schema) are read from the catalog and never removed: a statement that
+  would take one down is refused with the object names before anything is
+  written.
+- `diff` records missing `"$id"` members but writes no DDL, and identity is
+  resolved before anything is written, so a refusal leaves the file untouched.
+  `diff --check` is the strict read-only form (no file write, no DDL, no lock,
+  no internal table, exit code 1 when a migration is pending) and is what a CI
+  job gates on.
+- v1 was deliberately narrow: no rollback, seeds, CI mode, or other dialects.
+  Constraints, indexes, defaults, identity columns, composite keys, referential
+  actions and type modifiers are expressible now (D006/D007).
 
 **Consequences:**
 
@@ -259,6 +264,13 @@ including tombstones for objects that were dropped.
   add, which still passes the destructive gate.
 - The registry is synchronized inside the migration transaction, so a rollback
   cannot leave identities describing a migration that never ran.
+- **Portability:** the schema file is the portable half of identity — another
+  database applies the same file and ends up with the same ids, because ids come
+  from the file and allocation only happens for objects that have none. The
+  registry is the applied half. A file id this database has never seen, for a
+  name it already tracks under another id, and a file id that names a dropped
+  object, are both refused with both ids named: never remapped, and never
+  reinterpreted as a rename.
 
 **Consequences:**
 
@@ -270,3 +282,34 @@ including tombstones for objects that were dropped.
 - Revisit trigger: if a real need appears to carry identities across databases
   (staging → production), the ids are already portable — revisit the conflict
   rules then, not the storage.
+
+## D007 — Defaults are compared against what was applied, not against PostgreSQL's text
+
+**Date:** 2026-11-06
+
+**Decision:** The identity registry (`"chetah"."objects"`) records, per column,
+two normalized texts: the default the schema file declared, and the default the
+column held once the migration committed. A default has changed when either the
+declaration or the stored value no longer matches its record.
+
+**Why:** PostgreSQL rewrites default expressions when it stores them —
+`pg_catalog.now()` becomes `now()`, `1 + 1` becomes `(1 + 1)`, a literal gains
+its cast. Comparing the declared text with the catalog text therefore never
+converged: an unchanged schema generated a new migration on every apply (four in
+a row during the audit that produced this decision). A text canonicalizer cannot
+fix that in general, because the rewrite rules belong to PostgreSQL; recording
+what was applied can, for any expression.
+
+**Consequences:**
+
+- One extra column pair in the internal registry, written inside the migration
+  transaction from the catalog as it is after the DDL, so it cannot describe a
+  migration that rolled back.
+- A default edited by hand in the database is still detected (the stored value
+  drifts from the record), and so is an edited declaration.
+- A registry written before this decision is read without the new columns; the
+  next apply adds them. On that first run, a rewritten default costs at most one
+  corrective `SET DEFAULT`.
+- Revisit trigger: a change made outside Chetah and reverted between two runs is
+  invisible to the record. The resulting state is identical, so this is accepted
+  rather than solved.

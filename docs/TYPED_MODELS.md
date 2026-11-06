@@ -56,10 +56,14 @@ Rules:
 - `$id` — maintained by `chetah-db`, not by hand: the tool writes a persistent
   identity onto every table and column and uses it to tell a rename from a drop
   plus an add ([`SCHEMA_TOOLING.md`](SCHEMA_TOOLING.md), D006).
-- Properties only the migration tool reads — `primaryKey`, `indexes`, `unique`,
-  `references`, `default`, `identity` — are accepted and ignored by the
-  generator, which maps columns to CLR types regardless. Vocabulary and
-  semantics: [`SCHEMA_TOOLING.md`](SCHEMA_TOOLING.md).
+- Properties only the migration tool reads — `primaryKey`, `unique` (also
+  composite), `indexes`, `foreignKeys`, per-column `unique`, `references`,
+  `default`, `identity` — are accepted and ignored by the generator, which maps
+  columns to CLR types regardless. Vocabulary and semantics:
+  [`SCHEMA_TOOLING.md`](SCHEMA_TOOLING.md).
+- `type` accepts a PostgreSQL modifier where one exists: `varchar(100)` maps to
+  `string` like `text`, `timestamp(3)` to `DateTime`. The modifier is part of the
+  migrated type.
 - Column names must be plain identifiers (`[A-Za-z_][A-Za-z0-9_]*`) because they
   become C# property names (`first_name` → `FirstName`) and database rows are
   read by name. PostgreSQL columns that require quoting (spaces, `@`…) are

@@ -83,25 +83,33 @@ A diff/push tool in the drizzle-kit mental model, with cheap inspection added:
 ## Commands
 
 ```sh
-dotnet run --project src/Chetah.Db -- diff  --schema <schema.json> [--connection <conn>] [--migrations <dir>] [--drop-add <object> ...]
+dotnet run --project src/Chetah.Db -- diff  --schema <schema.json> [--connection <conn>] [--migrations <dir>] [--drop-add <object> ...] [--check]
 dotnet run --project src/Chetah.Db -- apply --schema <schema.json> [--connection <conn>] [--migrations <dir>] [--drop-add <object> ...]
 ```
 
 - `diff` — prints the DDL the catalog comparison produces, flags destructive
   items, writes no DDL. It does persist missing `"$id"` members into the schema
   file: identity has to be recorded where it is decided, or the next run would
-  decide different ones.
+  decide different ones. Identity is resolved and checked *first*; a run that
+  ends in a refusal has not touched the file.
+- `diff --check` — read-only: no `"$id"` write, no DDL, no advisory lock, no
+  internal table creation, and it works on a database that has never been
+  migrated. It names the members it would write and exits **1** when a
+  migration is pending, **0** when the database matches the schema, which is
+  what a CI job gates on.
 - `apply` — runs the destructive confirmation gate, writes the record files,
   executes the migration in one transaction, records it in
-  `"chetah"."migrations"`.
+  `"chetah"."migrations"`. `--check` is rejected here rather than silently
+  behaving like `diff`.
 - `--drop-add <table>` / `--drop-add <table>.<column>` — resolves an otherwise
   ambiguous replacement; see *Identities*.
 
 The connection string defaults to `CHETAH_CONNECTION_STRING`; migrations default
 to `migrations/` beside the schema file. Both commands resolve the application
 schema once (the first existing schema on the search path that is not `chetah`),
-pin it with `SET search_path`, and hold a session advisory lock for the run, so
-two runs cannot plan from the same state or allocate the same identity.
+pin it with `SET search_path`, and — except in read-only mode — hold a session
+advisory lock for the run, so two runs cannot plan from the same state or
+allocate the same identity.
 
 ## Identities
 
@@ -138,64 +146,104 @@ column therefore carries a persistent `"$id"` in `chetah-schema.json`:
 - **Existing files adopt.** A schema file without `"$id"`s keeps the ids the
   registry already holds for its names, so a declaration written before
   identities existed is not mistaken for a rewrite.
-- The registry is synchronized inside the migration transaction, so a rollback
-  cannot leave identities describing a migration that never ran.
+- **The file is the portable half.** Development resolves and records the ids;
+  staging and production apply the same file and end up with the same
+  identities. The registry is the applied half: it knows which ids this database
+  has seen, which were dropped, and what each column's default actually became.
+- **A contradiction is a refusal.** A `"$id"` this database never saw, for a
+  name it already tracks under a different id, means the file and the database
+  were adopted separately. The message names both ids and both resolutions —
+  delete the `"$id"` to adopt the tracked id, or align it — and nothing is
+  remapped silently. Reusing a dropped id is refused the same way.
+- The registry is synchronized inside the migration transaction, from the
+  catalog as it is after the DDL, so a rollback cannot leave identities
+  describing a migration that never ran.
 
 ## Schema vocabulary
 
 ```json
 "users": {
   "primaryKey": ["tenant_id", "email"],
+  "unique": ["email", ["tenant_id", "email"]],
   "indexes": { "users_state_idx": { "columns": ["state"], "unique": false } },
+  "foreignKeys": {
+    "users_tenant_fkey": {
+      "columns": ["tenant_id"],
+      "references": "tenants",
+      "referenceColumns": ["id"],
+      "onDelete": "cascade",
+      "onUpdate": "no action"
+    }
+  },
   "columns": {
     "tenant_id": { "type": "integer", "nullable": false },
     "email": { "type": "text", "nullable": false, "unique": true },
     "role_id": { "type": "integer", "references": "roles.id" },
     "created_at": { "type": "timestamp", "nullable": false, "default": "now()" },
-    "id": { "type": "bigint", "nullable": false, "identity": true }
+    "id": { "type": "bigint", "nullable": false, "identity": true },
+    "code": { "type": "varchar(100)" }
   }
 }
 ```
 
 - `primaryKey` — column list, in constraint order; composite keys are just a
   longer list.
+- `unique` — array of column names or column-name arrays: single or composite
+  UNIQUE constraints. The column-level `"unique": true` is the single-column
+  shorthand.
 - `indexes` — one entry per standalone index, with `columns` and an optional
   `unique`.
-- `unique` — a single-column UNIQUE constraint.
-- `references` — `table.column` or `schema.table.column`.
-- `default` — raw SQL, applied verbatim; compared cast-stripped and
-  whitespace-normalized, because PostgreSQL prints `'active'` back as
-  `'active'::text`.
+- `references` (column) — `table.column` or `schema.table.column`, the
+  single-column shortcut.
+- `foreignKeys` (table) — keyed by constraint name: `columns`,
+  `references` (`table` or `schema.table`), `referenceColumns`, optional
+  `onDelete`/`onUpdate` (`no action`, `restrict`, `cascade`, `set null`,
+  `set default`). Actions are part of the definition: changing one replaces the
+  constraint.
+- `default` — raw SQL, applied verbatim.
 - `identity` — `GENERATED BY DEFAULT AS IDENTITY`, integer/bigint only, implies
   `NOT NULL` and cannot be combined with `default`.
-- Check and exclusion constraints, multi-column unique constraints and foreign
-  keys, and expression indexes are not expressible yet: they are read from the
-  catalog, never created or dropped, and block a statement that would remove
-  them silently.
+- `type` — `integer`, `bigint`, `text`, `boolean`, `uuid`, `timestamp`,
+  `varchar`, with a modifier where PostgreSQL allows one: `varchar(100)`,
+  `timestamp(3)`. Type modifiers are compared: a live `timestamp(3)` is not a
+  declared `timestamp`, and a larger modifier is treated as widening.
+- Check and exclusion constraints, and expression or partial indexes, are not
+  expressible yet: they are read from the catalog, never created or dropped, and
+  a statement that would remove one is refused. So is a foreign key from another
+  schema that points at a managed table.
 
 ## Scope details
 
 - **Supported operations:** create/drop table, add/drop column, rename
-  table/column (by identity), alter type among the supported scalar types
-  (widening is free; narrowing is gated), alter nullability, set/drop default,
-  add/drop identity, add/drop primary key (composite included), add/drop
-  single-column unique and foreign key constraints, create/drop indexes.
+  table/column (by identity), alter type among the supported scalar types and
+  modifiers (widening is free; narrowing is gated), alter nullability, set/drop
+  default, add/drop identity, add/drop primary key, unique constraint (single or
+  composite) and foreign key (single or composite, with actions), create/drop
+  indexes.
 - **Ordering is fixed:** renames, then index drops, then constraint drops, then
   column drops, then table drops, then table creates, then column adds and
   alters, then primary keys and unique constraints, then foreign keys, then
   index creates. Nothing is removed implicitly through the object that carried
   it, and a foreign key can point at a table created in the same migration.
 - **Definitions, not names:** constraints and indexes are matched on kind,
-  columns, reference target and uniqueness, so a hand-named equivalent does not
-  churn on every apply.
+  columns, reference target, referential actions and uniqueness, so a hand-named
+  equivalent does not churn on every apply.
+- **Defaults are compared against what was applied:** the registry records the
+  declared text and the column's resulting default, so a PostgreSQL rewrite
+  (`pg_catalog.now()` → `now()`, `1 + 1` → `(1 + 1)`) is not a change while
+  editing the file or the database still is. See D007.
 - **Destructive gate:** DROP TABLE, DROP COLUMN, DROP INDEX, DROP CONSTRAINT,
   non-widening type changes, and `nullable → NOT NULL` on a column that already
   holds NULLs require an interactive `yes`. Non-interactive runs refuse instead
   of assuming consent.
-- **Unexpressible objects block:** check/exclusion constraints, multi-column
-  unique/foreign keys and expression indexes are read from `pg_constraint`/
-  `pg_index`, and a statement that would take one down is refused with the
-  object names before anything is written.
+- **Unexpressible objects block:** check/exclusion constraints, expression and
+  partial indexes, and foreign keys from another schema are read from
+  `pg_constraint`/`pg_index` and never matched against a declared object or
+  removed; a statement that would take one down is refused with the object names
+  before anything is written.
+- **A second unique index is not built:** a declared unique index whose columns a
+  live unique constraint already covers is considered satisfied, and that
+  constraint is not dropped for being "undeclared" under a different spelling.
 - **Pending migrations are re-validated, not trusted:** the dependency check
   runs again on every replay, against the catalog as it is now, which counts
   every attached constraint and index — including ones the schema file does
@@ -211,9 +259,9 @@ column therefore carries a persistent `"$id"` in `chetah-schema.json`:
 Implementation notes as built:
 
 - Types compare on PostgreSQL type names (`int4`, `int8`, `text`, `bool`,
-  `uuid`, `timestamp`), so a column that differs in spelling (e.g.
-  `timestamptz`) is reported as a gated type change rather than silently
-  accepted. Type modifiers (`timestamp(3)`) are not compared.
+  `uuid`, `timestamp`), and a modifier is part of the type (`varchar(100)`,
+  `timestamp(3)`), so a different spelling the catalog normalizes away (e.g.
+  `int4` vs `integer`) is not a change while a different modifier is.
 - Adding a `NOT NULL` column to an already-populated table without a `default`
   fails; the transaction rolls back and the journal entry is retried after the
   schema is corrected.
@@ -233,6 +281,32 @@ skipped ones.
 
 `tests/Chetah.Db.Tests` covers:
 
+- **Read-only diff** — `--check` on a database that has never been migrated
+  writes no file, creates no schema, no internal table and no DDL; it names the
+  `"$id"` members it would assign, exits 1 when a migration is pending and 0 when
+  in sync; a refused identity leaves the file byte-identical; `diff` without
+  `--check` still records the ids and no DDL.
+- **Cross-environment identity** — one schema file applied to two databases
+  produces the same identity set; a `"$id"` that contradicts the registry is
+  refused with both ids named; reusing a dropped id is refused; a file from
+  before identities adopts the recorded ones.
+- **Defaults** — a PostgreSQL-rewritten default (`1 + 1`, `pg_catalog.now()`)
+  converges to one migration and stays in sync; a default changed by hand in the
+  database is corrected and then settles; the offline diff reacts to a changed
+  declaration or to drift and ignores a rewrite.
+- **Types** — `varchar(100)`/`timestamp(3)` are introspected and are a no-op on
+  re-apply; a larger modifier is not gated, a smaller one and a dropped modifier
+  are; the parser rejects modifiers PostgreSQL would not accept.
+- **Composite keys and actions** — composite UNIQUE and composite FOREIGN KEY
+  with `ON DELETE cascade`/`ON UPDATE restrict` are created, are a no-op on
+  re-apply, and are replaced when an action changes; the parser rejects a
+  missing `referenceColumns`, an arity mismatch, an unknown action and an
+  undeclared column.
+- **Unsupported objects** — an expression index and a partial index survive,
+  are never proposed for removal and block the column drop; a foreign key from
+  another schema blocks the table drop with its name; a declared unique index
+  over a live composite unique constraint neither duplicates the index nor drops
+  the constraint.
 - **Offline diff** — fresh-create column order, add/drop column, drop table,
   widening free / narrowing gated, `SET NOT NULL` gated only when the column
   holds NULLs, `DROP NOT NULL` free, no-op on a matching catalog, primary key
