@@ -9,7 +9,7 @@ namespace Chetah.Db;
 internal sealed class MigrationRunner
 {
     private const string CreateStateTable = """
-        CREATE TABLE IF NOT EXISTS "myorm_migrations" (
+        CREATE TABLE IF NOT EXISTS "chetah_migrations" (
             id bigserial NOT NULL,
             hash text NOT NULL,
             name text NOT NULL,
@@ -232,7 +232,7 @@ internal sealed class MigrationRunner
     }
 
     /// <summary>Executes the recorded SQL and the applied-state row in one transaction: a failed
-    /// statement leaves the database and <c>myorm_migrations</c> untouched.</summary>
+    /// statement leaves the database and <c>chetah_migrations</c> untouched.</summary>
     private async Task<bool> ApplyMigrationAsync(
         NpgsqlConnection connection,
         JournalEntry entry,

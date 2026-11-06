@@ -73,7 +73,7 @@ internal static class SchemaCatalog
 /// <summary>Reads the live table/column state of the schema the connection resolves.</summary>
 internal static class PostgresCatalog
 {
-    internal const string StateTableName = "myorm_migrations";
+    internal const string StateTableName = "chetah_migrations";
 
     private const string ColumnsQuery = """
         SELECT c.relname, a.attname, t.typname, a.attnotnull
@@ -85,7 +85,7 @@ internal static class PostgresCatalog
           AND c.relkind = 'r'
           AND a.attnum > 0
           AND NOT a.attisdropped
-          AND c.relname <> 'myorm_migrations'
+          AND c.relname <> 'chetah_migrations'
         ORDER BY c.relname, a.attnum
         """;
 

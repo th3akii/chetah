@@ -100,7 +100,7 @@ resolution hold up as the query chain grows?
 
 ### Stage 7 — Schema Tooling and Migrations
 
-**Status:** Delivered 2026-11-05 — `src/Chetah.Db` (`chetah-db`) implements the approved diff/push tool: catalog introspection, plain-SQL journal with snapshots, `myorm_migrations` applied-state, and a destructive confirmation gate. See [`SCHEMA_TOOLING.md`](SCHEMA_TOOLING.md) and [`DECISIONS.md`](DECISIONS.md) D005.
+**Status:** Delivered 2026-11-05 — `src/Chetah.Db` (`chetah-db`) implements the approved diff/push tool: catalog introspection, plain-SQL journal with snapshots, `chetah_migrations` applied-state, and a destructive confirmation gate. See [`SCHEMA_TOOLING.md`](SCHEMA_TOOLING.md) and [`DECISIONS.md`](DECISIONS.md) D005.
 **Goal:** Optional tooling for applying schema changes.
 
 The original conditional is resolved: manual schema management is now real friction (Stage 2 live fixtures seed databases by hand), so the tool is approved, with exactly the author-noted must-have below in scope.

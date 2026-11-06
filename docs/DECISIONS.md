@@ -177,11 +177,11 @@ the statements that hit the database are always reviewable.
   `--> statement-breakpoint`; journal entries carry the id, slug, sha256 of the
   SQL payload and statement count. `apply` re-verifies each pending file's hash
   and refuses to run a hand-edited migration.
-- `myorm_migrations` (`id bigserial`, `hash`, `name`, `applied_at
+- `chetah_migrations` (`id bigserial`, `hash`, `name`, `applied_at
   timestamptz`) records what has been applied in the schema the connection
   resolves (`current_schema()`, i.e. the search path). The journal records what
   has been generated; only the table decides what ran.
-- Each migration runs in one transaction together with its `myorm_migrations`
+- Each migration runs in one transaction together with its `chetah_migrations`
   row. A failed statement rolls everything back, the entry stays in the journal,
   and the next `apply` retries it. A retry is not a blind replay: the entry's
   recorded operations are re-checked against the current catalog (a drop that

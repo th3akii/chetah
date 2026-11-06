@@ -37,7 +37,7 @@ A diff/push tool in the drizzle-kit mental model, with cheap inspection added:
 3. **Destructive changes are prompted:** DROPs, type narrowing, and
    nullable→NOT NULL on populated columns require interactive confirmation.
    Never silently applied.
-4. **Applied-state table:** `myorm_migrations` — `id` bigserial, `hash` text,
+4. **Applied-state table:** `chetah_migrations` — `id` bigserial, `hash` text,
    `name` text, `applied_at` timestamptz — created in the schema the connection
    resolves (search path, fallback `public`). It owns "what has been applied";
    the journal owns "what has been generated".
@@ -84,7 +84,7 @@ dotnet run --project src/Chetah.Db -- apply --schema <schema.json> [--connection
   items, writes nothing.
 - `apply` — runs the destructive confirmation gate, writes the record files,
   executes the migration in one transaction, records it in
-  `myorm_migrations`.
+  `chetah_migrations`.
 
 The connection string defaults to `CHETAH_CONNECTION_STRING`; migrations default
 to `migrations/` beside the schema file. Both commands resolve the managed
@@ -129,7 +129,7 @@ Implementation notes as built:
   draw on; the statement fails, the transaction rolls back, and the journal
   entry is retried after the schema is corrected. Defaults are not expressed by
   the schema file yet.
-- Managed tables are those in the resolved schema; `myorm_migrations` itself is
+- Managed tables are those in the resolved schema; `chetah_migrations` itself is
   never diffed. Tables in other schemas are untouched.
 - A constraint with no column list (a table-level object) blocks any column
   drop on that table: the schema file cannot say whether it references the
@@ -154,7 +154,7 @@ schema per run, never touching shared tables, configured runs (a set
   changes the hash; baseline record has no statements; same stamp and slug get
   distinct ids.
 - **Live apply** — fresh database created via `apply`, journal/snapshot/SQL
-  matching what ran, `myorm_migrations` rows with the right hash and name,
+  matching what ran, `chetah_migrations` rows with the right hash and name,
   `diff` reporting drift without writing, declined destructive gate writing
   nothing, failed statement rolling back with the journal entry present and no
   migration row (rerun succeeds after the fix), hand-edited SQL refused, and an
@@ -162,7 +162,7 @@ schema per run, never touching shared tables, configured runs (a set
 - **Live dependency refusal** — a table with a real index and unique
   constraint, and a real index on a second table: neither column drop nor table
   drop is applied, the objects survive, and no journal entry or
-  `myorm_migrations` row is added.
+  `chetah_migrations` row is added.
 - **Live replay validation** — a pending destructive entry replayed after an
   index was added to its target column is refused before confirmation; a pending
   destructive entry is refused when the confirmation gate says no and applied
