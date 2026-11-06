@@ -11,6 +11,8 @@ internal static class OperationKinds
     public const string AlterType = "alter_type";
     public const string SetNotNull = "set_not_null";
     public const string DropNotNull = "drop_not_null";
+    public const string RenameTable = "rename_table";
+    public const string RenameColumn = "rename_column";
 }
 
 /// <summary>What a statement acts on. Only the drop kinds drive replay validation, but every
@@ -58,12 +60,21 @@ internal static class SchemaDiff
 {
     /// <param name="hasNulls">Reports whether an existing column already contains NULLs; drives
     /// the nullable → NOT NULL gate. Called only for columns that need that check.</param>
+    /// <param name="identities">Declared objects matched to persistent ids. A rename (same id, new
+    /// name) becomes <c>ALTER ... RENAME</c> and the live state is read as if it had already
+    /// happened, so the renamed column is never mistaken for a drop plus an add.</param>
     public static async Task<MigrationPlan> ComputeAsync(
         CatalogState desired,
         CatalogState live,
-        Func<string, string, Task<bool>> hasNulls)
+        Func<string, string, Task<bool>> hasNulls,
+        ResolvedIdentities? identities = null)
     {
         var operations = new List<Operation>();
+        var probeTable = new Dictionary<string, string>(StringComparer.Ordinal);
+        var probeColumn = new Dictionary<(string Table, string Column), string>();
+
+        if (identities is not null)
+            live = ApplyRenames(desired, live, identities, operations, probeTable, probeColumn);
 
         foreach (var table in desired.Tables)
         {
@@ -114,7 +125,9 @@ internal static class SchemaDiff
                     continue;
                 }
 
-                var populated = await hasNulls(table.Name, column.Name);
+                var populated = await hasNulls(
+                    probeTable.GetValueOrDefault(table.Name, table.Name),
+                    probeColumn.GetValueOrDefault((table.Name, column.Name), column.Name));
                 operations.Add(new Operation(
                     $"ALTER TABLE {Quote(table.Name)} ALTER COLUMN {Quote(column.Name)} SET NOT NULL",
                     $"notnull_{table.Name}_{column.Name}",
@@ -140,6 +153,93 @@ internal static class SchemaDiff
                 new OperationTarget(OperationKinds.DropTable, table.Name, null)));
 
         return new MigrationPlan(operations);
+    }
+
+    /// <summary>Emits the rename statements and returns the live state as it will look once they
+    /// ran, so the rest of the diff compares like with like. <paramref name="probeTable"/> and
+    /// <paramref name="probeColumn"/> map a renamed object back to the name the catalog still uses,
+    /// which is what pre-DDL probes such as the NULL check must query.</summary>
+    private static CatalogState ApplyRenames(
+        CatalogState desired,
+        CatalogState live,
+        ResolvedIdentities identities,
+        List<Operation> operations,
+        Dictionary<string, string> probeTable,
+        Dictionary<(string Table, string Column), string> probeColumn)
+    {
+        var tableRenames = new Dictionary<string, string>(StringComparer.Ordinal);
+        var columnRenames = new Dictionary<(string Table, string Column), string>();
+
+        foreach (var table in desired.Tables)
+        {
+            if (!identities.Tables.TryGetValue(table.Name, out var identity)
+                || identity.LiveName is not { } oldName
+                || oldName == table.Name
+                || live.Table(oldName) is null)
+                continue;
+
+            operations.Add(new Operation(
+                $"ALTER TABLE {Quote(oldName)} RENAME TO {Quote(table.Name)}",
+                $"rename_{oldName}_to_{table.Name}",
+                null,
+                Target: new OperationTarget(OperationKinds.RenameTable, table.Name, null)));
+            tableRenames[oldName] = table.Name;
+            probeTable[table.Name] = oldName;
+        }
+
+        foreach (var table in desired.Tables)
+        {
+            if (!identities.Tables.TryGetValue(table.Name, out var identity))
+                continue;
+
+            var liveTableName = identity.LiveName ?? table.Name;
+            var liveTable = live.Table(liveTableName);
+            if (liveTable is null)
+                continue;
+
+            foreach (var column in table.Columns)
+            {
+                if (!identities.Columns.TryGetValue((table.Name, column.Name), out var columnIdentity)
+                    || columnIdentity.LiveName is not { } oldColumn
+                    || oldColumn == column.Name
+                    || liveTable.Column(oldColumn) is null)
+                    continue;
+
+                operations.Add(new Operation(
+                    $"ALTER TABLE {Quote(table.Name)} RENAME COLUMN {Quote(oldColumn)} TO {Quote(column.Name)}",
+                    $"rename_{table.Name}_{oldColumn}_to_{column.Name}",
+                    null,
+                    Target: new OperationTarget(OperationKinds.RenameColumn, table.Name, column.Name)));
+                columnRenames[(liveTableName, oldColumn)] = column.Name;
+                probeColumn[(table.Name, column.Name)] = oldColumn;
+            }
+        }
+
+        if (tableRenames.Count == 0 && columnRenames.Count == 0)
+            return live;
+
+        var tables = live.Tables
+            .Select(table => new TableState(
+                tableRenames.GetValueOrDefault(table.Name, table.Name),
+                table.Columns
+                    .Select(column => columnRenames.TryGetValue((table.Name, column.Name), out var renamed)
+                        ? column with { Name = renamed }
+                        : column)
+                    .ToArray()))
+            .ToArray();
+
+        var foreign = live.Foreign
+            .Select(foreignObject => foreignObject with
+            {
+                Table = tableRenames.GetValueOrDefault(foreignObject.Table, foreignObject.Table),
+                Column = foreignObject.Column is not null
+                    && columnRenames.TryGetValue((foreignObject.Table, foreignObject.Column), out var renamed)
+                        ? renamed
+                        : foreignObject.Column,
+            })
+            .ToArray();
+
+        return new CatalogState(tables, foreign);
     }
 
     /// <summary>Foreign objects the statement would take down with it. PostgreSQL removes attached

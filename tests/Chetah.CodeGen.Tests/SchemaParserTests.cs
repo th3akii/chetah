@@ -5,6 +5,57 @@ namespace Chetah.CodeGen.Tests;
 public class SchemaParserTests
 {
     [Fact]
+    public void ReadsIdentityMembers()
+    {
+        var result = SchemaParser.Parse("""
+            {
+              "tables": {
+                "users": {
+                  "$id": 1,
+                  "columns": {
+                    "id": { "$id": 2, "type": "integer", "nullable": false },
+                    "name": { "$id": 3, "type": "text" },
+                    "plain": { "type": "text" }
+                  }
+                }
+              }
+            }
+            """);
+
+        Assert.Null(result.Error);
+        var table = Assert.Single(result.Schema!.Tables);
+        Assert.Equal(1, table.Id);
+        Assert.Equal((2L, 3L, (long?)null), (table.Columns[0].Id, table.Columns[1].Id, table.Columns[2].Id));
+    }
+
+    [Fact]
+    public void DuplicateIdentity_IsRejected()
+    {
+        // What a merge of two branches that both allocated id 2 looks like.
+        var result = SchemaParser.Parse("""
+            {
+              "tables": {
+                "users": { "columns": {
+                  "id": { "$id": 2, "type": "integer" },
+                  "name": { "$id": 2, "type": "text" } } }
+              }
+            }
+            """);
+
+        Assert.Contains("already used by another object", result.Error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void NonPositiveIdentity_IsRejected()
+    {
+        var result = SchemaParser.Parse("""
+            { "tables": { "users": { "columns": { "id": { "$id": 0, "type": "integer" } } } } }
+            """);
+
+        Assert.Contains("must be a positive integer", result.Error, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ParsesTypesNullabilityAndDefaultModelName()
     {
         var result = SchemaParser.Parse("""

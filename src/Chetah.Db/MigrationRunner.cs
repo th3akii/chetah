@@ -17,34 +17,71 @@ internal sealed class MigrationRunner
         )
         """;
 
+    /// <summary>Identity registry: one row per object Chetah ever declared, with dropped rows kept as
+    /// tombstones. Stored instead of a counter so an id cannot be reissued twice, and one live row per
+    /// <c>(kind, parent, name)</c> so a name cannot be tracked by two identities.</summary>
+    private const string CreateObjectsTable = """
+        CREATE TABLE IF NOT EXISTS "chetah"."objects" (
+            id bigint NOT NULL,
+            kind text NOT NULL,
+            table_id bigint,
+            name text NOT NULL,
+            dropped_at timestamptz,
+            CONSTRAINT objects_pkey PRIMARY KEY (id),
+            CONSTRAINT objects_kind_check CHECK (kind IN ('table', 'column')),
+            CONSTRAINT objects_parent_check CHECK ((kind = 'table') = (table_id IS NULL))
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS "objects_live_name"
+            ON "chetah"."objects" (kind, coalesce(table_id, 0), name)
+            WHERE dropped_at IS NULL;
+        """;
+
     private readonly string _connectionString;
+    private readonly string _schemaPath;
+    private readonly IReadOnlySet<string> _dropAdd;
     private readonly MigrationStore _store;
     private readonly TextWriter _output;
     private readonly Func<IReadOnlyList<Operation>, bool> _confirm;
     private string _schema = "";
 
+    /// <param name="schemaPath">The schema file itself: the tool writes missing <c>"$id"</c> members
+    /// back into it, because that is where identity has to survive a rename.</param>
     /// <param name="confirm">Destructive confirmation gate; called only when the plan contains
     /// statements that cannot be undone.</param>
+    /// <param name="dropAdd">Objects explicitly declared as new (<c>table</c> or <c>table.column</c>),
+    /// which resolves "one object gone, one new" into a drop plus an add instead of a rename.</param>
     public MigrationRunner(
         string connectionString,
+        string schemaPath,
         string migrationsDirectory,
         TextWriter output,
-        Func<IReadOnlyList<Operation>, bool> confirm)
+        Func<IReadOnlyList<Operation>, bool> confirm,
+        IReadOnlySet<string>? dropAdd = null)
     {
         _connectionString = connectionString;
+        _schemaPath = schemaPath;
+        _dropAdd = dropAdd ?? new HashSet<string>(StringComparer.Ordinal);
         _store = new MigrationStore(migrationsDirectory);
         _output = output;
         _confirm = confirm;
     }
 
-    /// <summary>Prints the DDL the catalog comparison produces and writes nothing.</summary>
+    /// <summary>Prints the DDL the catalog comparison produces and writes no DDL. Missing
+    /// <c>"$id"</c> members are still persisted to the schema file: identity has to be recorded when
+    /// it is decided, or the next run would allocate different ones.</summary>
     public async Task<int> DiffAsync(Schema schema, CancellationToken cancellationToken = default)
     {
         await using var connection = await OpenAsync(cancellationToken);
+        var (_, identities) = await ResolveIdentitiesAsync(connection, schema, cancellationToken);
+        if (!identities.CanApply)
+            return RefuseIdentity(identities);
+
         var plan = await SchemaDiff.ComputeAsync(
             SchemaCatalog.FromSchema(schema),
             await PostgresCatalog.ReadAsync(connection, _schema, cancellationToken),
-            (table, column) => HasNullsAsync(connection, _schema, table, column, cancellationToken));
+            (table, column) => HasNullsAsync(connection, _schema, table, column, cancellationToken),
+            identities);
 
         if (plan.IsEmpty)
         {
@@ -109,18 +146,25 @@ internal sealed class MigrationRunner
 
         var live = await PostgresCatalog.ReadAsync(connection, _schema, cancellationToken);
         var desired = SchemaCatalog.FromSchema(schema);
+        var (ids, identities) = await ResolveIdentitiesAsync(connection, schema, cancellationToken);
+        if (!identities.CanApply)
+            return RefuseIdentity(identities);
 
         if (journal.Entries.Count == 0 && live.Tables.Count > 0)
         {
             var baseline = _store.Write(Stamp(), "baseline", [], live);
-            await RecordAsync(connection, null, baseline, cancellationToken);
+            await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+            await RecordAsync(connection, transaction, baseline, cancellationToken);
+            await IdentityRegistry.SynchronizeAsync(connection, transaction, schema, ids, cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
             _output.WriteLine($"Recorded baseline {baseline.Id} (no DDL executed).");
         }
 
         var plan = await SchemaDiff.ComputeAsync(
             desired,
             live,
-            (table, column) => HasNullsAsync(connection, _schema, table, column, cancellationToken));
+            (table, column) => HasNullsAsync(connection, _schema, table, column, cancellationToken),
+            identities);
 
         if (plan.IsEmpty)
         {
@@ -147,7 +191,12 @@ internal sealed class MigrationRunner
 
         var migration = _store.Write(Stamp(), plan.Slug, plan.Operations, desired);
 
-        if (!await ApplyMigrationAsync(connection, migration, _store.ReadSql(migration.Id), cancellationToken))
+        if (!await ApplyMigrationAsync(
+                connection,
+                migration,
+                _store.ReadSql(migration.Id),
+                cancellationToken,
+                (transaction, token) => IdentityRegistry.SynchronizeAsync(connection, transaction, schema, ids, token)))
         {
             _output.WriteLine($"Migration {migration.Id} was rolled back. It stays in the journal and is retried by the next apply.");
             return 1;
@@ -155,6 +204,27 @@ internal sealed class MigrationRunner
 
         _output.WriteLine($"Applied {migration.Id}: {plan.Operations.Count} statement(s) written to {_store.SqlPath(migration.Id)}.");
         return 0;
+    }
+
+    /// <summary>Matches declared objects to recorded identities, persisting any missing
+    /// <c>"$id"</c> as it goes. Allocation runs off the highest id the file and the registry know, so
+    /// a tombstoned id is never handed out again.</summary>
+    private async Task<(SchemaIds Ids, ResolvedIdentities Identities)> ResolveIdentitiesAsync(
+        NpgsqlConnection connection,
+        Schema schema,
+        CancellationToken cancellationToken)
+    {
+        var registry = await IdentityRegistry.ReadAsync(connection, null, cancellationToken);
+        var ids = await SchemaFile.EnsureIdsAsync(_schemaPath, schema, registry, cancellationToken);
+        return (ids, Identity.Resolve(schema, ids, registry, _dropAdd));
+    }
+
+    private int RefuseIdentity(ResolvedIdentities identities)
+    {
+        _output.WriteLine("Refusing to plan: object identity is ambiguous, so no migration was written.");
+        foreach (var refusal in identities.Refusals)
+            _output.WriteLine($"  - {refusal}");
+        return 1;
     }
 
     /// <summary>A pending entry was recorded earlier and is being replayed now — possibly against a
@@ -269,6 +339,8 @@ internal sealed class MigrationRunner
             $"CREATE SCHEMA IF NOT EXISTS {PostgresCatalog.InternalSchema}",
             cancellationToken);
 
+        await ExecuteAsync(connection, transaction, CreateObjectsTable, cancellationToken);
+
         var renamed = await RelationExistsAsync(
             connection, transaction, PostgresCatalog.InternalSchemaName, "migrations", cancellationToken);
         var stranded = await RelationExistsAsync(
@@ -324,11 +396,15 @@ internal sealed class MigrationRunner
 
     /// <summary>Executes the recorded SQL and the applied-state row in one transaction: a failed
     /// statement leaves the database and <c>chetah.migrations</c> untouched.</summary>
+    /// <param name="afterStatements">Runs inside the same transaction, after the DDL and before the
+    /// applied-state row commits — the identity registry is updated there so it cannot describe a
+    /// migration that rolled back.</param>
     private async Task<bool> ApplyMigrationAsync(
         NpgsqlConnection connection,
         JournalEntry entry,
         string sql,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<NpgsqlTransaction, CancellationToken, Task>? afterStatements = null)
     {
         var statements = sql
             .Split(MigrationStore.StatementBreakpoint)
@@ -341,6 +417,9 @@ internal sealed class MigrationRunner
         {
             foreach (var statement in statements)
                 await ExecuteAsync(connection, transaction, statement, cancellationToken);
+
+            if (afterStatements is not null)
+                await afterStatements(transaction, cancellationToken);
 
             await RecordAsync(connection, transaction, entry, cancellationToken);
             await transaction.CommitAsync(cancellationToken);

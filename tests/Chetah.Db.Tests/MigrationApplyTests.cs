@@ -54,13 +54,15 @@ public class MigrationApplyTests
               "legacy": { "columns": { "keep": { "type": "text" } } } } }
             """;
 
-        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(Parse(before)));
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(before)));
         await fixture.ExecuteAsync("INSERT INTO users VALUES (1, 'Main St')");
         await fixture.ExecuteAsync("INSERT INTO legacy VALUES ('kept', 'gone')");
         await fixture.ExecuteAsync("INSERT INTO notes VALUES ('n')");
 
+        // Renames are declared by keeping the column's "$id"; this file declares a different column
+        // entirely, so the plan has to be told that the replacement is intended.
         var output = new StringWriter();
-        Assert.Equal(0, await fixture.Runner(output).ApplyAsync(Parse(after)));
+        Assert.Equal(0, await fixture.Runner(output, dropAdd: ["users.address"]).ApplyAsync(fixture.Parse(after)));
 
         // Widened type, dropped/added column, dropped column and dropped table all really applied.
         Assert.Equal("bigint", (string?)await fixture.ScalarAsync("""
@@ -69,7 +71,7 @@ public class MigrationApplyTests
             """));
         Assert.Equal(0, await fixture.CountAsync(ColumnExists("users", "adress")));
         Assert.Equal(1, await fixture.CountAsync(ColumnExists("users", "address")));
-        // The rename is a drop+add, so the old values are gone rather than moved.
+        // The replacement is a drop+add, so the old values are gone rather than moved.
         Assert.Equal("1|", (string?)await fixture.ScalarAsync("SELECT id || '|' || coalesce(address, '') FROM users"));
         Assert.Equal(0, await fixture.CountAsync(ColumnExists("legacy", "extra")));
         Assert.Equal("kept", (string?)await fixture.ScalarAsync("SELECT keep FROM legacy"));
@@ -83,7 +85,7 @@ public class MigrationApplyTests
         await using var fixture = await Fixture.CreateAsync();
         var output = new StringWriter();
 
-        Assert.Equal(0, await fixture.Runner(output).ApplyAsync(Parse(UsersSchema)));
+        Assert.Equal(0, await fixture.Runner(output).ApplyAsync(fixture.Parse(UsersSchema)));
         Assert.Equal(1, await fixture.CountAsync(TableExists("users")));
 
         var store = new MigrationStore(fixture.MigrationsDirectory);
@@ -98,19 +100,151 @@ public class MigrationApplyTests
         Assert.True(File.Exists(store.SqlPath(entry.Id)));
 
         // Nothing changed: a second apply is a no-op.
-        Assert.Equal(0, await fixture.Runner(output).ApplyAsync(Parse(UsersSchema)));
+        Assert.Equal(0, await fixture.Runner(output).ApplyAsync(fixture.Parse(UsersSchema)));
         Assert.Equal(1, await fixture.CountAsync("SELECT count(*) FROM chetah.migrations"));
+    }
+
+    [PostgresFact]
+    public async Task ColumnRename_KeepsIdentityAndData()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        const string before = """
+            { "tables": { "users": { "columns": {
+              "id": { "type": "integer", "nullable": false },
+              "username": { "type": "text" } } } } }
+            """;
+
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(before)));
+        await fixture.ExecuteAsync("INSERT INTO users VALUES (1, 'aki')");
+        var identity = Convert.ToInt64(
+            await fixture.ScalarAsync("SELECT id FROM chetah.objects WHERE kind = 'column' AND name = 'username'"));
+
+        // Renaming the key keeps the "$id" the tool wrote, which is how a rename is declared.
+        var renamed = File.ReadAllText(fixture.SchemaPath).Replace("\"username\"", "\"display_name\"");
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(renamed)));
+
+        Assert.Equal(0, await fixture.CountAsync(ColumnExists("users", "username")));
+        Assert.Equal("aki", (string?)await fixture.ScalarAsync("SELECT display_name FROM users"));
+        Assert.Equal(identity, Convert.ToInt64(
+            await fixture.ScalarAsync("SELECT id FROM chetah.objects WHERE kind = 'column' AND name = 'display_name' AND dropped_at IS NULL")));
+        Assert.Contains(
+            new MigrationStore(fixture.MigrationsDirectory).ReadJournal().Entries.SelectMany(entry => entry.Operations ?? []),
+            operation => operation.Kind == OperationKinds.RenameColumn);
+    }
+
+    [PostgresFact]
+    public async Task TableRename_KeepsRowsAndIdentity()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        const string before = """
+            { "tables": { "users": { "columns": { "id": { "type": "integer", "nullable": false } } } } }
+            """;
+
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(before)));
+        await fixture.ExecuteAsync("INSERT INTO users VALUES (42)");
+        var identity = Convert.ToInt64(
+            await fixture.ScalarAsync("SELECT id FROM chetah.objects WHERE kind = 'table' AND name = 'users'"));
+
+        var renamed = File.ReadAllText(fixture.SchemaPath).Replace("\"users\"", "\"accounts\"");
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(renamed)));
+
+        Assert.Equal(0, await fixture.CountAsync(TableExists("users")));
+        Assert.Equal(1, await fixture.CountAsync(TableExists("accounts")));
+        Assert.Equal(42, await fixture.CountAsync("SELECT id FROM accounts"));
+        Assert.Equal(identity, Convert.ToInt64(
+            await fixture.ScalarAsync("SELECT id FROM chetah.objects WHERE kind = 'table' AND name = 'accounts' AND dropped_at IS NULL")));
+    }
+
+    [PostgresFact]
+    public async Task ReplacementColumn_IsRefusedUntilDeclared()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        const string before = """
+            { "tables": { "users": { "columns": {
+              "id": { "type": "integer", "nullable": false },
+              "adress": { "type": "text" } } } } }
+            """;
+        const string after = """
+            { "tables": { "users": { "columns": {
+              "id": { "type": "integer", "nullable": false },
+              "address": { "type": "text" } } } } }
+            """;
+
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(before)));
+
+        var refused = new StringWriter();
+        Assert.Equal(1, await fixture.Runner(refused).ApplyAsync(fixture.Parse(after)));
+
+        Assert.Contains("--drop-add users.address", refused.ToString(), StringComparison.Ordinal);
+        Assert.Equal(1, await fixture.CountAsync(ColumnExists("users", "adress")));
+        Assert.Equal(0, await fixture.CountAsync(ColumnExists("users", "address")));
+        Assert.Single(new MigrationStore(fixture.MigrationsDirectory).ReadJournal().Entries);
+    }
+
+    [PostgresFact]
+    public async Task DeletedIds_AreNeverReused()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        const string withBoth = """
+            { "tables": { "users": { "columns": {
+              "id": { "type": "integer", "nullable": false },
+              "kept": { "type": "text" },
+              "removed": { "type": "text" } } } } }
+            """;
+        const string withoutRemoved = """
+            { "tables": { "users": { "columns": {
+              "id": { "type": "integer", "nullable": false },
+              "kept": { "type": "text" } } } } }
+            """;
+        const string withAdded = """
+            { "tables": { "users": { "columns": {
+              "id": { "type": "integer", "nullable": false },
+              "kept": { "type": "text" },
+              "added": { "type": "text" } } } } }
+            """;
+
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(withBoth)));
+        var dropped = Convert.ToInt64(
+            await fixture.ScalarAsync("SELECT id FROM chetah.objects WHERE name = 'removed' AND dropped_at IS NULL"));
+
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(withoutRemoved)));
+        Assert.Equal(1, await fixture.CountAsync(
+            $"SELECT count(*) FROM chetah.objects WHERE id = {dropped} AND dropped_at IS NOT NULL"));
+
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(withAdded)));
+        var added = Convert.ToInt64(
+            await fixture.ScalarAsync("SELECT id FROM chetah.objects WHERE name = 'added' AND dropped_at IS NULL"));
+        Assert.True(added > dropped, $"a new object must not reuse the deleted id {dropped}, got {added}");
+    }
+
+    [PostgresFact]
+    public async Task SchemaWithoutIds_AdoptsRecordedIdentities()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(UsersSchema)));
+        Assert.Contains("\"$id\"", File.ReadAllText(fixture.SchemaPath), StringComparison.Ordinal);
+        var identity = Convert.ToInt64(
+            await fixture.ScalarAsync("SELECT id FROM chetah.objects WHERE kind = 'table' AND name = 'users'"));
+
+        // A file that predates identities (or a teammate's copy) must adopt, not replace.
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(UsersSchema)));
+
+        Assert.Single(new MigrationStore(fixture.MigrationsDirectory).ReadJournal().Entries);
+        Assert.Contains("\"$id\"", File.ReadAllText(fixture.SchemaPath), StringComparison.Ordinal);
+        Assert.Equal(identity, Convert.ToInt64(
+            await fixture.ScalarAsync("SELECT id FROM chetah.objects WHERE kind = 'table' AND name = 'users'")));
     }
 
     [PostgresFact]
     public async Task Diff_ReportsDriftAndWritesNothing()
     {
         await using var fixture = await Fixture.CreateAsync();
-        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(Parse(UsersSchema)));
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(UsersSchema)));
         await fixture.ExecuteAsync("ALTER TABLE users ADD COLUMN stray text");
 
         var output = new StringWriter();
-        Assert.Equal(0, await fixture.Runner(output).DiffAsync(Parse(UsersSchema)));
+        Assert.Equal(0, await fixture.Runner(output).DiffAsync(fixture.Parse(UsersSchema)));
 
         Assert.Contains("destructive", output.ToString(), StringComparison.Ordinal);
         Assert.Contains("ALTER TABLE \"users\" DROP COLUMN \"stray\"", output.ToString(), StringComparison.Ordinal);
@@ -122,11 +256,11 @@ public class MigrationApplyTests
     public async Task DeclinedDestructiveChange_WritesNothing()
     {
         await using var fixture = await Fixture.CreateAsync();
-        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(Parse(UsersSchema)));
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(UsersSchema)));
         await fixture.ExecuteAsync("ALTER TABLE users ADD COLUMN stray text");
 
         var output = new StringWriter();
-        Assert.Equal(1, await fixture.Runner(output, _ => false).ApplyAsync(Parse(UsersSchema)));
+        Assert.Equal(1, await fixture.Runner(output, _ => false).ApplyAsync(fixture.Parse(UsersSchema)));
 
         Assert.Contains("Aborted", output.ToString(), StringComparison.Ordinal);
         Assert.Equal(1, await fixture.CountAsync(ColumnExists("users", "stray")));
@@ -154,7 +288,7 @@ public class MigrationApplyTests
             new JournalOperation("statement", "", null, false, "DEFINITELY NOT SQL"));
 
         var output = new StringWriter();
-        Assert.Equal(1, await fixture.Runner(output).ApplyAsync(Parse(schema)));
+        Assert.Equal(1, await fixture.Runner(output).ApplyAsync(fixture.Parse(schema)));
 
         Assert.Contains("rolled back", output.ToString(), StringComparison.Ordinal);
         Assert.Equal(0, await fixture.CountAsync(TableExists("rollback_probe")));
@@ -166,7 +300,7 @@ public class MigrationApplyTests
         fixture.WriteEntry(id, "broken", "CREATE TABLE \"rollback_probe\" (id integer NOT NULL)\n",
             new JournalOperation(OperationKinds.CreateTable, "rollback_probe", null, false, "CREATE TABLE \"rollback_probe\" (id integer NOT NULL)"));
 
-        Assert.Equal(0, await fixture.Runner(new StringWriter(), _ => throw new InvalidOperationException("no confirmation expected")).ApplyAsync(Parse(schema)));
+        Assert.Equal(0, await fixture.Runner(new StringWriter(), _ => throw new InvalidOperationException("no confirmation expected")).ApplyAsync(fixture.Parse(schema)));
         Assert.Equal(1, await fixture.CountAsync(TableExists("rollback_probe")));
         Assert.Equal(1, await fixture.CountAsync("SELECT count(*) FROM chetah.migrations"));
     }
@@ -182,7 +316,7 @@ public class MigrationApplyTests
         File.AppendAllText(new MigrationStore(fixture.MigrationsDirectory).SqlPath(id), "DROP TABLE \"tampered\";\n");
 
         var output = new StringWriter();
-        Assert.Equal(1, await fixture.Runner(output).ApplyAsync(Parse(UsersSchema)));
+        Assert.Equal(1, await fixture.Runner(output).ApplyAsync(fixture.Parse(UsersSchema)));
 
         Assert.Contains("Refusing", output.ToString(), StringComparison.Ordinal);
         Assert.Equal(0, await fixture.CountAsync(TableExists("tampered")));
@@ -193,7 +327,7 @@ public class MigrationApplyTests
     public async Task PendingDestructiveMigration_WithANewDependency_IsRefused()
     {
         await using var fixture = await Fixture.CreateAsync();
-        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(Parse(EmailSchema)));
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(EmailSchema)));
         await fixture.ExecuteAsync("CREATE INDEX idx_users_email ON users (email)");
 
         // A drop recorded before the index existed, replayed after someone added it.
@@ -205,7 +339,7 @@ public class MigrationApplyTests
 
         var output = new StringWriter();
         Assert.Equal(1, await fixture.Runner(output, _ => throw new InvalidOperationException("dependency refusal must precede confirmation"))
-            .ApplyAsync(Parse(EmailSchema)));
+            .ApplyAsync(fixture.Parse(EmailSchema)));
 
         Assert.Contains("Refusing to replay", output.ToString(), StringComparison.Ordinal);
         Assert.Contains("idx_users_email", output.ToString(), StringComparison.Ordinal);
@@ -218,7 +352,7 @@ public class MigrationApplyTests
     public async Task PendingDestructiveMigration_RequiresConfirmation()
     {
         await using var fixture = await Fixture.CreateAsync();
-        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(Parse(EmailSchema)));
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(EmailSchema)));
 
         fixture.WriteEntry(
             "20260101000000_drop_email",
@@ -227,13 +361,13 @@ public class MigrationApplyTests
             new JournalOperation(OperationKinds.DropColumn, "users", "email", true, "ALTER TABLE \"users\" DROP COLUMN \"email\""));
 
         var denied = new StringWriter();
-        Assert.Equal(1, await fixture.Runner(denied, _ => false).ApplyAsync(Parse(IdOnlySchema)));
+        Assert.Equal(1, await fixture.Runner(denied, _ => false).ApplyAsync(fixture.Parse(IdOnlySchema)));
 
         Assert.Contains("Aborted", denied.ToString(), StringComparison.Ordinal);
         Assert.Equal(1, await fixture.CountAsync(ColumnExists("users", "email")));
         Assert.Equal(1, await fixture.CountAsync("SELECT count(*) FROM chetah.migrations"));
 
-        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(Parse(IdOnlySchema)));
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(IdOnlySchema)));
         Assert.Equal(0, await fixture.CountAsync(ColumnExists("users", "email")));
         Assert.Equal(2, await fixture.CountAsync("SELECT count(*) FROM chetah.migrations"));
     }
@@ -242,12 +376,12 @@ public class MigrationApplyTests
     public async Task PendingEntryWithoutMetadata_RequiresConfirmation()
     {
         await using var fixture = await Fixture.CreateAsync();
-        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(Parse(UsersSchema)));
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(UsersSchema)));
 
         fixture.WriteEntry("20260101000000_unknown", "unknown", "CREATE TABLE \"probe\" (id integer NOT NULL)\n");
 
         var denied = new StringWriter();
-        Assert.Equal(1, await fixture.Runner(denied, _ => false).ApplyAsync(Parse(UsersSchema)));
+        Assert.Equal(1, await fixture.Runner(denied, _ => false).ApplyAsync(fixture.Parse(UsersSchema)));
 
         Assert.Contains("no recorded operation metadata", denied.ToString(), StringComparison.Ordinal);
         Assert.Equal(0, await fixture.CountAsync(TableExists("probe")));
@@ -259,17 +393,17 @@ public class MigrationApplyTests
     {
         await using var fixture = await Fixture.CreateAsync();
 
-        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(Parse(EmailSchema)));
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(EmailSchema)));
         await fixture.ExecuteAsync("CREATE INDEX idx_users_email ON users (email)");
         await fixture.ExecuteAsync("ALTER TABLE users ADD CONSTRAINT users_email_key UNIQUE (email)");
 
         var diff = new StringWriter();
-        Assert.Equal(0, await fixture.Runner(diff).DiffAsync(Parse(IdOnlySchema)));
+        Assert.Equal(0, await fixture.Runner(diff).DiffAsync(fixture.Parse(IdOnlySchema)));
         Assert.Contains("refused", diff.ToString(), StringComparison.Ordinal);
         Assert.Contains("idx_users_email", diff.ToString(), StringComparison.Ordinal);
 
         var output = new StringWriter();
-        Assert.Equal(1, await fixture.Runner(output).ApplyAsync(Parse(IdOnlySchema)));
+        Assert.Equal(1, await fixture.Runner(output).ApplyAsync(fixture.Parse(IdOnlySchema)));
 
         Assert.Contains("Refusing to apply", output.ToString(), StringComparison.Ordinal);
         Assert.Equal(1, await fixture.CountAsync(ColumnExists("users", "email")));
@@ -294,11 +428,11 @@ public class MigrationApplyTests
             { "tables": { "users": { "columns": { "id": { "type": "integer", "nullable": false } } } } }
             """;
 
-        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(Parse(withNotes)));
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(withNotes)));
         await fixture.ExecuteAsync("CREATE INDEX idx_notes_body ON notes (body)");
 
         var output = new StringWriter();
-        Assert.Equal(1, await fixture.Runner(output).ApplyAsync(Parse(withoutNotes)));
+        Assert.Equal(1, await fixture.Runner(output).ApplyAsync(fixture.Parse(withoutNotes)));
 
         Assert.Contains("Refusing to apply", output.ToString(), StringComparison.Ordinal);
         Assert.Equal(1, await fixture.CountAsync(TableExists("notes")));
@@ -314,7 +448,7 @@ public class MigrationApplyTests
         await using var fixture = await Fixture.CreateAsync();
         await fixture.ExecuteAsync("CREATE TABLE users (id integer NOT NULL, name text NOT NULL)");
 
-        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(Parse(UsersSchema)));
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(UsersSchema)));
 
         var store = new MigrationStore(fixture.MigrationsDirectory);
         var entry = Assert.Single(store.ReadJournal().Entries);
@@ -339,7 +473,7 @@ public class MigrationApplyTests
             INSERT INTO public.chetah_migrations (hash, name) VALUES ('deadbeef', '20260101000000_legacy');
             """);
 
-        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(Parse(UsersSchema)));
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(UsersSchema)));
 
         // The old table is gone from the application schema and its row survived the move.
         Assert.Equal(0, await fixture.CountAsync("""
@@ -370,7 +504,7 @@ public class MigrationApplyTests
             INSERT INTO chetah.chetah_migrations (hash, name) VALUES ('cafe', '20260101000000_stranded');
             """);
 
-        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(Parse(UsersSchema)));
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(UsersSchema)));
 
         Assert.Equal(0, await fixture.CountAsync("""
             SELECT count(*) FROM information_schema.tables
@@ -382,8 +516,6 @@ public class MigrationApplyTests
             "SELECT name FROM chetah.migrations WHERE hash = 'cafe'"));
         Assert.Equal(2, await fixture.CountAsync("SELECT count(*) FROM chetah.migrations"));
     }
-
-    private static Schema Parse(string json) => SchemaParser.Parse(json).Schema!;
 
     private static string TableExists(string name) =>
         $"SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '{name}'";
@@ -409,6 +541,17 @@ public class MigrationApplyTests
         internal string MigrationsDirectory { get; } =
             Path.Combine(Path.GetTempPath(), "chetah-db-migrations-" + Guid.NewGuid().ToString("N"));
 
+        internal string SchemaPath { get; } =
+            Path.Combine(Path.GetTempPath(), "chetah-db-schema-" + Guid.NewGuid().ToString("N") + ".json");
+
+        /// <summary>Writes the declaration where the runner expects it and parses it, so <c>"$id"</c>
+        /// persistence is exercised against a real file.</summary>
+        internal Schema Parse(string json)
+        {
+            File.WriteAllText(SchemaPath, json);
+            return SchemaParser.Parse(json).Schema!;
+        }
+
         internal static async Task<Fixture> CreateAsync()
         {
             var root = Environment.GetEnvironmentVariable("CHETAH_CONNECTION_STRING")
@@ -422,8 +565,17 @@ public class MigrationApplyTests
             return fixture;
         }
 
-        internal MigrationRunner Runner(StringWriter output, Func<IReadOnlyList<Operation>, bool>? confirm = null) =>
-            new(ConnectionString, MigrationsDirectory, output, confirm ?? (_ => true));
+        internal MigrationRunner Runner(
+            StringWriter output,
+            Func<IReadOnlyList<Operation>, bool>? confirm = null,
+            params string[] dropAdd) =>
+            new(
+                ConnectionString,
+                SchemaPath,
+                MigrationsDirectory,
+                output,
+                confirm ?? (_ => true),
+                new HashSet<string>(dropAdd, StringComparer.Ordinal));
 
         /// <summary>Hand-writes a journal entry and its SQL file, as a previous run would have.
         /// No operations writes an entry with no metadata.</summary>

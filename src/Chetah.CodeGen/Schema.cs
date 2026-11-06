@@ -16,9 +16,18 @@ public sealed record ClrType(string Name, string NullableName, string Read)
     public static readonly ClrType Timestamp = new("DateTime", "DateTime?", "reader.GetDateTime({0})");
 }
 
-public sealed record ColumnSchema(string Name, ClrType Type, bool Nullable);
+/// <param name="Id">Chetah's persistent identity for this column, written to the schema file as
+/// <c>"$id"</c>. It survives renames; the tool maintains it, users do not need to.</param>
+public sealed record ColumnSchema(string Name, ClrType Type, bool Nullable, long? Id = null);
 
-public sealed record TableSchema(string Name, string ModelName, string AccessorName, IReadOnlyList<ColumnSchema> Columns);
+/// <param name="Id">Chetah's persistent identity for this table, written to the schema file as
+/// <c>"$id"</c>. It survives renames; the tool maintains it, users do not need to.</param>
+public sealed record TableSchema(
+    string Name,
+    string ModelName,
+    string AccessorName,
+    IReadOnlyList<ColumnSchema> Columns,
+    long? Id = null);
 
 public sealed record Schema(IReadOnlyList<TableSchema> Tables);
 
@@ -66,6 +75,8 @@ public static class SchemaParser
         var tables = new List<TableSchema>();
         var tableNames = new HashSet<string>(StringComparer.Ordinal);
         var csharpNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "ChetahSchema", "Bindings" };
+        // Identity is global: one id names one object, whether it is a table or a column.
+        var objectIds = new HashSet<long>();
 
         foreach (var tableProperty in tablesElement.EnumerateObject())
         {
@@ -81,9 +92,17 @@ public static class SchemaParser
             if (tableElement.ValueKind != JsonValueKind.Object)
                 return SchemaParserResult.Fail($"Table '{tableName}' must be an object.");
 
-            if (UnknownProperty(tableElement, "model", "columns") is { } tableEntryProperty)
+            if (UnknownProperty(tableElement, "$id", "model", "columns") is { } tableEntryProperty)
                 return SchemaParserResult.Fail(
-                    $"Table '{tableName}': unknown property '{tableEntryProperty}'. Allowed properties: \"model\", \"columns\".");
+                    $"Table '{tableName}': unknown property '{tableEntryProperty}'. Allowed properties: \"$id\", \"model\", \"columns\".");
+
+            if (!TryPositiveId(tableElement, out var tableId))
+                return SchemaParserResult.Fail($"Table '{tableName}': \"$id\" must be a positive integer.");
+
+            if (tableId is { } tableIdentity && !objectIds.Add(tableIdentity))
+                return SchemaParserResult.Fail(
+                    $"Table '{tableName}': \"$id\" {tableIdentity} is already used by another object. Ids identify one object forever; "
+                    + "delete the duplicated \"$id\" so a fresh one is allocated.");
 
             var accessorName = PascalCase(tableName) + "Table";
 
@@ -127,10 +146,19 @@ public static class SchemaParser
                 if (columnElement.ValueKind != JsonValueKind.Object)
                     return SchemaParserResult.Fail($"Table '{tableName}': column '{columnName}' must be an object.");
 
-                if (UnknownProperty(columnElement, "type", "nullable") is { } columnEntryProperty)
+                if (UnknownProperty(columnElement, "$id", "type", "nullable") is { } columnEntryProperty)
                     return SchemaParserResult.Fail(
                         $"Table '{tableName}': column '{columnName}' has unknown property '{columnEntryProperty}'. "
-                        + "Allowed properties: \"type\", \"nullable\".");
+                        + "Allowed properties: \"$id\", \"type\", \"nullable\".");
+
+                if (!TryPositiveId(columnElement, out var columnId))
+                    return SchemaParserResult.Fail(
+                        $"Table '{tableName}': column '{columnName}': \"$id\" must be a positive integer.");
+
+                if (columnId is { } columnIdentity && !objectIds.Add(columnIdentity))
+                    return SchemaParserResult.Fail(
+                        $"Table '{tableName}': column '{columnName}': \"$id\" {columnIdentity} is already used by another object. "
+                        + "Ids identify one object forever; delete the duplicated \"$id\" so a fresh one is allocated.");
 
                 if (!IsValidIdentifier(columnName))
                     return SchemaParserResult.Fail(
@@ -160,13 +188,13 @@ public static class SchemaParser
                     nullable = nullableValue.ValueKind == JsonValueKind.True;
                 }
 
-                columns.Add(new ColumnSchema(columnName, type, nullable));
+                columns.Add(new ColumnSchema(columnName, type, nullable, columnId));
             }
 
             if (columns.Count == 0)
                 return SchemaParserResult.Fail($"Table '{tableName}' must define at least one column.");
 
-            tables.Add(new TableSchema(tableName, modelName, accessorName, columns));
+            tables.Add(new TableSchema(tableName, modelName, accessorName, columns, tableId));
         }
 
         if (tables.Count == 0)
@@ -185,6 +213,20 @@ public static class SchemaParser
                 return property.Name;
         }
         return null;
+    }
+
+    /// <summary>Reads an optional <c>"$id"</c>. False means it is present but not a positive integer.</summary>
+    private static bool TryPositiveId(JsonElement element, out long? value)
+    {
+        value = null;
+        if (!element.TryGetProperty("$id", out var id))
+            return true;
+
+        if (id.ValueKind != JsonValueKind.Number || !id.TryGetInt64(out var parsed) || parsed <= 0)
+            return false;
+
+        value = parsed;
+        return true;
     }
 
     private static bool TryNonEmptyString(JsonElement element, string property, out string value)

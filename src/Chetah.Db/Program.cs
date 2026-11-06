@@ -24,6 +24,7 @@ public static class Program
         string? schemaPath = null;
         string? connectionString = null;
         string? migrationsDirectory = null;
+        var dropAdd = new HashSet<string>(StringComparer.Ordinal);
 
         for (var i = 1; i < args.Length; i++)
         {
@@ -37,6 +38,9 @@ public static class Program
                     break;
                 case "--migrations" when i + 1 < args.Length:
                     migrationsDirectory = args[++i];
+                    break;
+                case "--drop-add" when i + 1 < args.Length:
+                    dropAdd.Add(args[++i]);
                     break;
                 default:
                     Console.Error.WriteLine($"Unknown or incomplete argument: {args[i]}");
@@ -65,7 +69,13 @@ public static class Program
         }
 
         migrationsDirectory ??= Path.Combine(Path.GetDirectoryName(Path.GetFullPath(schemaPath))!, "migrations");
-        var runner = new MigrationRunner(connectionString, migrationsDirectory, Console.Out, ConfirmDestructive);
+        var runner = new MigrationRunner(
+            connectionString,
+            schemaPath,
+            migrationsDirectory,
+            Console.Out,
+            ConfirmDestructive,
+            dropAdd);
 
         try
         {
