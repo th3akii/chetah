@@ -93,6 +93,18 @@ internal static class SchemaDiff
             .Select(table => table.Name)
             .ToHashSet(StringComparer.Ordinal);
 
+        // Computed here because the index-drop phase needs their names: PostgreSQL keeps constraint
+        // and index names in one namespace, so an index being replaced by a constraint must go first.
+        var missingConstraints = desired.ScopedConstraints
+            .Where(constraint => !live.ScopedConstraints.Any(liveConstraint => SameDefinition(constraint, liveConstraint)))
+            .Where(constraint => !(created.Contains(constraint.Table) && constraint.Kind is "p" or "u"))
+            .ToArray();
+        var addedConstraintNames = missingConstraints
+            .Select(constraint => constraint.Name)
+            .ToHashSet(StringComparer.Ordinal);
+
+        var earlyIndexDrops = new List<Operation>();
+
         // Constraints go first: a foreign key must be gone before the key or column it references
         // changes, and a table that is being dropped still owns foreign keys that point at tables
         // which stay. Indexes follow, because a unique index can be what a foreign key relies on.
@@ -135,7 +147,7 @@ internal static class SchemaDiff
                 && constraint.RefTable == index.Table
                 && SameColumns(constraint.RefColumns ?? [], index.Columns));
 
-            operations.Add(dependent is null
+            var operation = dependent is null
                 ? DropIndex(index)
                 : DropIndex(index) with
                 {
@@ -143,7 +155,13 @@ internal static class SchemaDiff
                     [
                         $"declared foreign key {Quote(dependent.Name)} on {Quote(dependent.Table)}",
                     ],
-                });
+                };
+
+            // A constraint cannot take the name an existing index still holds.
+            if (dependent is null && addedConstraintNames.Contains(index.Name))
+                earlyIndexDrops.Add(operation);
+            else
+                operations.Add(operation);
         }
 
         foreach (var table in desired.Tables)
@@ -288,10 +306,8 @@ internal static class SchemaDiff
         // New tables carry their primary key and unique constraints inline. Keys and indexes are
         // added before foreign keys: PostgreSQL requires the referenced columns to be unique by
         // constraint or index at the moment the foreign key is created.
-        var missingConstraints = desired.ScopedConstraints
-            .Where(constraint => !live.ScopedConstraints.Any(liveConstraint => SameDefinition(constraint, liveConstraint)))
-            .Where(constraint => !(created.Contains(constraint.Table) && constraint.Kind is "p" or "u"))
-            .ToArray();
+        foreach (var operation in earlyIndexDrops)
+            operations.Add(operation);
 
         foreach (var constraint in missingConstraints.Where(constraint => constraint.Kind is "p" or "u"))
             operations.Add(AddConstraint(constraint));

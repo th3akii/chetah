@@ -37,7 +37,9 @@ Also fixed by the ordering pass:
   keys: a unique index can be what a foreign key relies on, so it must outlive
   the drop and exist before the add. An index that a foreign key references is
   now visible to the diff (a foreign key records the referenced index in
-  `conindid`, which used to hide it as constraint-owned and re-create it).
+  `conindid`, which used to hide it as constraint-owned and re-create it). An
+  index whose name a new constraint takes is dropped before that constraint is
+  added, because both live in one namespace.
 - duplicate constraint declarations are rejected: a column `"unique": true`
   repeated as a table `"unique"` entry, and a declared foreign-key name that
   collides with a generated primary-key, unique or reference constraint name.

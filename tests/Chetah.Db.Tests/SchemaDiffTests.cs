@@ -442,6 +442,24 @@ public class SchemaDiffTests
     }
 
     [Fact]
+    public async Task ReplacingAUniqueIndexWithAConstraint_DropsTheIndexFirst()
+    {
+        // Constraint and index names share the namespace: the constraint cannot take a name the
+        // index still holds.
+        var desired = Desired("""{ "tables": { "t": { "columns": { "a": { "type": "integer", "nullable": false, "unique": true } } } } }""");
+        var live = Live(Table("t", ("a", "int4", true))) with
+        {
+            Indexes = [new IndexState("t_a_key", "t", ["a"], true)],
+        };
+
+        var plan = await SchemaDiff.ComputeAsync(desired, live, NoNulls);
+
+        Assert.Equal(
+            new[] { OperationKinds.DropIndex, OperationKinds.AddConstraint },
+            plan.Operations.Select(operation => operation.Target!.Kind));
+    }
+
+    [Fact]
     public async Task PermutedReferenceColumns_StillOrderTheForeignKeyFirst()
     {
         // The foreign key lists the referenced columns in the other order. PostgreSQL's dependency is
