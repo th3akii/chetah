@@ -15,9 +15,14 @@ write; `diff` on a never-migrated database; default convergence
 (`1 + 1`, `pg_catalog.now()`); verbatim default emission (`'a  b'`, `::date`);
 cast-only default edits; type modifiers (`varchar(100)`, `timestamp(3)`);
 composite UNIQUE / FOREIGN KEY and `ON DELETE` / `ON UPDATE`; expression,
-partial, covering (`INCLUDE`) and non-btree indexes protected instead of matched
-or dropped; foreign keys from another schema detected; duplicate unique index
-over a live constraint; statement-level failure reporting.
+partial, covering (`INCLUDE`) and non-btree indexes, non-default opclasses and
+non-default sort orders protected instead of matched or dropped; foreign keys
+from another schema detected; duplicate unique index over a live constraint;
+statement-level failure reporting; renaming a table or column carries its
+constraints and indexes with it (they were discarded, so a rename re-added all
+of them and failed on the duplicate); a baseline no longer records the schema
+file's declarations as applied, so a declined or blocked migration cannot
+suppress the default it was going to set.
 
 ## Open issues by severity
 
@@ -25,7 +30,7 @@ over a live constraint; statement-level failure reporting.
 |---|---|---|---|
 | 1 | Medium | Types | Types outside the vocabulary (`jsonb`, `numeric`, `timestamptz`, enums, domains) cannot be declared; an adopted column of such a type is reported as a gated type change |
 | 2 | Medium | Constraints | CHECK and EXCLUSION constraints cannot be declared (their dependent drops are refused) |
-| 3 | Medium | Indexes | Expression, partial, `INCLUDE`, non-btree, opclass and sort-order index features cannot be declared |
+| 3 | Medium | Indexes | Index features cannot be *declared* (expression, partial, `INCLUDE`, non-btree, opclass, sort order — all detected and protected); `COLLATE`, `NULLS NOT DISTINCT` and storage options are not even detected |
 | 4 | Medium | Operations | `CREATE INDEX` is not `CONCURRENTLY`: a migration holds `ACCESS EXCLUSIVE` on the table |
 | 5 | Low | Defaults | `default` is not validated: a `;` produces a recorded statement that fails at apply with a raw syntax error |
 | 6 | Low | Defaults | A hand edit that only changes casts *in the database* is invisible (the applied side is compared normalized) |
@@ -83,12 +88,28 @@ dropped, and a statement that would remove one is refused with its name.
 **Fix (when wanted):** table-level `"checks": { name: expression }` plus catalog
 read of `contype = 'c'` and `pg_get_constraintdef`.
 
-### 3. Index features beyond a btree column list — Medium, by design
+### 3. Index features beyond a btree column list — Medium, partly by design
 
-Expression indexes, partial indexes (`WHERE`), covering indexes (`INCLUDE`),
-non-btree access methods, opclasses, sort order and `NULLS NOT DISTINCT` are
-detected and protected, never matched. A declared index can therefore not
-express them; a live one is never replaced.
+**Detected and protected** (never matched, removal refused): expression
+indexes, partial indexes (`WHERE`), covering indexes (`INCLUDE`), non-btree
+access methods, non-default operator classes (`text_pattern_ops`) and
+non-default sort order (`DESC`, `NULLS FIRST`).
+
+**Not even detected** — an index that differs only by one of these is read as a
+plain btree index on its columns, so it can satisfy a declaration it does not
+match (the declared index is never created) or be replaced by a declared index
+of the same name:
+
+- `COLLATE` on an indexed column (`CREATE INDEX ... (code COLLATE "C")`)
+- `NULLS NOT DISTINCT` on a unique index (PostgreSQL 15+)
+- storage parameters (`fillfactor`), `TABLESPACE`, `INCLUDE` ordering details
+- opclass *families* that happen to be default but differ per type
+
+Consequence is a missed index, not data loss: a declared index can be
+considered present when the physical one is different. Fix: compare
+`indcollation` against the column's collation, read `indnullsnotdistinct` on
+PostgreSQL 15+ (version-gated), and treat any `pg_class.reloptions` /
+`reltablespace` difference as unsupported.
 
 ### 4. `CREATE INDEX` is blocking — Medium, operational
 

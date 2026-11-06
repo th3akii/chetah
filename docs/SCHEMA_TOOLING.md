@@ -212,10 +212,13 @@ column therefore carries a persistent `"$id"` in `chetah-schema.json`:
   `varchar`, with a modifier where PostgreSQL allows one: `varchar(100)`,
   `timestamp(3)`. Type modifiers are compared: a live `timestamp(3)` is not a
   declared `timestamp`, and a larger modifier is treated as widening.
-- Check and exclusion constraints, and expression, partial, covering (`INCLUDE`)
-  or non-btree indexes, are not expressible yet: they are read from the catalog,
-  never created or dropped, and a statement that would remove one is refused. So
-  is a foreign key from another schema that points at a managed table.
+- Check and exclusion constraints, and expression, partial, covering (`INCLUDE`),
+  non-btree, non-default-opclass or non-default-sort-order indexes, are not
+  expressible yet: they are read from the catalog, never created or dropped, and
+  a statement that would remove one is refused. So is a foreign key from another
+  schema that points at a managed table. An index differing only by `COLLATE`,
+  `NULLS NOT DISTINCT` or a storage option is not distinguished — see
+  [`MIGRATION_LIMITATIONS.md`](MIGRATION_LIMITATIONS.md).
 
 ## Scope details
 
