@@ -61,7 +61,7 @@ Also fixed by the ordering pass:
 
 | # | Severity | Area | Issue |
 |---|---|---|---|
-| 1 | Medium | Types | Types outside the vocabulary (`jsonb`, `numeric`, `timestamptz`, enums, domains) cannot be declared; an adopted column of such a type is reported as a gated type change |
+| 1 | Medium | Types | Types outside the vocabulary (`jsonb`, `numeric`, `timestamptz`, enums, domains) cannot be declared; an adopted column of such a type is reported as a gated type change, and omitting the table from the file means `DROP TABLE` |
 | 2 | Medium | Constraints | CHECK and EXCLUSION constraints cannot be declared (their dependent drops are refused) |
 | 3 | Medium | Indexes | Index features cannot be *declared* (expression, partial, `INCLUDE`, non-btree, opclass, sort order — all detected and protected); `COLLATE`, `NULLS NOT DISTINCT` and storage options are not even detected |
 | 4 | Medium | Operations | `CREATE INDEX` is not `CONCURRENTLY`: a migration holds `ACCESS EXCLUSIVE` on the table |
@@ -78,11 +78,12 @@ Also fixed by the ordering pass:
 | 15 | Low | CLI | A migration longer than the 30 s lock wait makes concurrent runs fail (retry manually) |
 | 16 | Low | History | Journals are per checkout; only `"chetah"."migrations"` says what ran on the database |
 | 17 | Low | History | Divergence is detected only when both sides have something the other lacks; a checkout with an *empty* journal (deleted migrations directory) against a database with history is treated as a fresh checkout and allowed to append |
-| 18 | Low | Dependencies | Objects that are neither constraints nor indexes — views, triggers, policies, functions, extension members — on a dropped column or table are not detected; the drop fails at apply with a raw PostgreSQL error and rolls back |
+| 18 | Low | Dependencies | Objects that are neither constraints nor indexes are not read: views on a dropped table/column make PostgreSQL refuse (safe rollback); triggers and policies **attached to a dropped table are removed silently** (the gate lists the table only); a policy on a dropped column is refused; a trigger on a dropped column is left broken; function bodies break at runtime |
 | 19 | Low | History | A replayed migration executes the recorded statement order verbatim (history is never re-planned), so an order that was valid when written and is not valid now fails at apply |
 | 20 | Low | History | Two histories that applied the same ids in a different order are not detected; the journal records order, the database records `id` values |
-| 21 | Low | Scope | No down/rollback migrations (**by design**) |
-| 22 | Low | Scope | No RLS, no INSERT/UPDATE/DELETE/UPSERT, no other dialect (**by design**) |
+| 21 | Low | Constraints | Constraint and index *names* in the schema file are used when an object is created; renaming one where an equivalent definition already exists does not rename the database object, so a rename is a drop plus a create |
+| 22 | Low | Scope | No down/rollback migrations (**by design**) |
+| 23 | Low | Scope | No RLS, no INSERT/UPDATE/DELETE/UPSERT, no other dialect (**by design**) |
 
 ## Details
 
@@ -109,8 +110,13 @@ ALTER TABLE "t" DROP COLUMN "payload";
 
 Nothing is silent — both are gated — but the user cannot express the truth.
 
-**Impact:** an adopted database with `jsonb`/`numeric`/enum columns can only be
-managed by converting those columns or by leaving the table out of the file.
+**Impact:** a database that uses `jsonb`/`numeric`/enum columns cannot be
+described truthfully, and **omitting such a table from the file does not leave it
+alone** — the diff reads every live table in the schema and treats the omitted
+one as `DROP TABLE` (destructive-gated, but it removes the table, its rows, and
+every object owned by it). The safe options are to convert the column, or to
+keep the tool off that database until the type exists in the vocabulary. Do not
+"exclude" a table by deleting it from `chetah-schema.json`.
 
 **Fix:** widen `SchemaParser.Types` and `Generator` mappings (`numeric`,
 `jsonb`, `timestamptz`, `int2`, `date`, `time`) and map the unmatched ones to a
@@ -252,15 +258,38 @@ migrations directory from version control instead of deleting it; the applied
 state, the ids and the hashes are all that detect it, and an empty journal
 carries none of them.
 
-### 18. Dependencies that are not constraints or indexes — Low
+### 18. Dependencies that are not constraints or indexes — Low, but read the split
 
-A view, materialised view, trigger, RLS policy, function or extension member
-that depends on a column or table is not read from the catalog, so a `DROP
-COLUMN`/`DROP TABLE` that would break it is attempted. PostgreSQL refuses and
-the migration rolls back with its own error (`2BP01`), which names the dependent
-object. Nothing is lost, but the diagnostic comes from the server rather than
-from the plan. Fix: extend the foreign-object query to `pg_depend` and report
-those objects the way check constraints and inbound foreign keys are reported.
+Objects the catalog reader does not look at behave in two different ways — the
+difference matters for safety:
+
+**Refused by PostgreSQL, rolled back (safe):** a view or materialised view that
+depends on a dropped table or column. The statement fails with `2BP01` and the
+migration rolls back; the diagnostic comes from the server rather than from the
+plan.
+
+**Removed implicitly, no error (destructive-gate risk):** a trigger or RLS policy
+attached to a dropped table is owned by that table, so `DROP TABLE` removes it
+silently. Verified against PostgreSQL 17:
+
+```text
+DROP TABLE t;   -- t has trigger trg: succeeds, trg is gone
+DROP TABLE p;   -- p has RLS policy pol: succeeds, pol is gone
+```
+
+Those objects are invisible to the diff, so the confirmation lists only the
+table drop, not what disappears with it. A policy that references a *dropped
+column* is the exception: PostgreSQL refuses that `DROP COLUMN` with `2BP01`
+(safe). A trigger that references a dropped column is not refused and is left
+pointing at a column that no longer exists.
+
+**Broken at runtime, not at migration time:** SQL function bodies that read a
+dropped table are not dependencies, so the drop succeeds and the function fails
+when it is next called.
+
+Fix: read `pg_depend`/`pg_rewrite` and report views, plus triggers and policies
+owned by objects the plan removes, the way check constraints and inbound foreign
+keys are reported.
 
 ### 19–20. Recorded order and applied order — Low
 
