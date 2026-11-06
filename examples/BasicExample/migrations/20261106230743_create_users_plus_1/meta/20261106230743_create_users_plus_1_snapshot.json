@@ -1,0 +1,73 @@
+{
+  "tables": [
+    {
+      "name": "users",
+      "columns": [
+        {
+          "name": "id",
+          "type": "int4",
+          "notNull": true,
+          "default": null,
+          "identity": false,
+          "rawDefault": null
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "notNull": true,
+          "default": null,
+          "identity": false,
+          "rawDefault": null
+        },
+        {
+          "name": "age",
+          "type": "int4",
+          "notNull": false,
+          "default": null,
+          "identity": false,
+          "rawDefault": null
+        }
+      ]
+    },
+    {
+      "name": "orders",
+      "columns": [
+        {
+          "name": "id",
+          "type": "int4",
+          "notNull": true,
+          "default": null,
+          "identity": false,
+          "rawDefault": null
+        },
+        {
+          "name": "user_id",
+          "type": "int4",
+          "notNull": true,
+          "default": null,
+          "identity": false,
+          "rawDefault": null
+        },
+        {
+          "name": "amount",
+          "type": "int4",
+          "notNull": true,
+          "default": null,
+          "identity": false,
+          "rawDefault": null
+        },
+        {
+          "name": "note",
+          "type": "text",
+          "notNull": false,
+          "default": null,
+          "identity": false,
+          "rawDefault": null
+        }
+      ]
+    }
+  ],
+  "foreignObjects": null,
+  "constraints": [],
+  "indexes": []
+}

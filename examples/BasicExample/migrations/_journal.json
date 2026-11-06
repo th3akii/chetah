@@ -1,7 +1,7 @@
 {
   "entries": [
     {
-      "id": "20261106012333_create_users_plus_1",
+      "id": "20261106230743_create_users_plus_1",
       "slug": "create_users_plus_1",
       "hash": "8fb99cb22fb0e475c2808705880b91c2f08ee143d5ec7ff2da53e89a7bffe542",
       "statements": 2,
@@ -19,36 +19,6 @@
           "column": null,
           "destructive": false,
           "statement": "CREATE TABLE \"orders\" (\n    \"id\" integer NOT NULL,\n    \"user_id\" integer NOT NULL,\n    \"amount\" integer NOT NULL,\n    \"note\" text\n)"
-        }
-      ]
-    },
-    {
-      "id": "20261106013332_create_widgets",
-      "slug": "create_widgets",
-      "hash": "ef7b52b2df679d4f5383da12bd10cb270061440f8e8c4c4bf11159bda3cabdb1",
-      "statements": 1,
-      "operations": [
-        {
-          "kind": "create_table",
-          "table": "widgets",
-          "column": null,
-          "destructive": false,
-          "statement": "CREATE TABLE \"widgets\" (\n    \"id\" integer NOT NULL,\n    \"name\" text NOT NULL,\n    \"active\" boolean NOT NULL,\n    \"created_at\" timestamp NOT NULL\n)"
-        }
-      ]
-    },
-    {
-      "id": "20261106013553_drop_widgets",
-      "slug": "drop_widgets",
-      "hash": "0087257a80045d324f30da8df0d2b7c77af1f821c944bdf4c47927be7107db3b",
-      "statements": 1,
-      "operations": [
-        {
-          "kind": "drop_table",
-          "table": "widgets",
-          "column": null,
-          "destructive": true,
-          "statement": "DROP TABLE \"widgets\""
         }
       ]
     }

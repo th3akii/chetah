@@ -1,20 +1,22 @@
 {
   "tables": {
     "users": {
+      "$id": 1,
       "model": "User",
       "columns": {
-        "id": { "type": "integer", "nullable": false },
-        "name": { "type": "text", "nullable": false },
-        "age": { "type": "integer" }
+        "id": {"$id": 1, "type": "integer", "nullable": false },
+        "name": {"$id": 2, "type": "text", "nullable": false },
+        "age": {"$id": 3, "type": "integer" }
       }
     },
     "orders": {
+      "$id": 2,
       "model": "Order",
       "columns": {
-        "id": { "type": "integer", "nullable": false },
-        "user_id": { "type": "integer", "nullable": false },
-        "amount": { "type": "integer", "nullable": false },
-        "note": { "type": "text" }
+        "id": {"$id": 1, "type": "integer", "nullable": false },
+        "user_id": {"$id": 2, "type": "integer", "nullable": false },
+        "amount": {"$id": 3, "type": "integer", "nullable": false },
+        "note": {"$id": 4, "type": "text" }
       }
     }
   }
