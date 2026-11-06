@@ -253,35 +253,57 @@ internal sealed class MigrationRunner
     }
 
     /// <summary>Creates the internal schema and moves an applied-state table from before the move
-    /// into it, so an existing database keeps its migration history and ids.</summary>
+    /// into it, so an existing database keeps its migration history and ids.
+    /// <para>One transaction: a run interrupted between SET SCHEMA and RENAME would leave the history
+    /// stranded as <c>"chetah"."chetah_migrations"</c>, the next run would see no state table and
+    /// create an empty one, and every journal entry would look unapplied.</para></summary>
     private async Task EnsureInternalSchemaAsync(
         NpgsqlConnection connection,
         CancellationToken cancellationToken)
     {
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+
         await ExecuteAsync(
             connection,
-            null,
+            transaction,
             $"CREATE SCHEMA IF NOT EXISTS {PostgresCatalog.InternalSchema}",
             cancellationToken);
 
-        if (!await RelationExistsAsync(connection, _schema, PostgresCatalog.LegacyStateTable, cancellationToken)
-            || await RelationExistsAsync(connection, PostgresCatalog.InternalSchemaName, "migrations", cancellationToken))
-            return;
+        var renamed = await RelationExistsAsync(
+            connection, transaction, PostgresCatalog.InternalSchemaName, "migrations", cancellationToken);
+        var stranded = await RelationExistsAsync(
+            connection, transaction, PostgresCatalog.InternalSchemaName, PostgresCatalog.LegacyStateTable, cancellationToken);
+        var legacy = await RelationExistsAsync(
+            connection, transaction, _schema, PostgresCatalog.LegacyStateTable, cancellationToken);
 
-        await ExecuteAsync(
-            connection,
-            null,
-            $"ALTER TABLE {PostgresCatalog.Qualified(_schema, PostgresCatalog.LegacyStateTable)} SET SCHEMA {PostgresCatalog.InternalSchema}",
-            cancellationToken);
-        await ExecuteAsync(
-            connection,
-            null,
-            $"ALTER TABLE {PostgresCatalog.Qualified(PostgresCatalog.InternalSchemaName, PostgresCatalog.LegacyStateTable)} RENAME TO \"migrations\"",
-            cancellationToken);
+        if (!renamed && stranded && legacy)
+            throw new InvalidOperationException(
+                $"Both \"{_schema}\".\"{PostgresCatalog.LegacyStateTable}\" and "
+                + $"\"{PostgresCatalog.InternalSchemaName}\".\"{PostgresCatalog.LegacyStateTable}\" exist. "
+                + "Merge them by hand before rerunning; Chetah will not guess which history is authoritative.");
+
+        if (!renamed && (stranded || legacy))
+        {
+            if (!stranded)
+                await ExecuteAsync(
+                    connection,
+                    transaction,
+                    $"ALTER TABLE {PostgresCatalog.Qualified(_schema, PostgresCatalog.LegacyStateTable)} SET SCHEMA {PostgresCatalog.InternalSchema}",
+                    cancellationToken);
+
+            await ExecuteAsync(
+                connection,
+                transaction,
+                $"ALTER TABLE {PostgresCatalog.Qualified(PostgresCatalog.InternalSchemaName, PostgresCatalog.LegacyStateTable)} RENAME TO \"migrations\"",
+                cancellationToken);
+        }
+
+        await transaction.CommitAsync(cancellationToken);
     }
 
     private static async Task<bool> RelationExistsAsync(
         NpgsqlConnection connection,
+        NpgsqlTransaction? transaction,
         string schema,
         string relation,
         CancellationToken cancellationToken)
@@ -293,7 +315,8 @@ internal sealed class MigrationRunner
                 JOIN pg_namespace n ON n.oid = c.relnamespace
                 WHERE n.nspname = $1 AND c.relname = $2 AND c.relkind = 'r')
             """,
-            connection);
+            connection,
+            transaction);
         command.Parameters.Add(new NpgsqlParameter { Value = schema });
         command.Parameters.Add(new NpgsqlParameter { Value = relation });
         return (bool)(await command.ExecuteScalarAsync(cancellationToken))!;

@@ -351,6 +351,38 @@ public class MigrationApplyTests
         Assert.Equal(2, await fixture.CountAsync("SELECT count(*) FROM chetah.migrations"));
     }
 
+    [PostgresFact]
+    public async Task StrandedStateTable_IsRecoveredInsteadOfShadowed()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        // A move that stopped after SET SCHEMA but before RENAME (a manual move, or a run from
+        // before the move was made atomic) leaves the history under its old name in "chetah".
+        await fixture.ExecuteAsync("""
+            CREATE SCHEMA chetah;
+
+            CREATE TABLE chetah.chetah_migrations (
+                id bigserial NOT NULL,
+                hash text NOT NULL,
+                name text NOT NULL,
+                applied_at timestamptz NOT NULL DEFAULT now()
+            );
+
+            INSERT INTO chetah.chetah_migrations (hash, name) VALUES ('cafe', '20260101000000_stranded');
+            """);
+
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(Parse(UsersSchema)));
+
+        Assert.Equal(0, await fixture.CountAsync("""
+            SELECT count(*) FROM information_schema.tables
+            WHERE table_schema = 'chetah' AND table_name = 'chetah_migrations'
+            """));
+        // The stranded row is still the applied-state record; a fresh empty table would have
+        // made every journal entry look unapplied.
+        Assert.Equal("20260101000000_stranded", (string?)await fixture.ScalarAsync(
+            "SELECT name FROM chetah.migrations WHERE hash = 'cafe'"));
+        Assert.Equal(2, await fixture.CountAsync("SELECT count(*) FROM chetah.migrations"));
+    }
+
     private static Schema Parse(string json) => SchemaParser.Parse(json).Schema!;
 
     private static string TableExists(string name) =>
