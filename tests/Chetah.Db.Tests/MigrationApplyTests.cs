@@ -420,6 +420,102 @@ public class MigrationApplyTests
     }
 
     [PostgresFact]
+    public async Task ExpressionAndPartialIndexes_AreNeverTouched()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        const string withEmail = """
+            { "tables": { "users": { "columns": {
+              "id": { "type": "integer", "nullable": false },
+              "email": { "type": "text", "nullable": false } } } } }
+            """;
+        const string idOnly = """
+            { "tables": { "users": { "columns": {
+              "id": { "type": "integer", "nullable": false } } } } }
+            """;
+
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(withEmail)));
+        await fixture.ExecuteAsync("CREATE INDEX users_lower_email ON users (lower(email))");
+        await fixture.ExecuteAsync("CREATE INDEX users_email_partial ON users (email) WHERE email <> ''");
+
+        var diff = new StringWriter();
+        Assert.Equal(0, await fixture.Runner(diff).DiffAsync(fixture.Parse(idOnly)));
+        // Neither is matched against a declared index nor proposed for removal; both are reported as
+        // reasons the column drop is refused.
+        Assert.DoesNotContain("DROP INDEX", diff.ToString(), StringComparison.Ordinal);
+        Assert.Contains("users_lower_email", diff.ToString(), StringComparison.Ordinal);
+
+        var output = new StringWriter();
+        Assert.Equal(1, await fixture.Runner(output).ApplyAsync(fixture.CurrentSchema()));
+        Assert.Contains("Refusing to apply", output.ToString(), StringComparison.Ordinal);
+        Assert.Contains("users_lower_email", output.ToString(), StringComparison.Ordinal);
+
+        Assert.Equal(2, await fixture.CountAsync(
+            "SELECT count(*) FROM pg_indexes WHERE schemaname = 'public' AND indexname LIKE 'users_%email%'"));
+        Assert.Equal(1, await fixture.CountAsync(ColumnExists("users", "email")));
+    }
+
+    [PostgresFact]
+    public async Task ForeignKeyFromAnotherSchema_BlocksTheDrop()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        const string schema = """
+            { "tables": { "users": {
+              "primaryKey": ["id"],
+              "columns": { "id": { "type": "integer", "nullable": false } } } } }
+            """;
+
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(schema)));
+
+        // Another schema (not Chetah's) points at this table: PostgreSQL would refuse the drop, so
+        // the tool must say why before running anything.
+        await fixture.ExecuteAsync("""
+            CREATE SCHEMA other;
+            CREATE TABLE other.events (user_id integer REFERENCES public.users (id));
+            """);
+
+        var output = new StringWriter();
+        Assert.Equal(1, await fixture.Runner(output, dropAdd: ["unrelated"]).ApplyAsync(fixture.Parse("""
+            { "tables": { "unrelated": { "columns": { "id": { "type": "integer", "nullable": false } } } } }
+            """)));
+
+        Assert.Contains("Refusing to apply", output.ToString(), StringComparison.Ordinal);
+        Assert.Contains("events_user_id_fkey", output.ToString(), StringComparison.Ordinal);
+        Assert.Equal(1, await fixture.CountAsync(TableExists("users")));
+        Assert.Equal(1, await fixture.CountAsync("SELECT count(*) FROM chetah.migrations"));
+    }
+
+    [PostgresFact]
+    public async Task UniqueIndexOverALiveUniqueConstraint_IsNotDuplicated()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        const string withoutIndex = """
+            { "tables": { "t": { "columns": {
+              "a": { "type": "integer", "nullable": false },
+              "b": { "type": "integer", "nullable": false } } } } }
+            """;
+
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(withoutIndex)));
+        await fixture.ExecuteAsync("ALTER TABLE t ADD CONSTRAINT t_a_b_key UNIQUE (a, b)");
+
+        const string withIndex = """
+            { "tables": { "t": {
+              "indexes": { "t_a_b_idx": { "columns": ["a", "b"], "unique": true } },
+              "columns": {
+                "a": { "type": "integer", "nullable": false },
+                "b": { "type": "integer", "nullable": false } } } } }
+            """;
+
+        var diff = new StringWriter();
+        Assert.Equal(0, await fixture.Runner(diff).DiffAsync(fixture.Parse(withIndex)));
+        Assert.DoesNotContain("CREATE UNIQUE INDEX", diff.ToString(), StringComparison.Ordinal);
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.CurrentSchema()));
+
+        // Only the constraint's own index exists: no redundant copy was built.
+        Assert.Equal(1, await fixture.CountAsync(
+            "SELECT count(*) FROM pg_indexes WHERE schemaname = 'public' AND tablename = 't'"));
+    }
+
+    [PostgresFact]
     public async Task DroppedColumnWithACheckConstraint_IsRefused()
     {
         await using var fixture = await Fixture.CreateAsync();

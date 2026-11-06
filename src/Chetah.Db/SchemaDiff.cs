@@ -101,7 +101,8 @@ internal static class SchemaDiff
                 operations.Add(DropIndex(index));
         }
 
-        foreach (var constraint in live.ScopedConstraints.Where(constraint => !dropped.Contains(constraint.Table)))
+        foreach (var constraint in live.ScopedConstraints
+                     .Where(constraint => !dropped.Contains(constraint.Table) && Expressible(constraint)))
         {
             if (!desired.ScopedConstraints.Any(desiredConstraint => SameDefinition(desiredConstraint, constraint)))
                 operations.Add(DropConstraint(constraint));
@@ -225,8 +226,18 @@ internal static class SchemaDiff
 
         foreach (var index in desired.ScopedIndexes)
         {
-            if (!live.ScopedIndexes.Any(liveIndex => SameDefinition(index, liveIndex)))
-                operations.Add(CreateIndex(index));
+            if (live.ScopedIndexes.Any(liveIndex => SameDefinition(index, liveIndex)))
+                continue;
+
+            // PostgreSQL backs a unique constraint with a unique index. Creating the declared index
+            // where a live constraint already guarantees the same columns would build a duplicate.
+            if (index.Unique
+                && live.ScopedConstraints.Any(constraint => constraint.Kind == "u"
+                    && constraint.Table == index.Table
+                    && constraint.Columns.SequenceEqual(index.Columns, StringComparer.Ordinal)))
+                continue;
+
+            operations.Add(CreateIndex(index));
         }
 
         return new MigrationPlan(operations);
@@ -279,6 +290,13 @@ internal static class SchemaDiff
 
         return desired.Default != recorded.DeclaredDefault || live.Default != recorded.AppliedDefault;
     }
+
+    /// <summary>Whether the schema file could have declared this constraint. A multi-column unique
+    /// constraint or foreign key cannot be declared yet, so it is never dropped as "no longer
+    /// declared": it is protected instead, and a declared unique index covering the same columns is
+    /// considered satisfied by it.</summary>
+    private static bool Expressible(ConstraintState constraint) =>
+        constraint.Kind == "p" || constraint.Columns.Count == 1;
 
     /// <summary>Constraints and indexes are matched on what they do, not what they are called, so a
     /// hand-named object with the right definition is left alone.</summary>

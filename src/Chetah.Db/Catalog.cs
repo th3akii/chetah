@@ -309,7 +309,8 @@ internal static class PostgresCatalog
         """;
 
     /// <summary>Standalone indexes only: the index backing a constraint is already reported as that
-    /// constraint, and reporting both would just double the noise.</summary>
+    /// constraint, and reporting both would just double the noise. Expression and partial indexes are
+    /// excluded too — their definition is not just a column list, so they are protected instead.</summary>
     private const string IndexesQuery = """
         SELECT ic.relname,
                c.relname,
@@ -322,8 +323,42 @@ internal static class PostgresCatalog
         JOIN pg_class ic ON ic.oid = i.indexrelid
         JOIN pg_namespace n ON n.oid = c.relnamespace
         WHERE n.nspname = $1
+          AND i.indexprs IS NULL
+          AND i.indpred IS NULL
           AND NOT EXISTS (SELECT 1 FROM pg_constraint con WHERE con.conindid = i.indexrelid)
         ORDER BY c.relname, ic.relname
+        """;
+
+    /// <summary>Indexes the schema file cannot express: an expression index (<c>lower(email)</c>) and
+    /// a partial index (<c>WHERE deleted_at IS NULL</c>). They are never matched against a declared
+    /// index and never dropped — reported here so a statement that would remove one is refused.</summary>
+    private const string UnsupportedIndexesQuery = """
+        SELECT c.relname, NULL::text, ic.relname
+        FROM pg_index i
+        JOIN pg_class c ON c.oid = i.indrelid
+        JOIN pg_class ic ON ic.oid = i.indexrelid
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = $1
+          AND (i.indexprs IS NOT NULL OR i.indpred IS NOT NULL)
+          AND NOT EXISTS (SELECT 1 FROM pg_constraint con WHERE con.conindid = i.indexrelid)
+        ORDER BY c.relname, ic.relname
+        """;
+
+    /// <summary>Foreign keys from another schema pointing at a managed table. Dropping the table or
+    /// the referenced column would make PostgreSQL refuse the statement; reporting them turns that
+    /// into a clear refusal before anything runs.</summary>
+    private const string IncomingForeignKeysQuery = """
+        SELECT rc.relname, a.attname, con.conname
+        FROM pg_constraint con
+        JOIN pg_class rc ON rc.oid = con.confrelid
+        JOIN pg_namespace rn ON rn.oid = rc.relnamespace
+        JOIN pg_class src ON src.oid = con.conrelid
+        JOIN pg_namespace sn ON sn.oid = src.relnamespace
+        LEFT JOIN pg_attribute a ON a.attrelid = con.confrelid AND a.attnum = ANY (con.confkey)
+        WHERE rn.nspname = $1
+          AND sn.nspname <> $1
+          AND con.contype = 'f'
+        ORDER BY rc.relname, con.conname, a.attnum
         """;
 
     /// <param name="schema">The application schema resolved once when the connection opened. Not
@@ -340,9 +375,11 @@ internal static class PostgresCatalog
 
         var foreign = new List<ForeignObject>();
         foreign.AddRange(await ReadForeignAsync(connection, schema, ForeignConstraintsQuery, "constraint", cancellationToken));
+        foreign.AddRange(await ReadForeignAsync(connection, schema, UnsupportedIndexesQuery, "index", cancellationToken));
+        foreign.AddRange(await ReadForeignAsync(connection, schema, IncomingForeignKeysQuery, "constraint", cancellationToken));
 
-        // A multi-column unique constraint or foreign key, and any expression index, cannot be
-        // expressed in the schema file; they are protected like a check constraint.
+        // A multi-column unique constraint or foreign key cannot be expressed in the schema file
+        // yet; it is protected like a check constraint.
         foreign.AddRange(constraints
             .Where(constraint => constraint.Kind != "p" && constraint.Columns.Count != 1)
             .Select(constraint => new ForeignObject(
@@ -350,14 +387,11 @@ internal static class PostgresCatalog
                 constraint.Columns.Count == 1 ? constraint.Columns[0] : null,
                 "constraint",
                 constraint.Name)));
-        foreign.AddRange(indexes
-            .Where(index => index.Columns.Count == 0)
-            .Select(index => new ForeignObject(index.Table, null, "index", index.Name)));
 
         return new CatalogState(
             tables,
             foreign,
-            constraints.Where(constraint => constraint.Kind == "p" || constraint.Columns.Count == 1).ToArray(),
+            constraints,
             indexes);
     }
 
