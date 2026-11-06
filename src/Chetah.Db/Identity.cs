@@ -294,6 +294,18 @@ internal static class Identity
                 continue;
             }
 
+            // An id this database has never seen, for a name it already tracks under another id: the
+            // file and the database were adopted separately. Remapping either side silently would
+            // turn one of them into a different object.
+            if (row is null && registry.Live("table").FirstOrDefault(live => live.Name == table.Name) is { } tracked)
+            {
+                refusals.Add(
+                    $"Table '{table.Name}': the schema file says \"$id\" {id}, but this database tracks that table "
+                    + $"as id {tracked.Id}. Delete the \"$id\" so id {tracked.Id} is adopted, or set it to "
+                    + $"{tracked.Id}; ids are never remapped silently.");
+                continue;
+            }
+
             claimedTables.Add(id);
             tables[table.Name] = new ResolvedTable(table.Name, id, row?.Name);
         }
@@ -331,6 +343,17 @@ internal static class Identity
                     refusals.Add(
                         $"Column '{table.Name}.{column.Name}': \"$id\" {id} currently names '{row.Name}', and a "
                         + $"different column '{column.Name}' is already tracked. Fix one of the \"$id\" values by hand.");
+                    continue;
+                }
+
+                if (row is null
+                    && registry.Live("column")
+                        .FirstOrDefault(live => live.TableId == resolved.Id && live.Name == column.Name) is { } trackedColumn)
+                {
+                    refusals.Add(
+                        $"Column '{table.Name}.{column.Name}': the schema file says \"$id\" {id}, but this database "
+                        + $"tracks that column as id {trackedColumn.Id}. Delete the \"$id\" so id {trackedColumn.Id} is "
+                        + "adopted, or set it to " + $"{trackedColumn.Id}; ids are never remapped silently.");
                     continue;
                 }
 

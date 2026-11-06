@@ -52,10 +52,22 @@ public sealed record ColumnSchema(
 /// <summary>A standalone index declared on a table.</summary>
 public sealed record IndexSchema(string Name, IReadOnlyList<string> Columns, bool Unique);
 
+/// <summary>A foreign key declared on a table: one column or several, pointing at a target table's
+/// columns, with the referential actions PostgreSQL applies.</summary>
+public sealed record ForeignKeySchema(
+    string Name,
+    IReadOnlyList<string> Columns,
+    string RefTable,
+    IReadOnlyList<string> RefColumns,
+    string OnDelete = "no action",
+    string OnUpdate = "no action");
+
 /// <param name="Id">Chetah's persistent identity for this table, written to the schema file as
 /// <c>"$id"</c>. It survives renames; the tool maintains it, users do not need to.</param>
 /// <param name="PrimaryKey">Primary key columns, in constraint order; composite keys are a list.</param>
 /// <param name="Indexes">Standalone indexes to create and keep.</param>
+/// <param name="UniqueKeys">Multi-column UNIQUE constraints; single-column ones use the column flag.</param>
+/// <param name="ForeignKeys">Foreign keys, single- or multi-column, with their actions.</param>
 public sealed record TableSchema(
     string Name,
     string ModelName,
@@ -63,7 +75,9 @@ public sealed record TableSchema(
     IReadOnlyList<ColumnSchema> Columns,
     long? Id = null,
     IReadOnlyList<string>? PrimaryKey = null,
-    IReadOnlyList<IndexSchema>? Indexes = null);
+    IReadOnlyList<IndexSchema>? Indexes = null,
+    IReadOnlyList<IReadOnlyList<string>>? UniqueKeys = null,
+    IReadOnlyList<ForeignKeySchema>? ForeignKeys = null);
 
 public sealed record Schema(IReadOnlyList<TableSchema> Tables);
 
@@ -176,6 +190,8 @@ public static class SchemaParser
         var objectIds = new HashSet<long>();
         // Index names share the schema namespace in PostgreSQL.
         var indexNames = new HashSet<string>(StringComparer.Ordinal);
+        // Constraint names do too.
+        var foreignKeyNames = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var tableProperty in tablesElement.EnumerateObject())
         {
@@ -191,10 +207,10 @@ public static class SchemaParser
             if (tableElement.ValueKind != JsonValueKind.Object)
                 return SchemaParserResult.Fail($"Table '{tableName}' must be an object.");
 
-            if (UnknownProperty(tableElement, "$id", "model", "columns", "primaryKey", "indexes") is { } tableEntryProperty)
+            if (UnknownProperty(tableElement, "$id", "model", "columns", "primaryKey", "indexes", "unique", "foreignKeys") is { } tableEntryProperty)
                 return SchemaParserResult.Fail(
                     $"Table '{tableName}': unknown property '{tableEntryProperty}'. Allowed properties: "
-                    + "\"$id\", \"model\", \"columns\", \"primaryKey\", \"indexes\".");
+                    + "\"$id\", \"model\", \"columns\", \"primaryKey\", \"indexes\", \"unique\", \"foreignKeys\".");
 
             if (!TryPositiveId(tableElement, out var tableId))
                 return SchemaParserResult.Fail($"Table '{tableName}': \"$id\" must be a positive integer.");
@@ -433,6 +449,127 @@ public static class SchemaParser
                 }
             }
 
+            var uniqueKeys = new List<IReadOnlyList<string>>();
+            if (tableElement.TryGetProperty("unique", out var uniqueElement))
+            {
+                if (uniqueElement.ValueKind != JsonValueKind.Array)
+                    return SchemaParserResult.Fail(
+                        $"Table '{tableName}': \"unique\" must be an array of column names or column-name arrays.");
+
+                foreach (var entry in uniqueElement.EnumerateArray())
+                {
+                    var keyColumns = new List<string>();
+                    if (entry.ValueKind == JsonValueKind.String)
+                    {
+                        keyColumns.Add(entry.GetString()!);
+                    }
+                    else if (entry.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var part in entry.EnumerateArray())
+                        {
+                            if (part.ValueKind != JsonValueKind.String || string.IsNullOrEmpty(part.GetString()))
+                                return SchemaParserResult.Fail(
+                                    $"Table '{tableName}': \"unique\" entries must be column names or arrays of them.");
+
+                            keyColumns.Add(part.GetString()!);
+                        }
+                    }
+                    else
+                    {
+                        return SchemaParserResult.Fail(
+                            $"Table '{tableName}': \"unique\" entries must be column names or arrays of them.");
+                    }
+
+                    if (keyColumns.Count == 0)
+                        return SchemaParserResult.Fail($"Table '{tableName}': a \"unique\" entry lists no columns.");
+
+                    foreach (var keyColumn in keyColumns)
+                    {
+                        if (!columnNames.Contains(keyColumn))
+                            return SchemaParserResult.Fail(
+                                $"Table '{tableName}': \"unique\" names column '{keyColumn}', which is not declared.");
+                    }
+
+                    if (uniqueKeys.Any(existing => existing.SequenceEqual(keyColumns, StringComparer.Ordinal)))
+                        return SchemaParserResult.Fail(
+                            $"Table '{tableName}': \"unique\" lists {string.Join("+", keyColumns)} twice.");
+
+                    uniqueKeys.Add(keyColumns);
+                }
+            }
+
+            var foreignKeys = new List<ForeignKeySchema>();
+            if (tableElement.TryGetProperty("foreignKeys", out var foreignKeysElement))
+            {
+                if (foreignKeysElement.ValueKind != JsonValueKind.Object)
+                    return SchemaParserResult.Fail(
+                        $"Table '{tableName}': \"foreignKeys\" must be an object keyed by constraint name.");
+
+                foreach (var foreignKeyProperty in foreignKeysElement.EnumerateObject())
+                {
+                    var foreignKeyName = foreignKeyProperty.Name;
+                    if (!IsValidIdentifier(foreignKeyName))
+                        return SchemaParserResult.Fail(
+                            $"Table '{tableName}': foreign key name '{foreignKeyName}' is not a plain identifier.");
+
+                    if (!foreignKeyNames.Add(foreignKeyName))
+                        return SchemaParserResult.Fail(
+                            $"Table '{tableName}': foreign key '{foreignKeyName}' is declared more than once. "
+                            + "Constraint names are unique within a schema.");
+
+                    var foreignKeyElement = foreignKeyProperty.Value;
+                    if (foreignKeyElement.ValueKind != JsonValueKind.Object)
+                        return SchemaParserResult.Fail(
+                            $"Table '{tableName}': foreign key '{foreignKeyName}' must be an object.");
+
+                    if (UnknownProperty(foreignKeyElement, "columns", "references", "referenceColumns", "onDelete", "onUpdate")
+                        is { } foreignKeyEntryProperty)
+                        return SchemaParserResult.Fail(
+                            $"Table '{tableName}': foreign key '{foreignKeyName}' has unknown property "
+                            + $"'{foreignKeyEntryProperty}'. Allowed properties: \"columns\", \"references\", "
+                            + "\"referenceColumns\", \"onDelete\", \"onUpdate\".");
+
+                    if (!TryReadColumnList(foreignKeyElement, "columns", out var foreignKeyColumns))
+                        return SchemaParserResult.Fail(
+                            $"Table '{tableName}': foreign key '{foreignKeyName}' must declare a \"columns\" array.");
+
+                    foreach (var foreignKeyColumn in foreignKeyColumns.Where(column => !columnNames.Contains(column)))
+                        return SchemaParserResult.Fail(
+                            $"Table '{tableName}': foreign key '{foreignKeyName}' names column '{foreignKeyColumn}', "
+                            + "which is not declared.");
+
+                    if (!TryNonEmptyString(foreignKeyElement, "references", out var referenceTarget)
+                        || !IsTableReference(referenceTarget))
+                        return SchemaParserResult.Fail(
+                            $"Table '{tableName}': foreign key '{foreignKeyName}' needs \"references\" as "
+                            + "\"table\" or \"schema.table\".");
+
+                    if (!TryReadColumnList(foreignKeyElement, "referenceColumns", out var referenceColumns))
+                        return SchemaParserResult.Fail(
+                            $"Table '{tableName}': foreign key '{foreignKeyName}' must declare a "
+                            + "\"referenceColumns\" array.");
+
+                    if (referenceColumns.Count != foreignKeyColumns.Count)
+                        return SchemaParserResult.Fail(
+                            $"Table '{tableName}': foreign key '{foreignKeyName}' maps {foreignKeyColumns.Count} "
+                            + $"column(s) onto {referenceColumns.Count} reference column(s).");
+
+                    if (!TryReadAction(foreignKeyElement, "onDelete", out var onDelete)
+                        || !TryReadAction(foreignKeyElement, "onUpdate", out var onUpdate))
+                        return SchemaParserResult.Fail(
+                            $"Table '{tableName}': foreign key '{foreignKeyName}' has an unsupported action. "
+                            + $"Supported: {string.Join(", ", ReferentialActions)}.");
+
+                    foreignKeys.Add(new ForeignKeySchema(
+                        foreignKeyName,
+                        foreignKeyColumns,
+                        referenceTarget,
+                        referenceColumns,
+                        onDelete,
+                        onUpdate));
+                }
+            }
+
             tables.Add(new TableSchema(
                 tableName,
                 modelName,
@@ -440,7 +577,9 @@ public static class SchemaParser
                 columns,
                 tableId,
                 primaryKey.Count == 0 ? null : primaryKey,
-                indexes.Count == 0 ? null : indexes));
+                indexes.Count == 0 ? null : indexes,
+                uniqueKeys.Count == 0 ? null : uniqueKeys,
+                foreignKeys.Count == 0 ? null : foreignKeys));
         }
 
         if (tables.Count == 0)
@@ -472,6 +611,52 @@ public static class SchemaParser
             return false;
 
         value = parsed;
+        return true;
+    }
+
+    /// <summary>The actions PostgreSQL accepts, spelled the way the catalog reports them.</summary>
+    private static readonly string[] ReferentialActions =
+        ["no action", "restrict", "cascade", "set null", "set default"];
+
+    /// <summary>Reads a non-empty array of column names.</summary>
+    private static bool TryReadColumnList(JsonElement element, string property, out List<string> names)
+    {
+        names = [];
+        if (!element.TryGetProperty(property, out var array) || array.ValueKind != JsonValueKind.Array)
+            return false;
+
+        foreach (var entry in array.EnumerateArray())
+        {
+            if (entry.ValueKind != JsonValueKind.String || string.IsNullOrEmpty(entry.GetString()))
+                return false;
+
+            names.Add(entry.GetString()!);
+        }
+
+        return names.Count > 0;
+    }
+
+    /// <summary>Table or schema.table — the columns come from <c>referenceColumns</c>.</summary>
+    private static bool IsTableReference(string value)
+    {
+        var parts = value.Split('.');
+        return parts.Length is 1 or 2 && parts.All(IsValidIdentifier);
+    }
+
+    private static bool TryReadAction(JsonElement element, string property, out string action)
+    {
+        action = "no action";
+        if (!element.TryGetProperty(property, out var value))
+            return true;
+
+        if (value.ValueKind != JsonValueKind.String)
+            return false;
+
+        var normalized = value.GetString()!.Trim().ToLowerInvariant().Replace('_', ' ').Replace('-', ' ');
+        if (!ReferentialActions.Contains(normalized, StringComparer.Ordinal))
+            return false;
+
+        action = normalized;
         return true;
     }
 

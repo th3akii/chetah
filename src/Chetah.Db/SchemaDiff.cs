@@ -101,8 +101,17 @@ internal static class SchemaDiff
                 operations.Add(DropIndex(index));
         }
 
+        // A unique constraint that the file expresses as a unique index is the same guarantee under
+        // another name: it satisfies the index and is not dropped.
+        var coveredUnique = live.ScopedConstraints
+            .Where(constraint => constraint.Kind == "u"
+                && desired.ScopedIndexes.Any(index => index.Unique
+                    && index.Table == constraint.Table
+                    && index.Columns.SequenceEqual(constraint.Columns, StringComparer.Ordinal)))
+            .ToArray();
+
         foreach (var constraint in live.ScopedConstraints
-                     .Where(constraint => !dropped.Contains(constraint.Table) && Expressible(constraint)))
+                     .Where(constraint => !dropped.Contains(constraint.Table) && !coveredUnique.Contains(constraint)))
         {
             if (!desired.ScopedConstraints.Any(desiredConstraint => SameDefinition(desiredConstraint, constraint)))
                 operations.Add(DropConstraint(constraint));
@@ -291,13 +300,6 @@ internal static class SchemaDiff
         return desired.Default != recorded.DeclaredDefault || live.Default != recorded.AppliedDefault;
     }
 
-    /// <summary>Whether the schema file could have declared this constraint. A multi-column unique
-    /// constraint or foreign key cannot be declared yet, so it is never dropped as "no longer
-    /// declared": it is protected instead, and a declared unique index covering the same columns is
-    /// considered satisfied by it.</summary>
-    private static bool Expressible(ConstraintState constraint) =>
-        constraint.Kind == "p" || constraint.Columns.Count == 1;
-
     /// <summary>Constraints and indexes are matched on what they do, not what they are called, so a
     /// hand-named object with the right definition is left alone.</summary>
     private static bool SameDefinition(ConstraintState desired, ConstraintState live) =>
@@ -306,7 +308,9 @@ internal static class SchemaDiff
         && desired.Columns.SequenceEqual(live.Columns, StringComparer.Ordinal)
         && (desired.Kind != "f"
             || (desired.RefTable == live.RefTable
-                && (desired.RefColumns ?? []).SequenceEqual(live.RefColumns ?? [], StringComparer.Ordinal)));
+                && (desired.RefColumns ?? []).SequenceEqual(live.RefColumns ?? [], StringComparer.Ordinal)
+                && desired.OnDelete == live.OnDelete
+                && desired.OnUpdate == live.OnUpdate));
 
     private static bool SameDefinition(IndexState desired, IndexState live) =>
         desired.Table == live.Table
@@ -328,7 +332,7 @@ internal static class SchemaDiff
                 "u" => $"ALTER TABLE {Quote(constraint.Table)} ADD CONSTRAINT {Quote(constraint.Name)} UNIQUE ({QuoteList(constraint.Columns)})",
                 _ => $"ALTER TABLE {Quote(constraint.Table)} ADD CONSTRAINT {Quote(constraint.Name)} "
                     + $"FOREIGN KEY ({QuoteList(constraint.Columns)}) REFERENCES {Reference(constraint.RefTable!)} "
-                    + $"({QuoteList(constraint.RefColumns ?? [])})",
+                    + $"({QuoteList(constraint.RefColumns ?? [])}){Actions(constraint)}",
             },
             $"add_{constraint.Name}",
             null,
@@ -356,6 +360,12 @@ internal static class SchemaDiff
                 OperationKinds.CreateIndex,
                 index.Table,
                 index.Columns.Count == 1 ? index.Columns[0] : null));
+
+    /// <summary>Referential actions, spelled out for DDL. The default is omitted so recorded SQL stays
+    /// close to what a person would write.</summary>
+    private static string Actions(ConstraintState constraint) =>
+        (constraint.OnDelete == "no action" ? "" : $" ON DELETE {constraint.OnDelete.ToUpperInvariant()}")
+        + (constraint.OnUpdate == "no action" ? "" : $" ON UPDATE {constraint.OnUpdate.ToUpperInvariant()}");
 
     private static string QuoteList(IReadOnlyList<string> identifiers) =>
         string.Join(", ", identifiers.Select(Quote));

@@ -39,6 +39,45 @@ public class SchemaParserTests
     }
 
     [Fact]
+    public void ReadsCompositeKeysAndReferentialActions()
+    {
+        var result = SchemaParser.Parse("""
+            { "tables": { "p": {
+              "unique": ["a", ["a", "b"]],
+              "columns": { "a": { "type": "integer" }, "b": { "type": "integer" } },
+              "foreignKeys": { "p_ref_fkey": {
+                "columns": ["a", "b"],
+                "references": "other.t",
+                "referenceColumns": ["x", "y"],
+                "onDelete": "CASCADE" } } } } }
+            """);
+
+        Assert.Null(result.Error);
+        var table = result.Schema!.Tables.Single();
+        Assert.Equal(2, table.UniqueKeys!.Count);
+        Assert.Equal(["a", "b"], table.UniqueKeys[1]);
+
+        var foreignKey = Assert.Single(table.ForeignKeys!);
+        Assert.Equal(["a", "b"], foreignKey.Columns);
+        Assert.Equal("other.t", foreignKey.RefTable);
+        Assert.Equal(["x", "y"], foreignKey.RefColumns);
+        Assert.Equal("cascade", foreignKey.OnDelete);
+        Assert.Equal("no action", foreignKey.OnUpdate);
+    }
+
+    [Theory]
+    [InlineData("""{ "tables": { "p": { "columns": { "a": { "type": "integer" } }, "foreignKeys": { "fk": { "columns": ["a"], "references": "r" } } } } }""", "must declare a \"referenceColumns\" array")]
+    [InlineData("""{ "tables": { "p": { "columns": { "a": { "type": "integer" }, "b": { "type": "integer" } }, "foreignKeys": { "fk": { "columns": ["a", "b"], "references": "r", "referenceColumns": ["x"] } } } } }""", "maps 2 column(s) onto 1 reference column(s)")]
+    [InlineData("""{ "tables": { "p": { "columns": { "a": { "type": "integer" } }, "foreignKeys": { "fk": { "columns": ["a"], "references": "r", "referenceColumns": ["x"], "onDelete": "explode" } } } } }""", "unsupported action")]
+    [InlineData("""{ "tables": { "p": { "columns": { "a": { "type": "integer" } }, "unique": [["a", "missing"]] } } }""", "which is not declared")]
+    [InlineData("""{ "tables": { "p": { "columns": { "a": { "type": "integer" } }, "unique": ["a", ["a"]] } } }""", "twice")]
+    public void RejectsUnusableCompositeDeclarations(string json, string expected)
+    {
+        var result = SchemaParser.Parse(json);
+        Assert.Contains(expected, result.Error, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ReadsIdentityMembers()
     {
         var result = SchemaParser.Parse("""

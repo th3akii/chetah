@@ -36,16 +36,18 @@ internal sealed record TableState(string Name, IReadOnlyList<ColumnState> Column
 /// refuse to remove it: PostgreSQL drops attached objects silently when their column or table goes.</summary>
 internal sealed record ForeignObject(string Table, string? Column, string Kind, string Name);
 
-/// <summary>A constraint the schema file can express: primary key (<c>p</c>), single-column unique
-/// (<c>u</c>) or single-column foreign key (<c>f</c>). Matching is by definition — kind, columns and
-/// reference target — so a hand-named constraint does not churn on every apply.</summary>
+/// <summary>A constraint the schema file can express: primary key (<c>p</c>), unique (<c>u</c>) or
+/// foreign key (<c>f</c>). Matching is by definition — kind, columns, reference target and
+/// referential actions — so a hand-named constraint does not churn on every apply.</summary>
 internal sealed record ConstraintState(
     string Name,
     string Kind,
     string Table,
     IReadOnlyList<string> Columns,
     string? RefTable = null,
-    IReadOnlyList<string>? RefColumns = null);
+    IReadOnlyList<string>? RefColumns = null,
+    string OnDelete = "no action",
+    string OnUpdate = "no action");
 
 /// <summary>A standalone index: not backing any constraint, matched by columns and uniqueness.</summary>
 internal sealed record IndexState(string Name, string Table, IReadOnlyList<string> Columns, bool Unique);
@@ -91,6 +93,15 @@ internal static class SchemaCatalog
             foreach (var column in table.Columns.Where(column => column.Unique))
                 constraints.Add(new ConstraintState($"{table.Name}_{column.Name}_key", "u", table.Name, [column.Name]));
 
+            foreach (var uniqueKey in table.UniqueKeys ?? [])
+            {
+                constraints.Add(new ConstraintState(
+                    $"{table.Name}_{string.Join("_", uniqueKey)}_key",
+                    "u",
+                    table.Name,
+                    uniqueKey));
+            }
+
             foreach (var column in table.Columns.Where(column => column.References is not null))
             {
                 var (refTable, refColumn) = SplitReference(column.References!);
@@ -101,6 +112,19 @@ internal static class SchemaCatalog
                     [column.Name],
                     refTable,
                     [refColumn]));
+            }
+
+            foreach (var foreignKey in table.ForeignKeys ?? [])
+            {
+                constraints.Add(new ConstraintState(
+                    foreignKey.Name,
+                    "f",
+                    table.Name,
+                    foreignKey.Columns,
+                    foreignKey.RefTable,
+                    foreignKey.RefColumns,
+                    foreignKey.OnDelete,
+                    foreignKey.OnUpdate));
             }
 
             foreach (var index in table.Indexes ?? [])
@@ -244,6 +268,16 @@ internal static class PostgresCatalog
             .SelectMany(table => table.Columns.Select(column => (Table: table.Name, column.Name, column.Default)))
             .ToDictionary(entry => (entry.Table, entry.Name), entry => entry.Default);
 
+    /// <summary>PostgreSQL stores a referential action as one character.</summary>
+    private static string Action(string code) => code switch
+    {
+        "r" => "restrict",
+        "c" => "cascade",
+        "n" => "set null",
+        "d" => "set default",
+        _ => "no action",
+    };
+
     /// <summary>Catalog type spelling with its modifier: <c>varchar(100)</c>, <c>timestamp(3)</c>.
     /// The modifier is part of the type — a declared <c>timestamp</c> and a live <c>timestamp(3)</c>
     /// are different columns, and a diff that ignored it would report a false match.</summary>
@@ -284,7 +318,9 @@ internal static class PostgresCatalog
                rn.nspname,
                COALESCE((SELECT array_agg(a2.attname ORDER BY k2.ord)
                          FROM unnest(con.confkey) WITH ORDINALITY AS k2(attnum, ord)
-                         JOIN pg_attribute a2 ON a2.attrelid = con.confrelid AND a2.attnum = k2.attnum), '{}'::text[])
+                         JOIN pg_attribute a2 ON a2.attrelid = con.confrelid AND a2.attnum = k2.attnum), '{}'::text[]),
+               con.confdeltype::text,
+               con.confupdtype::text
         FROM pg_constraint con
         JOIN pg_class c ON c.oid = con.conrelid
         JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -378,16 +414,6 @@ internal static class PostgresCatalog
         foreign.AddRange(await ReadForeignAsync(connection, schema, UnsupportedIndexesQuery, "index", cancellationToken));
         foreign.AddRange(await ReadForeignAsync(connection, schema, IncomingForeignKeysQuery, "constraint", cancellationToken));
 
-        // A multi-column unique constraint or foreign key cannot be expressed in the schema file
-        // yet; it is protected like a check constraint.
-        foreign.AddRange(constraints
-            .Where(constraint => constraint.Kind != "p" && constraint.Columns.Count != 1)
-            .Select(constraint => new ForeignObject(
-                constraint.Table,
-                constraint.Columns.Count == 1 ? constraint.Columns[0] : null,
-                "constraint",
-                constraint.Name)));
-
         return new CatalogState(
             tables,
             foreign,
@@ -457,7 +483,9 @@ internal static class PostgresCatalog
                 reader.GetString(2),
                 reader.GetFieldValue<string[]>(3),
                 refTable,
-                reader.IsDBNull(4) ? null : reader.GetFieldValue<string[]>(6)));
+                reader.IsDBNull(4) ? null : reader.GetFieldValue<string[]>(6),
+                Action(reader.GetString(7)),
+                Action(reader.GetString(8))));
         }
 
         return constraints;

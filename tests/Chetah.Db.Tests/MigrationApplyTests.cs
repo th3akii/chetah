@@ -485,6 +485,57 @@ public class MigrationApplyTests
     }
 
     [PostgresFact]
+    public async Task CompositeKeysAndReferentialActions_AreApplied()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        const string schema = """
+            { "tables": {
+              "tenants": {
+                "primaryKey": ["id"],
+                "columns": { "id": { "type": "integer", "nullable": false } } },
+              "users": {
+                "primaryKey": ["tenant_id", "id"],
+                "unique": [["tenant_id", "email"]],
+                "columns": {
+                  "tenant_id": { "type": "integer", "nullable": false },
+                  "id": { "type": "integer", "nullable": false },
+                  "email": { "type": "text", "nullable": false } } },
+              "posts": {
+                "columns": {
+                  "id": { "type": "integer", "nullable": false },
+                  "tenant_id": { "type": "integer", "nullable": false },
+                  "author_id": { "type": "integer", "nullable": false } },
+                "foreignKeys": {
+                  "posts_author_fkey": {
+                    "columns": ["tenant_id", "author_id"],
+                    "references": "users",
+                    "referenceColumns": ["tenant_id", "id"],
+                    "onDelete": "cascade",
+                    "onUpdate": "restrict" } } } } }
+            """;
+
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(schema)));
+
+        Assert.Equal(1, await fixture.CountAsync(
+            "SELECT count(*) FROM pg_constraint WHERE conrelid = 'public.users'::regclass "
+            + "AND contype = 'u' AND array_length(conkey, 1) = 2"));
+        Assert.Equal(1, await fixture.CountAsync(
+            "SELECT count(*) FROM pg_constraint WHERE conname = 'posts_author_fkey' "
+            + "AND confdeltype = 'c' AND confupdtype = 'r'"));
+
+        // The same declaration is a no-op: actions are part of the definition, not decoration.
+        var settled = new StringWriter();
+        Assert.Equal(0, await fixture.Runner(settled).ApplyAsync(fixture.CurrentSchema()));
+        Assert.Contains("in sync", settled.ToString(), StringComparison.Ordinal);
+        Assert.Equal(1, await fixture.CountAsync("SELECT count(*) FROM chetah.migrations"));
+
+        var changed = schema.Replace("\"onDelete\": \"cascade\"", "\"onDelete\": \"restrict\"", StringComparison.Ordinal);
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(changed)));
+        Assert.Equal(1, await fixture.CountAsync(
+            "SELECT count(*) FROM pg_constraint WHERE conname = 'posts_author_fkey' AND confdeltype = 'r'"));
+    }
+
+    [PostgresFact]
     public async Task UniqueIndexOverALiveUniqueConstraint_IsNotDuplicated()
     {
         await using var fixture = await Fixture.CreateAsync();
@@ -675,6 +726,85 @@ public class MigrationApplyTests
 
         var entries = first.Journal().Entries.Concat(second.Journal().Entries).ToArray();
         Assert.Equal(1, entries.Count(entry => entry.Slug.StartsWith("create_users", StringComparison.Ordinal)));
+    }
+
+    [PostgresFact]
+    public async Task SameSchemaFile_IsPortableAcrossDatabases()
+    {
+        await using var development = await Fixture.CreateAsync();
+        await using var production = await Fixture.CreateAsync();
+
+        // Development resolves and records the identities; the file is what travels.
+        Assert.Equal(0, await development.Runner(new StringWriter()).ApplyAsync(development.Parse(UsersSchema)));
+        var portable = File.ReadAllText(development.SchemaPath);
+        Assert.Contains("\"$id\"", portable, StringComparison.Ordinal);
+
+        // Production starts empty and uses the ids the file carries, not its own numbering.
+        Assert.Equal(0, await production.Runner(new StringWriter()).ApplyAsync(production.Parse(portable)));
+
+        Assert.Equal(await development.Identities(), await production.Identities());
+
+        var settled = new StringWriter();
+        Assert.Equal(0, await production.Runner(settled, check: true).DiffAsync(production.CurrentSchema()));
+        Assert.Contains("No changes", settled.ToString(), StringComparison.Ordinal);
+    }
+
+    [PostgresFact]
+    public async Task TombstonedIdClaimedAgain_IsRefused()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        const string withBoth = """
+            { "tables": { "users": { "columns": {
+              "id": { "type": "integer", "nullable": false },
+              "kept": { "type": "text" },
+              "removed": { "type": "text" } } } } }
+            """;
+        const string withoutRemoved = """
+            { "tables": { "users": { "columns": {
+              "id": { "type": "integer", "nullable": false },
+              "kept": { "type": "text" } } } } }
+            """;
+
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(withBoth)));
+        var removedId = Convert.ToInt64(
+            await fixture.ScalarAsync("SELECT id FROM chetah.objects WHERE name = 'removed' AND dropped_at IS NULL"));
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(withoutRemoved)));
+
+        // Reusing the id of a dropped object would make this database disagree with any other one
+        // that still has that object.
+        var reused = $$"""
+            { "tables": { "users": { "columns": {
+              "id": { "type": "integer", "nullable": false },
+              "kept": { "type": "text" },
+              "returned": { "$id": {{removedId}}, "type": "text" } } } } }
+            """;
+        var output = new StringWriter();
+        Assert.Equal(1, await fixture.Runner(output).ApplyAsync(fixture.Parse(reused)));
+
+        Assert.Contains("was removed from this database earlier", output.ToString(), StringComparison.Ordinal);
+        Assert.Equal(0, await fixture.CountAsync(ColumnExists("users", "returned")));
+        Assert.Equal(2, await fixture.CountAsync("SELECT count(*) FROM chetah.migrations"));
+    }
+
+    [PostgresFact]
+    public async Task SchemaFileIdThatContradictsTheRegistry_IsRefused()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(UsersSchema)));
+
+        var tracked = Convert.ToInt64(
+            await fixture.ScalarAsync("SELECT id FROM chetah.objects WHERE kind = 'table' AND name = 'users'"));
+        var edited = File.ReadAllText(fixture.SchemaPath)
+            .Replace($"\"$id\": {tracked}", "\"$id\": 99", StringComparison.Ordinal);
+        fixture.Parse(edited);
+
+        var output = new StringWriter();
+        Assert.Equal(1, await fixture.Runner(output).ApplyAsync(fixture.CurrentSchema()));
+
+        Assert.Contains($"tracks that table as id {tracked}", output.ToString(), StringComparison.Ordinal);
+        Assert.Contains("never remapped silently", output.ToString(), StringComparison.Ordinal);
+        // The file is left as the user wrote it: resolution failed before anything was recorded.
+        Assert.Equal(edited, File.ReadAllText(fixture.SchemaPath));
     }
 
     [PostgresFact]
@@ -980,6 +1110,21 @@ public class MigrationApplyTests
             await using var command = new NpgsqlCommand($"CREATE DATABASE \"{fixture._database}\"", connection);
             await command.ExecuteNonQueryAsync();
             return fixture;
+        }
+
+        /// <summary>The registry as (id, kind, name), for comparing two databases.</summary>
+        internal async Task<string> Identities()
+        {
+            await using var connection = new NpgsqlConnection(ConnectionString);
+            await connection.OpenAsync();
+            await using var command = new NpgsqlCommand(
+                """
+                SELECT coalesce(string_agg(id || ':' || kind || ':' || name, ',' ORDER BY id), '')
+                FROM "chetah"."objects"
+                WHERE dropped_at IS NULL
+                """,
+                connection);
+            return (string)(await command.ExecuteScalarAsync())!;
         }
 
         /// <summary>Re-reads the schema file as it is on disk, without rewriting it.</summary>
