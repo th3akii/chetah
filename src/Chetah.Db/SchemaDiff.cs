@@ -237,10 +237,14 @@ internal static class SchemaDiff
                     && dropped.Contains(target))
                 .ToArray();
 
+            // Precomputed so the ordering predicate is a set lookup, not a scan per comparison.
+            var references = foreignKeysBetweenDrops
+                .Select(foreignKey => (Referencing: foreignKey.Table, Referenced: foreignKey.RefTable!))
+                .ToHashSet();
+
             var ordered = DropOrder(
                 tableDrops,
-                (candidate, other) => foreignKeysBetweenDrops.Any(foreignKey =>
-                    foreignKey.Table == other.Name && foreignKey.RefTable == candidate.Name));
+                (candidate, other) => references.Contains((other.Name, candidate.Name)));
 
             if (ordered is null)
             {
