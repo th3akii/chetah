@@ -559,6 +559,29 @@ public class MigrationApplyTests
     }
 
     [PostgresFact]
+    public async Task ConcurrentApplies_ExecuteTheMigrationOnce()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+
+        // Two runs racing on one database, each with its own checkout (schema file, migrations dir).
+        // Without the advisory lock both would plan from the same empty state and one would fail
+        // creating a table the other just created.
+        var first = fixture.NewCheckout(UsersSchema);
+        var second = fixture.NewCheckout(UsersSchema);
+
+        var results = await Task.WhenAll(
+            first.Runner.ApplyAsync(first.Schema),
+            second.Runner.ApplyAsync(second.Schema));
+
+        Assert.All(results, result => Assert.Equal(0, result));
+        Assert.Equal(1, await fixture.CountAsync("SELECT count(*) FROM chetah.migrations"));
+        Assert.Equal(1, await fixture.CountAsync(TableExists("users")));
+
+        var entries = first.Journal().Entries.Concat(second.Journal().Entries).ToArray();
+        Assert.Equal(1, entries.Count(entry => entry.Slug.StartsWith("create_users", StringComparison.Ordinal)));
+    }
+
+    [PostgresFact]
     public async Task ExistingDatabase_IsRecordedAsBaseline()
     {
         await using var fixture = await Fixture.CreateAsync();
@@ -692,6 +715,25 @@ public class MigrationApplyTests
                 output,
                 confirm ?? (_ => true),
                 new HashSet<string>(dropAdd, StringComparer.Ordinal));
+
+        /// <summary>A second working copy on the same database, standing in for another process.</summary>
+        internal Checkout NewCheckout(string json)
+        {
+            var root = Path.Combine(Path.GetTempPath(), "chetah-db-checkout-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(root);
+            var schemaPath = Path.Combine(root, "chetah-schema.json");
+            File.WriteAllText(schemaPath, json);
+
+            return new Checkout(
+                new MigrationRunner(ConnectionString, schemaPath, Path.Combine(root, "migrations"), new StringWriter(), _ => true),
+                SchemaParser.Parse(json).Schema!,
+                new MigrationStore(Path.Combine(root, "migrations")));
+        }
+
+        internal sealed record Checkout(MigrationRunner Runner, Schema Schema, MigrationStore Store)
+        {
+            internal Journal Journal() => Store.ReadJournal();
+        }
 
         /// <summary>Hand-writes a journal entry and its SQL file, as a previous run would have.
         /// No operations writes an entry with no metadata.</summary>

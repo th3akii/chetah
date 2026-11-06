@@ -37,6 +37,13 @@ internal sealed class MigrationRunner
             WHERE dropped_at IS NULL;
         """;
 
+    /// <summary>Session-level advisory lock key. Every command takes it, so two runs against one
+    /// database cannot both plan from the same state, both allocate the same identity, or both write
+    /// the same migration. Released when the run ends; a crashed run releases it with its session.</summary>
+    private const long MigrationLockKey = 0x6368_6574_6168;
+
+    private const int LockTimeoutMs = 30_000;
+
     private readonly string _connectionString;
     private readonly string _schemaPath;
     private readonly IReadOnlySet<string> _dropAdd;
@@ -67,12 +74,69 @@ internal sealed class MigrationRunner
         _confirm = confirm;
     }
 
+    /// <summary>Runs a command under the migration lock: acquisition happens with the connection,
+    /// release here, so a pooled session never keeps the lock after the run.</summary>
+    private async Task<int> WithLockAsync(
+        Func<NpgsqlConnection, CancellationToken, Task<int>> body,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        try
+        {
+            return await body(connection, cancellationToken);
+        }
+        finally
+        {
+            await ReleaseLockAsync(connection);
+        }
+    }
+
+    private static async Task AcquireLockAsync(NpgsqlConnection connection, CancellationToken cancellationToken)
+    {
+        for (var waited = 0; waited <= LockTimeoutMs; waited += 200)
+        {
+            await using var command = new NpgsqlCommand("SELECT pg_try_advisory_lock($1)", connection);
+            command.Parameters.Add(new NpgsqlParameter { Value = MigrationLockKey });
+            if ((bool)(await command.ExecuteScalarAsync(cancellationToken))!)
+                return;
+
+            await Task.Delay(200, cancellationToken);
+        }
+
+        throw new InvalidOperationException(
+            "Another chetah-db run holds the migration lock on this database. Nothing was executed; retry when it finishes.");
+    }
+
+    private static async Task ReleaseLockAsync(NpgsqlConnection connection)
+    {
+        try
+        {
+            await using var command = new NpgsqlCommand("SELECT pg_advisory_unlock($1)", connection);
+            command.Parameters.Add(new NpgsqlParameter { Value = MigrationLockKey });
+            await command.ExecuteScalarAsync();
+        }
+        catch (NpgsqlException)
+        {
+            // The session ended, which released the lock anyway.
+        }
+    }
+
     /// <summary>Prints the DDL the catalog comparison produces and writes no DDL. Missing
     /// <c>"$id"</c> members are still persisted to the schema file: identity has to be recorded when
     /// it is decided, or the next run would allocate different ones.</summary>
-    public async Task<int> DiffAsync(Schema schema, CancellationToken cancellationToken = default)
+    public Task<int> DiffAsync(Schema schema, CancellationToken cancellationToken = default) =>
+        WithLockAsync((connection, token) => DiffCoreAsync(connection, schema, token), cancellationToken);
+
+    /// <summary>Applies pending journal entries, records new ones, then executes them.
+    /// Every migration runs in one transaction together with its applied-state row.</summary>
+    public Task<int> ApplyAsync(Schema schema, CancellationToken cancellationToken = default) =>
+        WithLockAsync((connection, token) => ApplyCoreAsync(connection, schema, token), cancellationToken);
+
+    private async Task<int> DiffCoreAsync(
+        NpgsqlConnection connection,
+        Schema schema,
+        CancellationToken cancellationToken)
     {
-        await using var connection = await OpenAsync(cancellationToken);
         var (_, identities) = await ResolveIdentitiesAsync(connection, schema, cancellationToken);
         if (!identities.CanApply)
             return RefuseIdentity(identities);
@@ -106,11 +170,11 @@ internal sealed class MigrationRunner
         return 0;
     }
 
-    /// <summary>Applies pending journal entries, records new ones, then executes them.
-    /// Every migration runs in one transaction together with its applied-state row.</summary>
-    public async Task<int> ApplyAsync(Schema schema, CancellationToken cancellationToken = default)
+    private async Task<int> ApplyCoreAsync(
+        NpgsqlConnection connection,
+        Schema schema,
+        CancellationToken cancellationToken)
     {
-        await using var connection = await OpenAsync(cancellationToken);
         await EnsureInternalSchemaAsync(connection, cancellationToken);
         await ExecuteAsync(connection, null, CreateStateTable, cancellationToken);
 
@@ -150,7 +214,9 @@ internal sealed class MigrationRunner
         if (!identities.CanApply)
             return RefuseIdentity(identities);
 
-        if (journal.Entries.Count == 0 && live.Tables.Count > 0)
+        // A baseline describes an adopted database once. Another checkout sharing the database must
+        // not add its own copy of that same record.
+        if (journal.Entries.Count == 0 && live.Tables.Count > 0 && applied.Count == 0)
         {
             var baseline = _store.Write(Stamp(), "baseline", [], live);
             await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
@@ -319,6 +385,7 @@ internal sealed class MigrationRunner
         await using (var pin = new NpgsqlCommand($"SET search_path TO {SchemaDiff.Quote(_schema)}", connection))
             await pin.ExecuteNonQueryAsync(cancellationToken);
 
+        await AcquireLockAsync(connection, cancellationToken);
         return connection;
     }
 
