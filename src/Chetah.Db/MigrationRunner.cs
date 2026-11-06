@@ -50,6 +50,7 @@ internal sealed class MigrationRunner
     private readonly MigrationStore _store;
     private readonly TextWriter _output;
     private readonly Func<IReadOnlyList<Operation>, bool> _confirm;
+    private readonly bool _check;
     private string _schema = "";
 
     /// <param name="schemaPath">The schema file itself: the tool writes missing <c>"$id"</c> members
@@ -58,13 +59,16 @@ internal sealed class MigrationRunner
     /// statements that cannot be undone.</param>
     /// <param name="dropAdd">Objects explicitly declared as new (<c>table</c> or <c>table.column</c>),
     /// which resolves "one object gone, one new" into a drop plus an add instead of a rename.</param>
+    /// <param name="check">Read-only inspection: no file is written, no DDL runs, no lock is taken and
+    /// no internal table is created. Suitable for CI.</param>
     public MigrationRunner(
         string connectionString,
         string schemaPath,
         string migrationsDirectory,
         TextWriter output,
         Func<IReadOnlyList<Operation>, bool> confirm,
-        IReadOnlySet<string>? dropAdd = null)
+        IReadOnlySet<string>? dropAdd = null,
+        bool check = false)
     {
         _connectionString = connectionString;
         _schemaPath = schemaPath;
@@ -72,22 +76,30 @@ internal sealed class MigrationRunner
         _store = new MigrationStore(migrationsDirectory);
         _output = output;
         _confirm = confirm;
+        _check = check;
     }
 
-    /// <summary>Runs a command under the migration lock: acquisition happens with the connection,
-    /// release here, so a pooled session never keeps the lock after the run.</summary>
+    /// <summary>Runs a command, holding the migration lock unless the run is read-only. Acquisition
+    /// and release bracket the body, so a pooled session never keeps the lock after the run.</summary>
     private async Task<int> WithLockAsync(
         Func<NpgsqlConnection, CancellationToken, Task<int>> body,
         CancellationToken cancellationToken)
     {
         await using var connection = await OpenAsync(cancellationToken);
+
+        // A read-only run changes nothing, so it needs no lock: in CI it must not queue behind a
+        // migration, and it must not make anything wait on it.
+        if (!_check)
+            await AcquireLockAsync(connection, cancellationToken);
+
         try
         {
             return await body(connection, cancellationToken);
         }
         finally
         {
-            await ReleaseLockAsync(connection);
+            if (!_check)
+                await ReleaseLockAsync(connection);
         }
     }
 
@@ -137,9 +149,12 @@ internal sealed class MigrationRunner
         Schema schema,
         CancellationToken cancellationToken)
     {
-        var (_, identities) = await ResolveIdentitiesAsync(connection, schema, cancellationToken);
+        var (ids, identities) = await ResolveIdentitiesAsync(connection, schema, cancellationToken);
         if (!identities.CanApply)
             return RefuseIdentity(identities);
+
+        // Only now, with identity resolved and consistent, does the run record what it resolved.
+        await PersistIdentitiesAsync(schema, ids, cancellationToken);
 
         var plan = await SchemaDiff.ComputeAsync(
             SchemaCatalog.FromSchema(schema),
@@ -167,7 +182,9 @@ internal sealed class MigrationRunner
         _output.WriteLine(plan.Blocked.Count > 0
             ? $"{plan.Operations.Count} statement(s); {plan.Blocked.Count} refused, nothing was written."
             : $"{plan.Operations.Count} statement(s); nothing was written.");
-        return 0;
+
+        // A check run reports pending work through its exit code, which is what CI gates on.
+        return _check ? 1 : 0;
     }
 
     private async Task<int> ApplyCoreAsync(
@@ -213,6 +230,8 @@ internal sealed class MigrationRunner
         var (ids, identities) = await ResolveIdentitiesAsync(connection, schema, cancellationToken);
         if (!identities.CanApply)
             return RefuseIdentity(identities);
+
+        await PersistIdentitiesAsync(schema, ids, cancellationToken);
 
         // A baseline describes an adopted database once. Another checkout sharing the database must
         // not add its own copy of that same record.
@@ -272,22 +291,46 @@ internal sealed class MigrationRunner
         return 0;
     }
 
-    /// <summary>Matches declared objects to recorded identities, persisting any missing
-    /// <c>"$id"</c> as it goes. Allocation runs off the highest id the file and the registry know, so
-    /// a tombstoned id is never handed out again.</summary>
+    /// <summary>Matches declared objects to recorded identities. Nothing is written: a run that ends
+    /// in a refusal must not have touched the schema file.</summary>
     private async Task<(SchemaIds Ids, ResolvedIdentities Identities)> ResolveIdentitiesAsync(
         NpgsqlConnection connection,
         Schema schema,
         CancellationToken cancellationToken)
     {
         var registry = await IdentityRegistry.ReadAsync(connection, null, cancellationToken);
-        var ids = await SchemaFile.EnsureIdsAsync(_schemaPath, schema, registry, cancellationToken);
+        var ids = SchemaFile.ResolveIds(schema, registry);
         return (ids, Identity.Resolve(schema, ids, registry, _dropAdd));
+    }
+
+    /// <summary>Records the ids this run resolved into the schema file, unless the run is read-only.
+    /// Writing is what makes the next run's rename detection possible.</summary>
+    private async Task PersistIdentitiesAsync(
+        Schema schema,
+        SchemaIds ids,
+        CancellationToken cancellationToken)
+    {
+        var missing = SchemaFile.Missing(schema);
+        if (missing.Count == 0)
+            return;
+
+        if (_check)
+        {
+            _output.WriteLine(
+                $"Read-only: {missing.Count} missing \"$id\" member(s) would be written to {_schemaPath}: "
+                + $"{string.Join(", ", missing)}.");
+            return;
+        }
+
+        var written = await SchemaFile.PersistIdsAsync(_schemaPath, schema, ids, cancellationToken);
+        _output.WriteLine($"Assigned {written} missing \"$id\" member(s) in {_schemaPath}.");
     }
 
     private int RefuseIdentity(ResolvedIdentities identities)
     {
-        _output.WriteLine("Refusing to plan: object identity is ambiguous, so no migration was written.");
+        _output.WriteLine(
+            "Refusing to plan: the schema file and this database disagree about object identity, "
+            + "so no migration was written and nothing was renamed or replaced.");
         foreach (var refusal in identities.Refusals)
             _output.WriteLine($"  - {refusal}");
         return 1;
@@ -385,7 +428,6 @@ internal sealed class MigrationRunner
         await using (var pin = new NpgsqlCommand($"SET search_path TO {SchemaDiff.Quote(_schema)}", connection))
             await pin.ExecuteNonQueryAsync(cancellationToken);
 
-        await AcquireLockAsync(connection, cancellationToken);
         return connection;
     }
 

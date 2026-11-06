@@ -582,6 +582,107 @@ public class MigrationApplyTests
     }
 
     [PostgresFact]
+    public async Task CheckMode_OnAnUninitializedDatabase_WritesNothing()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var output = new StringWriter();
+
+        // No "chetah" schema exists yet: inspecting a fresh or never-migrated database must work,
+        // and must not create anything to do so.
+        Assert.Equal(1, await fixture.Runner(output, check: true).DiffAsync(fixture.Parse(UsersSchema)));
+
+        Assert.Contains("CREATE TABLE", output.ToString(), StringComparison.Ordinal);
+        Assert.Contains("would be written", output.ToString(), StringComparison.Ordinal);
+        Assert.Equal(0, await fixture.CountAsync(
+            "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'chetah' AND table_name = 'objects'"));
+        Assert.Equal(0, await fixture.CountAsync(
+            "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public'"));
+        Assert.Equal(0, await fixture.CountAsync(
+            """SELECT count(*) FROM information_schema.schemata WHERE schema_name = 'chetah'"""));
+        Assert.False(Directory.Exists(fixture.MigrationsDirectory));
+        Assert.DoesNotContain("\"$id\"", File.ReadAllText(fixture.SchemaPath), StringComparison.Ordinal);
+    }
+
+    [PostgresFact]
+    public async Task CheckMode_WhenInSync_ExitsZeroAndWritesNothing()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(UsersSchema)));
+
+        var schemaJson = File.ReadAllText(fixture.SchemaPath);
+        var output = new StringWriter();
+
+        Assert.Equal(0, await fixture.Runner(output, check: true).DiffAsync(fixture.CurrentSchema()));
+
+        Assert.Contains("No changes", output.ToString(), StringComparison.Ordinal);
+        Assert.Equal(schemaJson, File.ReadAllText(fixture.SchemaPath));
+        Assert.Single(new MigrationStore(fixture.MigrationsDirectory).ReadJournal().Entries);
+    }
+
+    [PostgresFact]
+    public async Task CheckMode_WithAPendingChange_ExitsOneWithoutWriting()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(UsersSchema)));
+
+        var pending = """
+            { "tables": { "users": { "columns": {
+              "id": { "type": "integer", "nullable": false },
+              "name": { "type": "text" },
+              "email": { "type": "text" } } } } }
+            """;
+        var schema = fixture.Parse(pending);
+
+        var output = new StringWriter();
+        Assert.Equal(1, await fixture.Runner(output, check: true).DiffAsync(schema));
+
+        Assert.Contains("ADD COLUMN \"email\"", output.ToString(), StringComparison.Ordinal);
+        Assert.Equal(pending, File.ReadAllText(fixture.SchemaPath));
+        Assert.Single(new MigrationStore(fixture.MigrationsDirectory).ReadJournal().Entries);
+        Assert.Equal(0, await fixture.CountAsync(ColumnExists("users", "email")));
+    }
+
+    [PostgresFact]
+    public async Task RefusedIdentity_DoesNotTouchTheSchemaFile()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(UsersSchema)));
+
+        // The id that already names the users *table*, claimed by a column, plus a brand-new table
+        // whose ids were never assigned. The refusal must come before any write.
+        var tableId = Convert.ToInt64(
+            await fixture.ScalarAsync("SELECT id FROM chetah.objects WHERE kind = 'table' AND name = 'users'"));
+        var conflicting = $$"""
+            { "tables": {
+              "users": { "columns": { "id": { "$id": {{tableId}}, "type": "integer", "nullable": false } } },
+              "widgets": { "columns": { "id": { "type": "integer", "nullable": false } } } } }
+            """;
+        fixture.Parse(conflicting);
+        var before = File.ReadAllText(fixture.SchemaPath);
+
+        var output = new StringWriter();
+        Assert.Equal(1, await fixture.Runner(output).DiffAsync(fixture.CurrentSchema()));
+
+        Assert.Contains("outside this table", output.ToString(), StringComparison.Ordinal);
+        Assert.Equal(before, File.ReadAllText(fixture.SchemaPath));
+    }
+
+    [PostgresFact]
+    public async Task Diff_OnAnUninitializedDatabase_ReportsThePlan()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var output = new StringWriter();
+
+        Assert.Equal(0, await fixture.Runner(output).DiffAsync(fixture.Parse(UsersSchema)));
+
+        Assert.Contains("CREATE TABLE \"users\"", output.ToString(), StringComparison.Ordinal);
+        // diff writes the resolved ids and no DDL.
+        Assert.Contains("\"$id\"", File.ReadAllText(fixture.SchemaPath), StringComparison.Ordinal);
+        Assert.Equal(0, await fixture.CountAsync(
+            "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public'"));
+    }
+
+    [PostgresFact]
     public async Task ExistingDatabase_IsRecordedAsBaseline()
     {
         await using var fixture = await Fixture.CreateAsync();
@@ -704,9 +805,13 @@ public class MigrationApplyTests
             return fixture;
         }
 
+        /// <summary>Re-reads the schema file as it is on disk, without rewriting it.</summary>
+        internal Schema CurrentSchema() => SchemaParser.Parse(File.ReadAllText(SchemaPath)).Schema!;
+
         internal MigrationRunner Runner(
             StringWriter output,
             Func<IReadOnlyList<Operation>, bool>? confirm = null,
+            bool check = false,
             params string[] dropAdd) =>
             new(
                 ConnectionString,
@@ -714,7 +819,8 @@ public class MigrationApplyTests
                 MigrationsDirectory,
                 output,
                 confirm ?? (_ => true),
-                new HashSet<string>(dropAdd, StringComparer.Ordinal));
+                new HashSet<string>(dropAdd, StringComparer.Ordinal),
+                check);
 
         /// <summary>A second working copy on the same database, standing in for another process.</summary>
         internal Checkout NewCheckout(string json)

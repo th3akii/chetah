@@ -33,7 +33,10 @@ public class SchemaFileTests : IDisposable
             """;
         File.WriteAllText(_path, json);
 
-        var ids = await SchemaFile.EnsureIdsAsync(_path, SchemaParser.Parse(json).Schema!, IdentityRegistry.Empty);
+        var schema = SchemaParser.Parse(json).Schema!;
+        var ids = SchemaFile.ResolveIds(schema, IdentityRegistry.Empty);
+        Assert.Equal(new[] { "users", "users.id", "users.name" }, SchemaFile.Missing(schema));
+        await SchemaFile.PersistIdsAsync(_path, schema, ids);
 
         var written = File.ReadAllText(_path);
         Assert.Contains("// identity has to live with the declaration", written, StringComparison.Ordinal);
@@ -57,14 +60,32 @@ public class SchemaFileTests : IDisposable
         const string json = """{ "tables": { "t": { "columns": { "c": { "type": "text" } } } } }""";
         File.WriteAllText(_path, json);
 
-        await SchemaFile.EnsureIdsAsync(_path, SchemaParser.Parse(json).Schema!, IdentityRegistry.Empty);
-        var first = File.ReadAllText(_path);
-        Assert.NotEqual(json, first);
+        var first = SchemaParser.Parse(json).Schema!;
+        await SchemaFile.PersistIdsAsync(_path, first, SchemaFile.ResolveIds(first, IdentityRegistry.Empty));
+        var written = File.ReadAllText(_path);
+        Assert.NotEqual(json, written);
 
-        var adopted = await SchemaFile.EnsureIdsAsync(_path, SchemaParser.Parse(first).Schema!, IdentityRegistry.Empty);
+        var reread = SchemaParser.Parse(written).Schema!;
+        var adopted = SchemaFile.ResolveIds(reread, IdentityRegistry.Empty);
 
         Assert.Empty(adopted.Assigned);
-        Assert.Equal(first, File.ReadAllText(_path));
+        Assert.Empty(SchemaFile.Missing(reread));
+        Assert.Equal(0, await SchemaFile.PersistIdsAsync(_path, reread, adopted));
+        Assert.Equal(written, File.ReadAllText(_path));
+    }
+
+    [Fact]
+    public async Task Resolution_DoesNotTouchTheFile()
+    {
+        // A run that ends in a refusal must not have written anything first.
+        const string json = """{ "tables": { "t": { "columns": { "c": { "type": "text" } } } } }""";
+        File.WriteAllText(_path, json);
+
+        var schema = SchemaParser.Parse(json).Schema!;
+        var ids = SchemaFile.ResolveIds(schema, IdentityRegistry.Empty);
+
+        Assert.NotEmpty(ids.Assigned);
+        Assert.Equal(json, File.ReadAllText(_path));
     }
 
     [Fact]
@@ -72,7 +93,10 @@ public class SchemaFileTests : IDisposable
     {
         File.WriteAllText(_path, """{ "tables": { "t": """ );
 
+        var schema = SchemaParser.Parse(
+            """{ "tables": { "t": { "columns": { "c": { "type": "text" } } } } }""").Schema!;
+
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            SchemaFile.EnsureIdsAsync(_path, SchemaParser.Parse("""{ "tables": { "t": { "columns": { "c": { "type": "text" } } } } }""").Schema!, IdentityRegistry.Empty));
+            SchemaFile.PersistIdsAsync(_path, schema, SchemaFile.ResolveIds(schema, IdentityRegistry.Empty)));
     }
 }

@@ -19,20 +19,19 @@ internal sealed record SchemaIds(
 /// The id is the only thing that tells Chetah a column was renamed rather than removed while an
 /// unrelated one appeared: a rename keeps the id, a replacement does not. Keeping it in the schema
 /// file means it travels with the declaration through a rename, a review and a git history, without
-/// a side channel that could drift from it.</summary>
+/// a side channel that could drift from it.
+///
+/// Resolution and writing are separate on purpose: a run that cannot resolve identities safely must
+/// not have modified the file first.</summary>
 internal static class SchemaFile
 {
-    /// <summary>Resolves an id for every table and column that lacks one and writes back only the
-    /// missing members. The file is edited textually so comments and formatting survive; a full
-    /// re-serialize would silently delete the documentation users keep inside the schema.</summary>
+    /// <summary>Resolves an id for every table and column, adopting the id the registry already holds
+    /// for the same name and allocating above the highest id either side has ever used. Pure: the
+    /// file is not touched.</summary>
     /// <param name="registry">Recorded identities. An object with no <c>"$id"</c> in the file keeps
-    /// the id the registry already holds for its name (adoption, so a schema written before ids
-    /// existed does not look like a wholesale replacement); only a genuinely new object allocates.</param>
-    public static async Task<SchemaIds> EnsureIdsAsync(
-        string path,
-        Schema schema,
-        IdentityRegistry registry,
-        CancellationToken cancellationToken = default)
+    /// the id the registry holds for its name (adoption, so a schema written before ids existed does
+    /// not look like a wholesale replacement); only a genuinely new object allocates.</param>
+    public static SchemaIds ResolveIds(Schema schema, IdentityRegistry registry)
     {
         var tables = new Dictionary<string, long>(StringComparer.Ordinal);
         var columns = new Dictionary<(string Table, string Column), long>();
@@ -66,14 +65,29 @@ internal static class SchemaFile
             }
         }
 
-        var ids = new SchemaIds(tables, columns, assigned);
-        // Adoption writes too: the file has to record the identity it adopted, or the next run
-        // would have to adopt again and could not tell a rename from a replacement.
-        var missing = schema.Tables.Sum(table =>
-            (table.Id is null ? 1 : 0) + table.Columns.Count(column => column.Id is null));
+        return new SchemaIds(tables, columns, assigned);
+    }
 
-        if (missing == 0)
-            return ids;
+    /// <summary>Declared tables and columns with no <c>"$id"</c> member, as
+    /// <c>table</c> / <c>table.column</c> paths.</summary>
+    public static IReadOnlyList<string> Missing(Schema schema) =>
+        schema.Tables
+            .SelectMany(table => (table.Id is null ? new[] { table.Name } : [])
+                .Concat(table.Columns
+                    .Where(column => column.Id is null)
+                    .Select(column => $"{table.Name}.{column.Name}")))
+            .ToArray();
+
+    /// <summary>Writes the <c>"$id"</c> members the file is missing, by editing the text so comments
+    /// and layout survive. Returns how many members were written.</summary>
+    public static async Task<int> PersistIdsAsync(
+        string path,
+        Schema schema,
+        SchemaIds ids,
+        CancellationToken cancellationToken = default)
+    {
+        if (Missing(schema).Count == 0)
+            return 0;
 
         var bytes = await File.ReadAllBytesAsync(path, cancellationToken);
         var bom = HasBom(bytes) ? bytes[..3] : [];
@@ -87,13 +101,13 @@ internal static class SchemaFile
             if (table.Id is null)
             {
                 var offset = At(positions.Tables, table.Name, path);
-                edits.Add((offset, IdMember(text, offset, tables[table.Name])));
+                edits.Add((offset, IdMember(text, offset, ids.Tables[table.Name])));
             }
 
             foreach (var column in table.Columns.Where(column => column.Id is null))
             {
                 var offset = At(positions.Columns, (table.Name, column.Name), path);
-                edits.Add((offset, IdMember(text, offset, columns[(table.Name, column.Name)])));
+                edits.Add((offset, IdMember(text, offset, ids.Columns[(table.Name, column.Name)])));
             }
         }
 
@@ -102,7 +116,7 @@ internal static class SchemaFile
             builder.Insert(offset, member);
 
         await File.WriteAllBytesAsync(path, [.. bom, .. Encoding.UTF8.GetBytes(builder.ToString())], cancellationToken);
-        return ids;
+        return edits.Count;
     }
 
     private static long DeclaredMax(Schema schema) =>

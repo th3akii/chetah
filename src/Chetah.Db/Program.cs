@@ -25,6 +25,7 @@ public static class Program
         string? connectionString = null;
         string? migrationsDirectory = null;
         var dropAdd = new HashSet<string>(StringComparer.Ordinal);
+        var check = false;
 
         for (var i = 1; i < args.Length; i++)
         {
@@ -41,6 +42,9 @@ public static class Program
                     break;
                 case "--drop-add" when i + 1 < args.Length:
                     dropAdd.Add(args[++i]);
+                    break;
+                case "--check":
+                    check = true;
                     break;
                 default:
                     Console.Error.WriteLine($"Unknown or incomplete argument: {args[i]}");
@@ -68,6 +72,12 @@ public static class Program
             return 1;
         }
 
+        if (check && command != "diff")
+        {
+            Console.Error.WriteLine("--check is only valid with diff; apply writes migrations by definition.");
+            return Usage();
+        }
+
         migrationsDirectory ??= Path.Combine(Path.GetDirectoryName(Path.GetFullPath(schemaPath))!, "migrations");
         var runner = new MigrationRunner(
             connectionString,
@@ -75,7 +85,8 @@ public static class Program
             migrationsDirectory,
             Console.Out,
             ConfirmDestructive,
-            dropAdd);
+            dropAdd,
+            check);
 
         try
         {
@@ -120,11 +131,15 @@ public static class Program
     {
         Console.Error.WriteLine("""
             Usage:
-              chetah-db diff  --schema <schema.json> [--connection <conn>] [--migrations <dir>] [--drop-add <object> ...]
+              chetah-db diff  --schema <schema.json> [--connection <conn>] [--migrations <dir>] [--drop-add <object> ...] [--check]
               chetah-db apply --schema <schema.json> [--connection <conn>] [--migrations <dir>] [--drop-add <object> ...]
 
             The connection string defaults to CHETAH_CONNECTION_STRING. Migrations are written to
             <dir> (default: "migrations" beside the schema file).
+
+            diff  prints the DDL and records missing "$id" members in the schema file.
+            diff --check is read-only: no file, no DDL, no lock. It exits 1 when a migration is
+            pending, so a CI job can gate on it, and 0 when the database matches the schema.
 
             --drop-add marks an object as new when another one disappeared from the same table, e.g.
             --drop-add users.address or --drop-add widgets. A rename needs no flag: keep its "$id".

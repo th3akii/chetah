@@ -19,11 +19,22 @@ internal sealed record IdentityRegistry(IReadOnlyList<IdentityRow> Rows)
     public IReadOnlyList<IdentityRow> Live(string kind) =>
         Rows.Where(row => !row.Dropped && row.Kind == kind).ToArray();
 
+    /// <summary>Reads the registry, or an empty one when the database has never been initialised: a
+    /// read-only inspection of a fresh database must work, and it must not create anything to do so.</summary>
     public static async Task<IdentityRegistry> ReadAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction? transaction,
         CancellationToken cancellationToken)
     {
+        await using (var exists = new NpgsqlCommand(
+            """SELECT to_regclass('"chetah"."objects"') IS NOT NULL""",
+            connection,
+            transaction))
+        {
+            if (!(bool)(await exists.ExecuteScalarAsync(cancellationToken))!)
+                return Empty;
+        }
+
         await using var command = new NpgsqlCommand(
             """
             SELECT id, kind, table_id, name, dropped_at IS NOT NULL
