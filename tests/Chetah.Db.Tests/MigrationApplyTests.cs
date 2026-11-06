@@ -800,6 +800,7 @@ public class MigrationApplyTests
             createsNote,
             "add_note",
             """ALTER TABLE "users" ADD COLUMN "note" text;""");
+        var schemaBefore = File.ReadAllText(second.SchemaPath);
 
         Assert.Equal(1, await second.Runner.ApplyAsync(second.Schema));
 
@@ -808,9 +809,10 @@ public class MigrationApplyTests
         Assert.Contains(createsNote, reported, StringComparison.Ordinal);
         Assert.Contains("never rewritten or merged", reported, StringComparison.Ordinal);
 
-        // Nothing ran and no history was rewritten.
+        // Nothing ran, no history was rewritten, and the schema file was not touched either.
         Assert.Equal(1, await fixture.CountAsync("SELECT count(*) FROM chetah.migrations"));
         Assert.Equal(0, await fixture.CountAsync(ColumnExists("users", "note")));
+        Assert.Equal(schemaBefore, File.ReadAllText(second.SchemaPath));
 
         // The read-only run reports it too, and CI sees a failing exit code.
         Assert.Equal(1, await second.CheckRunner().DiffAsync(second.Schema));
