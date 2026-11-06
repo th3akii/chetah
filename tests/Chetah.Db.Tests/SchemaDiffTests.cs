@@ -442,6 +442,34 @@ public class SchemaDiffTests
     }
 
     [Fact]
+    public async Task AChainOfReferences_IsDroppedFromTheFrontOfTheChain()
+    {
+        // a_top is referenced by m_mid, which is referenced by z_low. Alphabetical order would drop
+        // a_top first; dependency order starts at the end of the chain.
+        var desired = Desired("""{ "tables": { "keep": { "columns": { "id": { "type": "integer", "nullable": false } } } } }""");
+        var live = Live(
+            Table("a_top", ("id", "int4", true)),
+            Table("m_mid", ("id", "int4", true)),
+            Table("z_low", ("id", "int4", true)),
+            Table("keep", ("id", "int4", true))) with
+        {
+            Constraints =
+            [
+                new ConstraintState("m_mid_fkey", "f", "m_mid", ["id"], "a_top", ["id"]),
+                new ConstraintState("z_low_fkey", "f", "z_low", ["id"], "m_mid", ["id"]),
+            ],
+        };
+
+        var plan = await SchemaDiff.ComputeAsync(desired, live, NoNulls);
+
+        Assert.Equal(
+            new[] { "DROP TABLE \"z_low\"", "DROP TABLE \"m_mid\"", "DROP TABLE \"a_top\"" },
+            plan.Operations
+                .Where(operation => operation.Target!.Kind == OperationKinds.DropTable)
+                .Select(operation => operation.Statement));
+    }
+
+    [Fact]
     public async Task DeclaredForeignKeyOntoADroppedTable_IsRefused()
     {
         var desired = Desired("""
