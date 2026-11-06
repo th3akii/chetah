@@ -100,18 +100,18 @@ resolution hold up as the query chain grows?
 
 ### Stage 7 — Schema Tooling and Migrations
 
-**Status:** Delivered 2026-11-05 — `src/Chetah.Db` (`chetah-db`) implements the approved diff/push tool: catalog introspection, plain-SQL journal with snapshots, `chetah_migrations` applied-state, and a destructive confirmation gate. See [`SCHEMA_TOOLING.md`](SCHEMA_TOOLING.md) and [`DECISIONS.md`](DECISIONS.md) D005.
+**Status:** Delivered 2026-11-05 — `src/Chetah.Db` (`chetah-db`) implements the approved diff/push tool: catalog introspection, plain-SQL journal with snapshots, `"chetah"."migrations"` applied-state, and a destructive confirmation gate. Extended 2026-11-06 with persistent object identities (`"$id"`, so renames are paired instead of drop+add), primary keys, foreign keys, unique constraints, indexes, defaults and identity columns, plus a session lock that serialises concurrent runs. See [`SCHEMA_TOOLING.md`](SCHEMA_TOOLING.md) and [`DECISIONS.md`](DECISIONS.md) D005/D006.
 **Goal:** Optional tooling for applying schema changes.
 
 The original conditional is resolved: manual schema management is now real friction (Stage 2 live fixtures seed databases by hand), so the tool is approved, with exactly the author-noted must-have below in scope.
 
 Author-noted must-have, delivered as the mandatory `diff` command: **drift detection** — the schema file is the source of truth for generated code, but nothing notices when the database has drifted (a renamed column like `adress` → `address` turns into a runtime `42703` error only when a query runs). `diff` flags the mismatch before execution, and `apply` establishes it.
 
-Still open after this stage: constraints/indexes (Stage 7.5), schema-JSON ergonomics (7.6), renames as paired migrations, rollback, and non-interactive applies.
+Still open after this stage: check/exclusion constraints, rollback, non-interactive applies, and schema-JSON ergonomics (7.6). Renames are paired and indexes/constraints are expressible as of the 2026-11-06 extension.
 
 ### Stage 7.5 — Constraint Metadata
 
-**Status:** Planned 2026-11-05, not started — approved direction is "start small and work towards full", in four phases (primary keys → foreign keys → unique/check → indexes and FK actions). Plan: [`CONSTRAINT_METADATA.md`](CONSTRAINT_METADATA.md).
+**Status:** Planned 2026-11-05, not started — approved direction is "start small and work towards full", in four phases (primary keys → foreign keys → unique/check → indexes and FK actions). Plan: [`CONSTRAINT_METADATA.md`](CONSTRAINT_METADATA.md). The migration-tool half is delivered (2026-11-06): primary keys, foreign keys, unique constraints and indexes are declared in the schema file and diffed; what remains here is the generated runtime metadata and the check-constraint phase.
 **Goal:** Carry keys and constraints — primary keys, foreign keys, unique, and other column constraints — in the schema so generated metadata can express them (needed before `Where`/`Insert` can reason about keys).
 
 The gating question is answered by the plan: primary keys and foreign keys first, everything else only when a consumer needs it. Runtime query behaviour does not change in these phases; the wins are database integrity and closing the "a hand-added key makes a column permanently undroppable" hole in the migration tool.

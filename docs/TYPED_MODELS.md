@@ -53,6 +53,13 @@ Rules:
   supported list in the error.
 - `nullable` — optional. **Omitted means nullable**, matching PostgreSQL's own
   default. `"nullable": false` marks a NOT NULL column.
+- `$id` — maintained by `chetah-db`, not by hand: the tool writes a persistent
+  identity onto every table and column and uses it to tell a rename from a drop
+  plus an add ([`SCHEMA_TOOLING.md`](SCHEMA_TOOLING.md), D006).
+- Properties only the migration tool reads — `primaryKey`, `indexes`, `unique`,
+  `references`, `default`, `identity` — are accepted and ignored by the
+  generator, which maps columns to CLR types regardless. Vocabulary and
+  semantics: [`SCHEMA_TOOLING.md`](SCHEMA_TOOLING.md).
 - Column names must be plain identifiers (`[A-Za-z_][A-Za-z0-9_]*`) because they
   become C# property names (`first_name` → `FirstName`) and database rows are
   read by name. PostgreSQL columns that require quoting (spaces, `@`…) are

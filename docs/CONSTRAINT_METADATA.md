@@ -2,6 +2,12 @@
 
 > **Status:** Approved direction, not implemented. Agreed 2026-11-05 with the
 > author: "start small and work towards full", delivered in phases below.
+> **Update 2026-11-06:** the migration-tool half landed ahead of this plan —
+> `primaryKey` (composite included), single-column `unique`, `references`,
+> `indexes`, `default` and `identity` are declared in the schema file and
+> diffed, and expressible constraints no longer make a column permanently
+> undroppable. What remains here is the generated runtime metadata (phases that
+> feed `Where`/`Insert`) and check constraints.
 > Companion documents: [`ROADMAP.md`](ROADMAP.md) (Stage 7.5),
 > [`SCHEMA_TOOLING.md`](SCHEMA_TOOLING.md), [`TYPED_MODELS.md`](TYPED_MODELS.md),
 > [`DECISIONS.md`](DECISIONS.md).

@@ -1,8 +1,10 @@
 # Schema tooling and migrations (Stage 7)
 
 > **Status:** Implemented 2026-11-05 in `src/Chetah.Db` (`chetah-db`) and verified
-> against live PostgreSQL. The decisions below are recorded in
-> [`DECISIONS.md`](DECISIONS.md) D005. Companion documents:
+> against live PostgreSQL; extended 2026-11-06 with persistent object identities,
+> constraint/default/identity/index diffing, the `chetah` internal schema and
+> run serialisation. The decisions below are recorded in
+> [`DECISIONS.md`](DECISIONS.md) D005 and D006. Companion documents:
 > [`ROADMAP.md`](ROADMAP.md) (Stage 7), [`SPEC.md`](SPEC.md).
 
 ## Why
@@ -37,10 +39,15 @@ A diff/push tool in the drizzle-kit mental model, with cheap inspection added:
 3. **Destructive changes are prompted:** DROPs, type narrowing, and
    nullable→NOT NULL on populated columns require interactive confirmation.
    Never silently applied.
-4. **Applied-state table:** `chetah_migrations` — `id` bigserial, `hash` text,
-   `name` text, `applied_at` timestamptz — created in the schema the connection
-   resolves (search path, fallback `public`). It owns "what has been applied";
-   the journal owns "what has been generated".
+4. **Applied-state table:** `"chetah"."migrations"` — `id` bigserial, `hash`
+   text, `name` text, `applied_at` timestamptz — in Chetah's own `chetah`
+   schema, created on demand and never diffed (introspection reads the
+   application schema only). An older `chetah_migrations` in the application
+   schema is moved into `chetah` and renamed in one transaction, so its history
+   (and the ids it implies) survives the move; a table stranded between those
+   two steps by an interrupted manual move is picked up instead of being
+   shadowed by a fresh empty one. The table owns "what has been applied"; the
+   journal owns "what has been generated".
 5. **Transaction per `apply`:** the whole migration runs in one transaction. A
    failed statement rolls the run back; the recorded-but-unapplied migration is
    retried by the next `apply`. Per-statement execution was considered and
@@ -76,48 +83,130 @@ A diff/push tool in the drizzle-kit mental model, with cheap inspection added:
 ## Commands
 
 ```sh
-dotnet run --project src/Chetah.Db -- diff  --schema <schema.json> [--connection <conn>] [--migrations <dir>]
-dotnet run --project src/Chetah.Db -- apply --schema <schema.json> [--connection <conn>] [--migrations <dir>]
+dotnet run --project src/Chetah.Db -- diff  --schema <schema.json> [--connection <conn>] [--migrations <dir>] [--drop-add <object> ...]
+dotnet run --project src/Chetah.Db -- apply --schema <schema.json> [--connection <conn>] [--migrations <dir>] [--drop-add <object> ...]
 ```
 
 - `diff` — prints the DDL the catalog comparison produces, flags destructive
-  items, writes nothing.
+  items, writes no DDL. It does persist missing `"$id"` members into the schema
+  file: identity has to be recorded where it is decided, or the next run would
+  decide different ones.
 - `apply` — runs the destructive confirmation gate, writes the record files,
   executes the migration in one transaction, records it in
-  `chetah_migrations`.
+  `"chetah"."migrations"`.
+- `--drop-add <table>` / `--drop-add <table>.<column>` — resolves an otherwise
+  ambiguous replacement; see *Identities*.
 
 The connection string defaults to `CHETAH_CONNECTION_STRING`; migrations default
-to `migrations/` beside the schema file. Both commands resolve the managed
-schema with `current_schema()` (the connection's search path) and fail loudly
-when the search path names no existing schema.
+to `migrations/` beside the schema file. Both commands resolve the application
+schema once (the first existing schema on the search path that is not `chetah`),
+pin it with `SET search_path`, and hold a session advisory lock for the run, so
+two runs cannot plan from the same state or allocate the same identity.
 
-Day-to-day flow: edit `chetah-schema.json` → regenerate code (existing flow when
-typed models change) → `chetah-db diff` to review → `chetah-db apply` to adopt.
+## Identities
+
+Matching by name cannot tell a rename from a drop plus an add, and the two have
+opposite consequences: one moves values, the other deletes them. Every table and
+column therefore carries a persistent `"$id"` in `chetah-schema.json`:
+
+```json
+"users": {
+  "$id": 1,
+  "columns": {
+    "username": { "$id": 3, "type": "text" }
+  }
+}
+```
+
+- **Generated, not authored.** The tool writes the members it is missing, by
+  editing the file textually (a small JSONC reader locates the objects), so
+  comments and layout survive. Users never assign ids by hand.
+- **A rename keeps the id.** Renaming the key while keeping `"$id": 3` declares
+  the rename; the plan emits `ALTER TABLE … RENAME COLUMN` and reads the catalog
+  as if the rename had already happened, so the column is neither dropped nor
+  re-added.
+- **A replacement does not.** An object with a new identity next to a tracked
+  object that vanished is ambiguous, and the plan is refused with both
+  resolutions named: keep the `"$id"` for a rename, or pass
+  `--drop-add table.column` to record a real drop plus add (still gated).
+- **Ids are never reused.** `"chetah"."objects"` records every id with its name;
+  dropped objects stay as tombstones, and allocation starts above the highest id
+  the file or the registry has ever seen.
+- **Conflicts are refused, not guessed.** A `"$id"` duplicated by two branches,
+  a `"$id"` claimed by a different object, or one that names a dropped object
+  stops the run with the offending pair.
+- **Existing files adopt.** A schema file without `"$id"`s keeps the ids the
+  registry already holds for its names, so a declaration written before
+  identities existed is not mistaken for a rewrite.
+- The registry is synchronized inside the migration transaction, so a rollback
+  cannot leave identities describing a migration that never ran.
+
+## Schema vocabulary
+
+```json
+"users": {
+  "primaryKey": ["tenant_id", "email"],
+  "indexes": { "users_state_idx": { "columns": ["state"], "unique": false } },
+  "columns": {
+    "tenant_id": { "type": "integer", "nullable": false },
+    "email": { "type": "text", "nullable": false, "unique": true },
+    "role_id": { "type": "integer", "references": "roles.id" },
+    "created_at": { "type": "timestamp", "nullable": false, "default": "now()" },
+    "id": { "type": "bigint", "nullable": false, "identity": true }
+  }
+}
+```
+
+- `primaryKey` — column list, in constraint order; composite keys are just a
+  longer list.
+- `indexes` — one entry per standalone index, with `columns` and an optional
+  `unique`.
+- `unique` — a single-column UNIQUE constraint.
+- `references` — `table.column` or `schema.table.column`.
+- `default` — raw SQL, applied verbatim; compared cast-stripped and
+  whitespace-normalized, because PostgreSQL prints `'active'` back as
+  `'active'::text`.
+- `identity` — `GENERATED BY DEFAULT AS IDENTITY`, integer/bigint only, implies
+  `NOT NULL` and cannot be combined with `default`.
+- Check and exclusion constraints, multi-column unique constraints and foreign
+  keys, and expression indexes are not expressible yet: they are read from the
+  catalog, never created or dropped, and block a statement that would remove
+  them silently.
 
 ## Scope details
 
-- **Supported operations (v1):** create/drop table, add column, drop column,
-  alter nullability, alter type among the supported scalar types (widening is
-  free; narrowing is gated). Column/tables added and removed in schema-file
-  order.
-- **Renames are not paired:** a rename comes out as drop+add and passes the
-  same destructive gate. Automatic rename pairing stays open until real
-  friction appears.
-- **Foreign objects are left alone:** constraints and standalone indexes the
-  schema file does not express are read from `pg_constraint`/`pg_index`, and a
-  plan that would remove one is refused before anything is written. `DROP
-  COLUMN` takes the column's indexes and constraints with it silently, and
-  `DROP TABLE` takes every object on the table, so both are blocked with the
-  object names reported by `diff` and `apply`. Removing them stays a manual
-  step until Stage 7.5 can express them.
-- **Pending migrations are re-validated, not trusted:** the same dependency
-  check and the destructive confirmation run again on every replay, against the
-  catalog as it is now. A recorded `DROP` that has since gained a dependent
-  index is refused; a recorded destructive change is confirmed again, and a
-  non-interactive replay refuses rather than assuming consent.
+- **Supported operations:** create/drop table, add/drop column, rename
+  table/column (by identity), alter type among the supported scalar types
+  (widening is free; narrowing is gated), alter nullability, set/drop default,
+  add/drop identity, add/drop primary key (composite included), add/drop
+  single-column unique and foreign key constraints, create/drop indexes.
+- **Ordering is fixed:** renames, then index drops, then constraint drops, then
+  column drops, then table drops, then table creates, then column adds and
+  alters, then primary keys and unique constraints, then foreign keys, then
+  index creates. Nothing is removed implicitly through the object that carried
+  it, and a foreign key can point at a table created in the same migration.
+- **Definitions, not names:** constraints and indexes are matched on kind,
+  columns, reference target and uniqueness, so a hand-named equivalent does not
+  churn on every apply.
+- **Destructive gate:** DROP TABLE, DROP COLUMN, DROP INDEX, DROP CONSTRAINT,
+  non-widening type changes, and `nullable → NOT NULL` on a column that already
+  holds NULLs require an interactive `yes`. Non-interactive runs refuse instead
+  of assuming consent.
+- **Unexpressible objects block:** check/exclusion constraints, multi-column
+  unique/foreign keys and expression indexes are read from `pg_constraint`/
+  `pg_index`, and a statement that would take one down is refused with the
+  object names before anything is written.
+- **Pending migrations are re-validated, not trusted:** the dependency check
+  runs again on every replay, against the catalog as it is now, which counts
+  every attached constraint and index — including ones the schema file does
+  express — because the recorded drop predates them. A recorded destructive
+  change is confirmed again, and a non-interactive replay refuses.
+- **One run at a time:** a session advisory lock guards planning and execution;
+  a competing run waits up to 30s and then fails with a clear message rather
+  than interleaving.
 - **Not in scope:** down/rollback migrations, seeds/data migrations,
-  non-interactive/CI mode, indexes/constraints (Stage 7.5), schema-JSON
-  ergonomics (Stage 7.6), other dialects (Stage 6), concurrent applies.
+  non-interactive/CI mode, check constraints, schema-JSON ergonomics
+  (Stage 7.6), other dialects (Stage 6).
 
 Implementation notes as built:
 
@@ -125,53 +214,68 @@ Implementation notes as built:
   `uuid`, `timestamp`), so a column that differs in spelling (e.g.
   `timestamptz`) is reported as a gated type change rather than silently
   accepted. Type modifiers (`timestamp(3)`) are not compared.
-- Adding a `NOT NULL` column to an already-populated table has no default to
-  draw on; the statement fails, the transaction rolls back, and the journal
-  entry is retried after the schema is corrected. Defaults are not expressed by
-  the schema file yet.
-- Managed tables are those in the resolved schema; `chetah_migrations` itself is
-  never diffed. Tables in other schemas are untouched.
-- A constraint with no column list (a table-level object) blocks any column
-  drop on that table: the schema file cannot say whether it references the
-  column, so the refusal is deliberately conservative. A foreign key owned by
-  another table is not read — PostgreSQL rejects the dependent drop itself and
-  the transaction rolls back.
+- Adding a `NOT NULL` column to an already-populated table without a `default`
+  fails; the transaction rolls back and the journal entry is retried after the
+  schema is corrected.
+- Managed tables are those in the resolved schema; the `chetah` schema is never
+  diffed. Tables in other schemas are untouched.
+- A table-level object that PostgreSQL reports without a column list blocks any
+  column drop on that table: the schema file cannot say whether it references
+  the column, so the refusal is deliberately conservative.
 
 ## Verification
 
-Disposable PostgreSQL fixtures, the same pattern as Stage 2 acceptance: unique
-schema per run, never touching shared tables, configured runs (a set
-`CHETAH_CONNECTION_STRING`) distinguished from skipped ones.
+Disposable PostgreSQL fixtures, the same pattern as Stage 2 acceptance: each run
+owns a throwaway database (internal state lives in a fixed `chetah` schema, so
+schemas inside one database would share it), never touching shared tables;
+configured runs (a set `CHETAH_CONNECTION_STRING`) are distinguished from
+skipped ones.
 
 `tests/Chetah.Db.Tests` covers:
 
 - **Offline diff** — fresh-create column order, add/drop column, drop table,
-  rename as gated drop+add, widening free / narrowing gated, `SET NOT NULL`
-  gated only when the column holds NULLs, `DROP NOT NULL` free, no-op on a
-  matching catalog, and drops of a column or table that carries a constraint or
-  index blocked (a retained column's index is not a dependency).
+  widening free / narrowing gated, `SET NOT NULL` gated only when the column
+  holds NULLs, `DROP NOT NULL` free, no-op on a matching catalog, primary key
+  and unique constraints inline in `CREATE TABLE`, foreign keys and indexes
+  added for an existing table, definition matching (a hand-named equivalent is
+  left alone), default/identity changes, a default that only differs by casts,
+  and drops blocked only by objects the schema cannot express.
+- **Identities** — `"$id"` members are written without disturbing comments or
+  layout and a second run writes nothing; a rename keeps the id and the values;
+  a table rename keeps its rows and its identity; an unqualified replacement is
+  refused with the exact `--drop-add` resolution; a deleted id is tombstoned and
+  never reissued; a schema file without ids adopts the recorded ones; duplicate
+  and non-positive ids are rejected by the parser.
 - **Record layout** — SQL file, snapshot, journal entry and hash; hand-edit
   changes the hash; baseline record has no statements; same stamp and slug get
   distinct ids.
 - **Live apply** — fresh database created via `apply`, journal/snapshot/SQL
-  matching what ran, `chetah_migrations` rows with the right hash and name,
+  matching what ran, `"chetah"."migrations"` rows with the right hash and name,
   `diff` reporting drift without writing, declined destructive gate writing
   nothing, failed statement rolling back with the journal entry present and no
-  migration row (rerun succeeds after the fix), hand-edited SQL refused, and an
-  existing database recorded as a baseline.
-- **Live dependency refusal** — a table with a real index and unique
-  constraint, and a real index on a second table: neither column drop nor table
-  drop is applied, the objects survive, and no journal entry or
-  `chetah_migrations` row is added.
+  migration row (rerun succeeds after the fix), hand-edited SQL refused, an
+  existing database recorded as a baseline, and a legacy `chetah_migrations`
+  table moved into `chetah` with its history (including a table stranded under
+  the old name by an interrupted move).
+- **Live constraints** — a table created with a primary key, identity column,
+  single-column unique, foreign key, default and unique index; a second apply
+  finds nothing; a later revision replaces the key with a composite one, drops
+  the unique and foreign key, swaps the index and changes the default.
+- **Live dependency handling** — a column drop takes its expressible index and
+  unique constraint with it through explicit, ordered drops; a check constraint
+  on the column or table still refuses the drop.
 - **Live replay validation** — a pending destructive entry replayed after an
   index was added to its target column is refused before confirmation; a pending
   destructive entry is refused when the confirmation gate says no and applied
   when it says yes; a pending entry without metadata is refused unless
   confirmed; a safe pending entry is replayed without consulting the gate.
+- **Live concurrency** — two runners with separate checkouts race on one
+  database: both succeed, the migration row exists once, and only one checkout
+  records the create.
 
 The CLI itself was exercised against a live database for the same flow,
-including both destructive-gate outcomes (non-interactive refusal, interactive
-`yes`).
+including identity allocation, a column rename through the file, the ambiguous
+replacement refusal, `--drop-add` resolving it, and constraint creation.
 
 ## Decisions log handoff
 

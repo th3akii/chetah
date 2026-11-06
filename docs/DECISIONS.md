@@ -177,26 +177,29 @@ the statements that hit the database are always reviewable.
   `--> statement-breakpoint`; journal entries carry the id, slug, sha256 of the
   SQL payload and statement count. `apply` re-verifies each pending file's hash
   and refuses to run a hand-edited migration.
-- `chetah_migrations` (`id bigserial`, `hash`, `name`, `applied_at
-  timestamptz`) records what has been applied in the schema the connection
-  resolves (`current_schema()`, i.e. the search path). The journal records what
-  has been generated; only the table decides what ran.
-- Each migration runs in one transaction together with its `chetah_migrations`
+- `"chetah"."migrations"` (`id bigserial`, `hash`, `name`, `applied_at
+  timestamptz`) records what has been applied, in Chetah's own `chetah` schema.
+  The journal records what has been generated; only the table decides what ran.
+- Each migration runs in one transaction together with its `"chetah"."migrations`
   row. A failed statement rolls everything back, the entry stays in the journal,
   and the next `apply` retries it. A retry is not a blind replay: the entry's
   recorded operations are re-checked against the current catalog (a drop that
   now has dependents is refused) and any destructive statement is confirmed
   again. Entries without recorded metadata require confirmation.
-- Destructive statements — DROP TABLE, DROP COLUMN, non-widening type changes,
-  and `nullable → NOT NULL` on a column that already holds NULLs — require an
-  interactive `yes`. Non-interactive runs refuse instead of assuming consent.
-- Renames are not paired; they surface as drop + add under the same gate.
-  Foreign objects (constraints and standalone indexes) are read from the
-  catalog and never removed: a statement that would take one down — dropping
-  its column or its table — is refused with the object names before anything is
-  written.
-- v1 is deliberately narrow: no rollback, seeds, indexes/constraints (Stage
-  7.5), CI mode, or other dialects. Types compare on PostgreSQL type names, so
+- Destructive statements — DROP TABLE, DROP COLUMN, DROP INDEX, DROP CONSTRAINT,
+  non-widening type changes, and `nullable → NOT NULL` on a column that already
+  holds NULLs — require an interactive `yes`. Non-interactive runs refuse
+  instead of assuming consent.
+- Renames are paired through object identity (D006): keeping an object's `"$id"`
+  while renaming its key produces `ALTER TABLE … RENAME`, and a genuine
+  replacement has to be declared with `--drop-add` before it becomes drop + add
+  under the destructive gate. Objects the schema file cannot express (check and
+  exclusion constraints, multi-column keys, expression indexes) are read from
+  the catalog and never removed: a statement that would take one down is refused
+  with the object names before anything is written.
+- v1 was deliberately narrow: no rollback, seeds, indexes/constraints (Stage
+  7.5), CI mode, or other dialects. Constraints, indexes, defaults and identity
+  columns are expressible now (D006); types compare on PostgreSQL type names, so
   type modifiers are not diffed.
 
 **Consequences:**
@@ -209,5 +212,61 @@ the statements that hit the database are always reviewable.
 - Known ceiling: a `NOT NULL` column added to a populated table has no default
   to draw on, so the statement fails and the run rolls back until the schema is
   corrected.
-- Revisit trigger: extend `SchemaDiff` when real friction appears (rename
-  pairing, defaults, constraint diffing) rather than growing a migration DSL.
+- Revisit trigger: extend `SchemaDiff` when real friction appears rather than
+  growing a migration DSL.
+
+## D006 — Stable object identities, in the schema file and in the database
+
+**Date:** 2026-11-06
+
+**Decision:** Every table and column carries a persistent numeric identity, and
+the schema file is where it lives: the tool writes `"$id": N` into
+`chetah-schema.json` for objects that lack one and never asks the user to
+assign one. `"chetah"."objects"` records the same identities in the database,
+including tombstones for objects that were dropped.
+
+**Why:**
+
+- Matching by name cannot distinguish a rename from a drop plus an add, and the
+  two have opposite consequences: one moves values, the other deletes them. An
+  identity that survives the rename is the only reliable signal.
+- Keeping the id *in the schema entry* means it travels with the declaration
+  through the rename itself, through code review, and through git history. A
+  sidecar map keyed by name would lose the trail at exactly the moment it is
+  needed, and a suggestion engine ("this looks like a rename") is a guess about
+  a destructive operation.
+- The database copy is not redundant: it makes "never reuse an id" enforceable
+  (a dropped object stays a row with `dropped_at` set, so allocation can start
+  above the highest id ever issued), it lets an existing declaration adopt the
+  ids it already has instead of looking like a wholesale replacement, and it
+  catches merge accidents — a `"$id"` duplicated by two branches, or one claimed
+  by a different object, is refused with the pair named.
+
+**Details as built:**
+
+- Allocation is `max(ids in the file, ids in the registry) + 1`, in declaration
+  order, so it is deterministic and never reissues a tombstoned id. No sequence
+  is needed, and `diff` — which may be the run that records the ids — writes
+  only the schema file.
+- The file is edited textually by a small JSONC reader that locates the table
+  and column objects, because a re-serialize would delete the comments users
+  keep in the file.
+- A rename keeps the object's id and the diff emits `ALTER TABLE … RENAME`
+  (table or column), reading the catalog as if the rename had already happened.
+- An object with a new identity beside a tracked object that disappeared is
+  refused, not inferred. The message names both resolutions: keep the `"$id"`
+  for a rename, or pass `--drop-add table[.column]` to record a real drop plus
+  add, which still passes the destructive gate.
+- The registry is synchronized inside the migration transaction, so a rollback
+  cannot leave identities describing a migration that never ran.
+
+**Consequences:**
+
+- `chetah-schema.json` gains machine-maintained members; review diffs show them
+  when an object is genuinely new.
+- Objects the tool did not create yet are adopted, not re-created: the first
+  apply on an existing database records a baseline and identities for what is
+  already there.
+- Revisit trigger: if a real need appears to carry identities across databases
+  (staging → production), the ids are already portable — revisit the conflict
+  rules then, not the storage.
