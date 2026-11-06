@@ -436,6 +436,9 @@ public class MigrationApplyTests
         Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(withEmail)));
         await fixture.ExecuteAsync("CREATE INDEX users_lower_email ON users (lower(email))");
         await fixture.ExecuteAsync("CREATE INDEX users_email_partial ON users (email) WHERE email <> ''");
+        // A covering index is not "the index on (email)" either: it is a physical design the file
+        // does not describe.
+        await fixture.ExecuteAsync("CREATE INDEX users_email_covering ON users (email) INCLUDE (id)");
 
         var diff = new StringWriter();
         Assert.Equal(0, await fixture.Runner(diff).DiffAsync(fixture.Parse(idOnly)));
@@ -449,7 +452,7 @@ public class MigrationApplyTests
         Assert.Contains("Refusing to apply", output.ToString(), StringComparison.Ordinal);
         Assert.Contains("users_lower_email", output.ToString(), StringComparison.Ordinal);
 
-        Assert.Equal(2, await fixture.CountAsync(
+        Assert.Equal(3, await fixture.CountAsync(
             "SELECT count(*) FROM pg_indexes WHERE schemaname = 'public' AND indexname LIKE 'users_%email%'"));
         Assert.Equal(1, await fixture.CountAsync(ColumnExists("users", "email")));
     }

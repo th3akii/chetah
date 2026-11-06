@@ -358,24 +358,33 @@ internal static class PostgresCatalog
         JOIN pg_class c ON c.oid = i.indrelid
         JOIN pg_class ic ON ic.oid = i.indexrelid
         JOIN pg_namespace n ON n.oid = c.relnamespace
+        JOIN pg_am am ON am.oid = ic.relam
         WHERE n.nspname = $1
           AND i.indexprs IS NULL
           AND i.indpred IS NULL
+          AND am.amname = 'btree'
+          AND cardinality(i.indkey::int2[]) = i.indnkeyatts
           AND NOT EXISTS (SELECT 1 FROM pg_constraint con WHERE con.conindid = i.indexrelid)
         ORDER BY c.relname, ic.relname
         """;
 
-    /// <summary>Indexes the schema file cannot express: an expression index (<c>lower(email)</c>) and
-    /// a partial index (<c>WHERE deleted_at IS NULL</c>). They are never matched against a declared
-    /// index and never dropped — reported here so a statement that would remove one is refused.</summary>
+    /// <summary>Indexes the schema file cannot express: an expression index (<c>lower(email)</c>), a
+    /// partial index (<c>WHERE deleted_at IS NULL</c>), a covering index (<c>INCLUDE</c>) and any
+    /// non-btree access method. Matching one of those against a declared column index would either
+    /// skip a needed index or replace a physical design the file never described. They are reported
+    /// here so a statement that would remove one is refused.</summary>
     private const string UnsupportedIndexesQuery = """
         SELECT c.relname, NULL::text, ic.relname
         FROM pg_index i
         JOIN pg_class c ON c.oid = i.indrelid
         JOIN pg_class ic ON ic.oid = i.indexrelid
         JOIN pg_namespace n ON n.oid = c.relnamespace
+        JOIN pg_am am ON am.oid = ic.relam
         WHERE n.nspname = $1
-          AND (i.indexprs IS NOT NULL OR i.indpred IS NOT NULL)
+          AND (i.indexprs IS NOT NULL
+               OR i.indpred IS NOT NULL
+               OR am.amname <> 'btree'
+               OR cardinality(i.indkey::int2[]) <> i.indnkeyatts)
           AND NOT EXISTS (SELECT 1 FROM pg_constraint con WHERE con.conindid = i.indexrelid)
         ORDER BY c.relname, ic.relname
         """;

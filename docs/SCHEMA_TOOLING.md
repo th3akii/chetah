@@ -207,10 +207,10 @@ column therefore carries a persistent `"$id"` in `chetah-schema.json`:
   `varchar`, with a modifier where PostgreSQL allows one: `varchar(100)`,
   `timestamp(3)`. Type modifiers are compared: a live `timestamp(3)` is not a
   declared `timestamp`, and a larger modifier is treated as widening.
-- Check and exclusion constraints, and expression or partial indexes, are not
-  expressible yet: they are read from the catalog, never created or dropped, and
-  a statement that would remove one is refused. So is a foreign key from another
-  schema that points at a managed table.
+- Check and exclusion constraints, and expression, partial, covering (`INCLUDE`)
+  or non-btree indexes, are not expressible yet: they are read from the catalog,
+  never created or dropped, and a statement that would remove one is refused. So
+  is a foreign key from another schema that points at a managed table.
 
 ## Scope details
 
@@ -236,11 +236,11 @@ column therefore carries a persistent `"$id"` in `chetah-schema.json`:
   non-widening type changes, and `nullable → NOT NULL` on a column that already
   holds NULLs require an interactive `yes`. Non-interactive runs refuse instead
   of assuming consent.
-- **Unexpressible objects block:** check/exclusion constraints, expression and
-  partial indexes, and foreign keys from another schema are read from
-  `pg_constraint`/`pg_index` and never matched against a declared object or
-  removed; a statement that would take one down is refused with the object names
-  before anything is written.
+- **Unexpressible objects block:** check/exclusion constraints, expression,
+  partial, covering and non-btree indexes, and foreign keys from another schema
+  are read from `pg_constraint`/`pg_index` and never matched against a declared
+  object or removed; a statement that would take one down is refused with the
+  object names before anything is written.
 - **A second unique index is not built:** a declared unique index whose columns a
   live unique constraint already covers is considered satisfied, and that
   constraint is not dropped for being "undeclared" under a different spelling.
