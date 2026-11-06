@@ -107,7 +107,7 @@ The original conditional is resolved: manual schema management is now real frict
 
 Author-noted must-have, delivered as the mandatory `diff` command: **drift detection** — the schema file is the source of truth for generated code, but nothing notices when the database has drifted (a renamed column like `adress` → `address` turns into a runtime `42703` error only when a query runs). `diff` flags the mismatch before execution, and `apply` establishes it.
 
-Still open after this stage: check/exclusion constraints, rollback, non-interactive applies, and schema-JSON ergonomics (7.6). Renames are paired and indexes/constraints are expressible as of the 2026-11-06 extension.
+Still open after this stage: check/exclusion constraints, rollback, non-interactive applies, and schema-JSON ergonomics (7.6). Renames are paired and indexes/constraints are expressible as of the 2026-11-06 extension. The remaining issues, with reproductions and suggested fixes, are tracked in [`MIGRATION_LIMITATIONS.md`](MIGRATION_LIMITATIONS.md).
 
 ### Stage 7.5 — Constraint Metadata
 

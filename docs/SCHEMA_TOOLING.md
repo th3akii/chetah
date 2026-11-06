@@ -6,6 +6,8 @@
 > run serialisation. The decisions below are recorded in
 > [`DECISIONS.md`](DECISIONS.md) D005 and D006. Companion documents:
 > [`ROADMAP.md`](ROADMAP.md) (Stage 7), [`SPEC.md`](SPEC.md).
+> Known gaps with reproductions and suggested fixes:
+> [`MIGRATION_LIMITATIONS.md`](MIGRATION_LIMITATIONS.md).
 
 ## Why
 
