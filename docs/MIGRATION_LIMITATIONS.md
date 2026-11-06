@@ -49,9 +49,13 @@ Also fixed by the ordering pass:
   (edits also name the two conflicting hashes): a journal edited after a
   migration ran, a SQL file that no longer matches what ran, or a database that
   has migrations this checkout does not have while the checkout has migrations
-  the database has not run. `--check` reports it and exits non-zero; nothing is
-  rewritten or merged. Only the real adopted-database entry is exempt — a
-  migration whose slug merely ends in `baseline` stays visible.
+  the database has not run. A database with migrations this checkout does not
+  have blocks *generating* one too, even when this checkout has nothing pending:
+  that would graft a new migration onto a history it cannot see. A no-op
+  inspection is still allowed (it writes nothing), an empty journal is adoption
+  rather than divergence, and nothing is ever rewritten or merged automatically.
+  `--check` reports it and exits non-zero. Only the real adopted-database entry
+  is exempt — a migration whose slug merely ends in `baseline` stays visible.
 
 ## Open issues by severity
 

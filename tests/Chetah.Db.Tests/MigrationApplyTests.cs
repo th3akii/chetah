@@ -786,6 +786,65 @@ public class MigrationApplyTests
     }
 
     [PostgresFact]
+    public async Task AMigrationThisCheckoutLacks_BlocksGeneratingAnother()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        const string ancestor = """
+            { "tables": { "users": { "columns": {
+              "id": { "type": "integer", "nullable": false } } } } }
+            """;
+
+        // A shared applied ancestor.
+        var mine = fixture.NewCheckout(ancestor);
+        Assert.Equal(0, await mine.Runner.ApplyAsync(mine.Schema));
+
+        // Another branch applied a migration this checkout does not have.
+        var branch = fixture.NewCheckout("""
+            { "tables": { "users": { "columns": {
+              "id": { "type": "integer", "nullable": false },
+              "branch_col": { "type": "text" } } } } }
+            """);
+        Assert.Equal(0, await branch.Runner.ApplyAsync(branch.Schema));
+        Assert.Equal(2, await fixture.CountAsync("SELECT count(*) FROM chetah.migrations"));
+
+        // This checkout has nothing pending, but the database has a migration it does not know. A
+        // change of its own — a type widening, which is neither ambiguous nor destructive — would
+        // graft a new migration onto that unknown history.
+        const string changed = """
+            { "tables": { "users": { "columns": {
+              "id": { "type": "bigint", "nullable": false } } } } }
+            """;
+        File.WriteAllText(mine.SchemaPath, changed);
+        var changedSchema = SchemaParser.Parse(changed).Schema!;
+
+        Assert.Equal(1, await mine.Runner.ApplyAsync(changedSchema));
+        Assert.Contains("migrations this checkout does not", mine.Output.ToString(), StringComparison.Ordinal);
+
+        // Nothing was generated, nothing ran, and no identities were written.
+        Assert.Equal(2, await fixture.CountAsync("SELECT count(*) FROM chetah.migrations"));
+        Assert.Single(mine.Journal().Entries);
+        Assert.Equal("integer", (string?)await fixture.ScalarAsync(
+            "SELECT data_type FROM information_schema.columns WHERE table_schema = 'public' "
+            + "AND table_name = 'users' AND column_name = 'id'"));
+        Assert.Equal(changed, File.ReadAllText(mine.SchemaPath));
+
+        // The read-only run reports the same thing and fails the gate.
+        Assert.Equal(1, await mine.CheckRunner().DiffAsync(changedSchema));
+        Assert.Contains("warning: this database has migrations this checkout does not", mine.Output.ToString(), StringComparison.Ordinal);
+
+        // A true no-op is still allowed: the schema matches the database, so there is nothing to graft.
+        const string matching = """
+            { "tables": { "users": { "columns": {
+              "id": { "type": "integer", "nullable": false },
+              "branch_col": { "type": "text" } } } } }
+            """;
+        File.WriteAllText(mine.SchemaPath, matching);
+        Assert.Equal(0, await mine.Runner.ApplyAsync(SchemaParser.Parse(matching).Schema!));
+        Assert.Equal(2, await fixture.CountAsync("SELECT count(*) FROM chetah.migrations"));
+        Assert.Contains("there is nothing to generate", mine.Output.ToString(), StringComparison.Ordinal);
+    }
+
+    [PostgresFact]
     public async Task DivergentHistories_AreRefused()
     {
         await using var fixture = await Fixture.CreateAsync();

@@ -152,11 +152,21 @@ internal sealed class MigrationRunner
         Schema schema,
         CancellationToken cancellationToken)
     {
-        // A read-only run reports a history conflict but does not act on it; --check turns it into a
+        // A read-only run reports a history problem but does not act on it; --check turns it into a
         // failing exit code so CI notices before anything is applied.
-        var history = HistoryConflicts(_store.ReadJournal(), await ReadAppliedAsync(connection, cancellationToken));
-        foreach (var problem in history)
-            _output.WriteLine($"warning: {problem}");
+        var history = History(_store.ReadJournal(), await ReadAppliedAsync(connection, cancellationToken));
+        if (history.Conflicts.Count > 0)
+        {
+            foreach (var problem in history.Conflicts)
+                _output.WriteLine($"warning: {problem}");
+        }
+        else if (history.UnknownApplied.Count > 0)
+        {
+            _output.WriteLine(
+                "warning: this database has migrations this checkout does not ("
+                + string.Join(", ", history.UnknownApplied)
+                + "), so no migration can be generated here.");
+        }
 
         var (ids, identities, _) = await ResolveIdentitiesAsync(connection, schema, cancellationToken);
         if (!identities.CanApply)
@@ -165,7 +175,7 @@ internal sealed class MigrationRunner
         // Only now, with identity resolved and consistent, does the run record what it resolved.
         // Not when the history is inconsistent: that database must be reconciled before anything is
         // written on its behalf, including identity metadata.
-        if (history.Count > 0)
+        if (history.Any)
             _output.WriteLine("Identity members were not written: resolve the history problem first.");
         else
             await PersistIdentitiesAsync(schema, ids, cancellationToken);
@@ -179,8 +189,8 @@ internal sealed class MigrationRunner
         if (plan.IsEmpty)
         {
             _output.WriteLine("No changes: chetah-schema.json matches the live database.");
-            // A history conflict makes the database unsafe to build on even when the schema agrees.
-            return _check && history.Count > 0 ? 1 : 0;
+            // A history problem makes the database unsafe to build on even when the schema agrees.
+            return _check && history.Any ? 1 : 0;
         }
 
         foreach (var operation in plan.Operations)
@@ -215,11 +225,11 @@ internal sealed class MigrationRunner
 
         // Checked before identities are resolved or written: a database whose history this checkout
         // does not know is not something to build on.
-        var history = HistoryConflicts(journal, applied);
-        if (history.Count > 0)
+        var history = History(journal, applied);
+        if (history.Conflicts.Count > 0)
         {
             _output.WriteLine("Refusing to apply: migration history is inconsistent, so nothing was executed.");
-            foreach (var problem in history)
+            foreach (var problem in history.Conflicts)
                 _output.WriteLine($"  - {problem}");
             _output.WriteLine(
                 "Restore the files this database ran, fetch the migrations it already has, or apply from the "
@@ -236,7 +246,10 @@ internal sealed class MigrationRunner
         if (!identities.CanApply)
             return RefuseIdentity(identities);
 
-        await PersistIdentitiesAsync(schema, ids, cancellationToken);
+        if (history.Any)
+            _output.WriteLine("Identity members were not written: resolve the history problem first.");
+        else
+            await PersistIdentitiesAsync(schema, ids, cancellationToken);
 
         foreach (var entry in journal.Entries)
         {
@@ -295,8 +308,27 @@ internal sealed class MigrationRunner
 
         if (plan.IsEmpty)
         {
+            if (history.UnknownApplied.Count > 0)
+                _output.WriteLine(
+                    "note: this database has migrations this checkout does not ("
+                    + string.Join(", ", history.UnknownApplied)
+                    + "); there is nothing to generate, so nothing was written.");
             _output.WriteLine("Schema is in sync with the database.");
             return 0;
+        }
+
+        // A migration would land on top of history this checkout cannot see: that is merging two
+        // histories, which this tool never does on its own.
+        if (history.UnknownApplied.Count > 0)
+        {
+            _output.WriteLine(
+                "Refusing to apply: this database has migrations this checkout does not "
+                + $"({string.Join(", ", history.UnknownApplied)}), so a new migration cannot be generated on top "
+                + "of that history. Nothing was written.");
+            _output.WriteLine(
+                "Fetch those migrations, or apply from the checkout that owns them. History is never merged "
+                + "automatically.");
+            return 1;
         }
 
         var blocked = plan.Blocked;
@@ -380,13 +412,23 @@ internal sealed class MigrationRunner
         return 1;
     }
 
-    /// <summary>Problems that make this checkout's journal and the database's migration history
-    /// disagree. Ordinary schema drift is not one of them — a database that merely differs from the
-    /// file is the tool's normal work. The tool never rewrites a migration that ran and never merges
-    /// two histories: it reports and stops, so the operator decides.</summary>
-    private IReadOnlyList<string> HistoryConflicts(Journal journal, IReadOnlyDictionary<string, string> applied)
+    /// <summary>The differences between this checkout's journal and the database's migration history.
+    /// <para><see cref="Conflicts"/> are provably inconsistent: a migration that ran no longer matches
+    /// its journal entry or SQL file, or each side has migrations the other lacks.</para>
+    /// <para><see cref="UnknownApplied"/> are migrations the database has and this checkout does not.
+    /// They do not prove divergence — another checkout may simply have applied them — but a migration
+    /// must never be generated on top of a history this checkout cannot see, so they rule out
+    /// generating one while still allowing an inspection that changes nothing.</para>
+    /// Ordinary schema drift is neither: a database that merely differs from the file is the normal
+    /// work of the tool.</summary>
+    private sealed record HistoryReport(IReadOnlyList<string> Conflicts, IReadOnlyList<string> UnknownApplied)
     {
-        var problems = new List<string>();
+        public bool Any => Conflicts.Count > 0 || UnknownApplied.Count > 0;
+    }
+
+    private HistoryReport History(Journal journal, IReadOnlyDictionary<string, string> applied)
+    {
+        var conflicts = new List<string>();
         var known = journal.Entries.Select(entry => entry.Id).ToHashSet(StringComparer.Ordinal);
 
         foreach (var entry in journal.Entries)
@@ -396,7 +438,7 @@ internal sealed class MigrationRunner
 
             if (!string.Equals(recorded, entry.Hash, StringComparison.Ordinal))
             {
-                problems.Add(
+                conflicts.Add(
                     $"{entry.Id}: the journal records {Short(entry.Hash)} but the database ran {Short(recorded)}. "
                     + "A migration that already ran was edited.");
                 continue;
@@ -404,20 +446,27 @@ internal sealed class MigrationRunner
 
             var path = _store.SqlPath(entry.Id);
             if (File.Exists(path) && MigrationStore.Hash(_store.ReadSql(entry.Id)) != recorded)
-                problems.Add(
+                conflicts.Add(
                     $"{entry.Id}: the SQL file no longer matches what the database ran. "
                     + "Applied migrations are history, not drafts: add a new one instead of editing it.");
         }
 
         var pending = journal.Entries.Where(entry => !applied.ContainsKey(entry.Id)).ToArray();
-        var unknown = applied.Keys
-            .Where(id => !known.Contains(id) && !MigrationStore.IsBaseline(id))
-            .Order(StringComparer.Ordinal)
-            .ToArray();
+
+        // An empty journal is adoption, not divergence: a fresh checkout pointed at a database that
+        // already has history is the supported way to take one over, and there is no checkout history
+        // that could be merged with it. With a journal, extra migrations on the database mean this
+        // checkout is missing part of its own lineage.
+        var unknown = journal.Entries.Count == 0
+            ? []
+            : applied.Keys
+                .Where(id => !known.Contains(id) && !MigrationStore.IsBaseline(id))
+                .Order(StringComparer.Ordinal)
+                .ToArray();
 
         if (pending.Length > 0 && unknown.Length > 0)
         {
-            problems.Add(
+            conflicts.Add(
                 "the database has migrations this checkout does not have ("
                 + string.Join(", ", unknown)
                 + "), and this checkout has migrations the database has not run ("
@@ -425,7 +474,7 @@ internal sealed class MigrationRunner
                 + "). The two histories diverged.");
         }
 
-        return problems;
+        return new HistoryReport(conflicts, unknown);
     }
 
     /// <summary>Hashes are opaque; the first characters are enough to tell two apart in a message.</summary>
