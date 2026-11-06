@@ -15,6 +15,17 @@ public sealed class PostgresFactAttribute : FactAttribute
 
 public class MigrationApplyTests
 {
+    /// <summary>A fresh clone of a checkout's migrations, as git would deliver it.</summary>
+    private static void CopyDirectory(string from, string to)
+    {
+        foreach (var file in Directory.EnumerateFiles(from, "*", SearchOption.AllDirectories))
+        {
+            var target = Path.Combine(to, Path.GetRelativePath(from, file));
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            File.Copy(file, target, overwrite: true);
+        }
+    }
+
     private const string UsersSchema = """
         { "tables": { "users": { "columns": {
           "id": { "type": "integer", "nullable": false },
@@ -771,6 +782,93 @@ public class MigrationApplyTests
         Assert.Equal(0, await fixture.CountAsync(TableExists("p")));
         Assert.Equal(0, await fixture.CountAsync(TableExists("c")));
         Assert.Equal(1, await fixture.CountAsync(TableExists("keep")));
+    }
+
+    [PostgresFact]
+    public async Task DivergentHistories_AreRefused()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var first = fixture.NewCheckout(UsersSchema);
+        Assert.Equal(0, await first.Runner.ApplyAsync(first.Schema));
+
+        // A second checkout against the same database: it does not have the migration that ran, and
+        // it brings one of its own. Applying would graft one history onto the other.
+        var second = fixture.NewCheckout(UsersSchema);
+        const string createsNote = "20261107000000_add_note";
+        fixture.WriteEntry(
+            second.Store,
+            createsNote,
+            "add_note",
+            """ALTER TABLE "users" ADD COLUMN "note" text;""");
+
+        Assert.Equal(1, await second.Runner.ApplyAsync(second.Schema));
+
+        var reported = second.Output.ToString();
+        Assert.Contains("diverged", reported, StringComparison.Ordinal);
+        Assert.Contains(createsNote, reported, StringComparison.Ordinal);
+        Assert.Contains("never rewritten or merged", reported, StringComparison.Ordinal);
+
+        // Nothing ran and no history was rewritten.
+        Assert.Equal(1, await fixture.CountAsync("SELECT count(*) FROM chetah.migrations"));
+        Assert.Equal(0, await fixture.CountAsync(ColumnExists("users", "note")));
+
+        // The read-only run reports it too, and CI sees a failing exit code.
+        Assert.Equal(1, await second.CheckRunner().DiffAsync(second.Schema));
+        Assert.Contains("warning:", second.Output.ToString(), StringComparison.Ordinal);
+        Assert.Equal(0, await fixture.CountAsync(ColumnExists("users", "note")));
+    }
+
+    [PostgresFact]
+    public async Task RewrittenAppliedMigration_IsRefused()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(UsersSchema)));
+
+        var store = new MigrationStore(fixture.MigrationsDirectory);
+        var entry = Assert.Single(store.ReadJournal().Entries);
+        await File.AppendAllTextAsync(store.SqlPath(entry.Id), "\n-- edited after it ran\n");
+
+        var output = new StringWriter();
+        Assert.Equal(1, await fixture.Runner(output).ApplyAsync(fixture.CurrentSchema()));
+
+        // History is not rewritten: the edit is reported, not absorbed.
+        Assert.Contains("no longer matches what the database ran", output.ToString(), StringComparison.Ordinal);
+        Assert.Equal(1, await fixture.CountAsync("SELECT count(*) FROM chetah.migrations"));
+        Assert.Single(new MigrationStore(fixture.MigrationsDirectory).ReadJournal().Entries);
+    }
+
+    [PostgresFact]
+    public async Task SharedHistoryInTwoCheckouts_IsNotADivergence()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var first = fixture.NewCheckout(UsersSchema);
+        Assert.Equal(0, await first.Runner.ApplyAsync(first.Schema));
+
+        // A fresh clone carries the same journal: that is one history seen twice.
+        var clone = fixture.NewCheckout(UsersSchema);
+        CopyDirectory(first.Store.MigrationsDirectory, clone.Store.MigrationsDirectory);
+
+        Assert.Equal(0, await clone.Runner.ApplyAsync(clone.Schema));
+        Assert.DoesNotContain("diverged", clone.Output.ToString(), StringComparison.Ordinal);
+        Assert.Equal(1, await fixture.CountAsync("SELECT count(*) FROM chetah.migrations"));
+    }
+
+    [PostgresFact]
+    public async Task IndependentlyEvolvedDatabases_KeepTheirOwnHistories()
+    {
+        await using var first = await Fixture.CreateAsync();
+        await using var second = await Fixture.CreateAsync();
+
+        // Two databases, two checkouts, the same schema declaration and unrelated histories. Each
+        // applies to its own database; neither is compared with the other.
+        var firstCheckout = first.NewCheckout(UsersSchema);
+        var secondCheckout = second.NewCheckout(UsersSchema);
+        Assert.Equal(0, await firstCheckout.Runner.ApplyAsync(firstCheckout.Schema));
+        Assert.Equal(0, await secondCheckout.Runner.ApplyAsync(secondCheckout.Schema));
+
+        Assert.Equal(await first.Identities(), await second.Identities());
+        Assert.Equal(1, await first.CountAsync("SELECT count(*) FROM chetah.migrations"));
+        Assert.Equal(1, await second.CountAsync("SELECT count(*) FROM chetah.migrations"));
     }
 
     [PostgresFact]
@@ -1599,23 +1697,43 @@ public class MigrationApplyTests
             Directory.CreateDirectory(root);
             var schemaPath = Path.Combine(root, "chetah-schema.json");
             File.WriteAllText(schemaPath, json);
+            var migrations = Path.Combine(root, "migrations");
+            var output = new StringWriter();
 
             return new Checkout(
-                new MigrationRunner(ConnectionString, schemaPath, Path.Combine(root, "migrations"), new StringWriter(), _ => true),
+                new MigrationRunner(ConnectionString, schemaPath, migrations, output, _ => true),
                 SchemaParser.Parse(json).Schema!,
-                new MigrationStore(Path.Combine(root, "migrations")));
+                new MigrationStore(migrations),
+                schemaPath,
+                output,
+                ConnectionString);
         }
 
-        internal sealed record Checkout(MigrationRunner Runner, Schema Schema, MigrationStore Store)
+        internal sealed record Checkout(
+            MigrationRunner Runner,
+            Schema Schema,
+            MigrationStore Store,
+            string SchemaPath,
+            StringWriter Output,
+            string ConnectionString)
         {
             internal Journal Journal() => Store.ReadJournal();
+
+            /// <summary>A read-only runner over this checkout's own files.</summary>
+            internal MigrationRunner CheckRunner() =>
+                new(ConnectionString, SchemaPath, Store.MigrationsDirectory, Output, _ => true, null, check: true);
         }
 
-        /// <summary>Hand-writes a journal entry and its SQL file, as a previous run would have.
-        /// No operations writes an entry with no metadata.</summary>
-        internal void WriteEntry(string id, string slug, string sql, params JournalOperation[] operations)
+        internal void WriteEntry(string id, string slug, string sql, params JournalOperation[] operations) =>
+            WriteEntry(new MigrationStore(MigrationsDirectory), id, slug, sql, operations);
+
+        internal void WriteEntry(
+            MigrationStore store,
+            string id,
+            string slug,
+            string sql,
+            params JournalOperation[] operations)
         {
-            var store = new MigrationStore(MigrationsDirectory);
             Directory.CreateDirectory(store.MigrationDirectory(id));
             File.WriteAllText(store.SqlPath(id), sql);
 
@@ -1629,10 +1747,16 @@ public class MigrationApplyTests
                 MigrationStore.Hash(sql),
                 statementCount,
                 operations.Length == 0 ? null : operations);
+
+            var journal = new Journal(store.ReadJournal().Entries
+                .Where(existing => existing.Id != id)
+                .Append(entry)
+                .ToArray());
+
             File.WriteAllText(
-                Path.Combine(MigrationsDirectory, "_journal.json"),
+                Path.Combine(store.MigrationsDirectory, "_journal.json"),
                 JsonSerializer.Serialize(
-                    new Journal([entry]),
+                    journal,
                     new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true }) + "\n");
         }
 

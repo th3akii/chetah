@@ -152,6 +152,12 @@ internal sealed class MigrationRunner
         Schema schema,
         CancellationToken cancellationToken)
     {
+        // A read-only run reports a history conflict but does not act on it; --check turns it into a
+        // failing exit code so CI notices before anything is applied.
+        var history = HistoryConflicts(_store.ReadJournal(), await ReadAppliedAsync(connection, cancellationToken));
+        foreach (var problem in history)
+            _output.WriteLine($"warning: {problem}");
+
         var (ids, identities, _) = await ResolveIdentitiesAsync(connection, schema, cancellationToken);
         if (!identities.CanApply)
             return RefuseIdentity(identities);
@@ -168,7 +174,8 @@ internal sealed class MigrationRunner
         if (plan.IsEmpty)
         {
             _output.WriteLine("No changes: chetah-schema.json matches the live database.");
-            return 0;
+            // A history conflict makes the database unsafe to build on even when the schema agrees.
+            return _check && history.Count > 0 ? 1 : 0;
         }
 
         foreach (var operation in plan.Operations)
@@ -200,6 +207,21 @@ internal sealed class MigrationRunner
 
         var journal = _store.ReadJournal();
         var applied = await ReadAppliedAsync(connection, cancellationToken);
+
+        // Checked before identities are resolved or written: a database whose history this checkout
+        // does not know is not something to build on.
+        var history = HistoryConflicts(journal, applied);
+        if (history.Count > 0)
+        {
+            _output.WriteLine("Refusing to apply: migration history is inconsistent, so nothing was executed.");
+            foreach (var problem in history)
+                _output.WriteLine($"  - {problem}");
+            _output.WriteLine(
+                "Restore the files this database ran, fetch the migrations it already has, or apply from the "
+                + "checkout that owns them. History is never rewritten or merged automatically.");
+            return 1;
+        }
+
         var desired = SchemaCatalog.FromSchema(schema);
 
         // Identity is resolved before anything runs: every statement this command executes, replayed
@@ -213,7 +235,7 @@ internal sealed class MigrationRunner
 
         foreach (var entry in journal.Entries)
         {
-            if (applied.Contains(entry.Id))
+            if (applied.ContainsKey(entry.Id))
                 continue;
 
             var sql = _store.ReadSql(entry.Id);
@@ -235,7 +257,7 @@ internal sealed class MigrationRunner
             }
 
             _output.WriteLine($"Applied {entry.Id}.");
-            applied.Add(entry.Id);
+            applied[entry.Id] = entry.Hash;
         }
 
         var live = await PostgresCatalog.ReadAsync(connection, _schema, cancellationToken);
@@ -352,6 +374,57 @@ internal sealed class MigrationRunner
             _output.WriteLine($"  - {refusal}");
         return 1;
     }
+
+    /// <summary>Problems that make this checkout's journal and the database's migration history
+    /// disagree. Ordinary schema drift is not one of them — a database that merely differs from the
+    /// file is the tool's normal work. The tool never rewrites a migration that ran and never merges
+    /// two histories: it reports and stops, so the operator decides.</summary>
+    private IReadOnlyList<string> HistoryConflicts(Journal journal, IReadOnlyDictionary<string, string> applied)
+    {
+        var problems = new List<string>();
+        var known = journal.Entries.Select(entry => entry.Id).ToHashSet(StringComparer.Ordinal);
+
+        foreach (var entry in journal.Entries)
+        {
+            if (!applied.TryGetValue(entry.Id, out var recorded))
+                continue;
+
+            if (!string.Equals(recorded, entry.Hash, StringComparison.Ordinal))
+            {
+                problems.Add(
+                    $"{entry.Id}: the journal records {Short(entry.Hash)} but the database ran {Short(recorded)}. "
+                    + "A migration that already ran was edited.");
+                continue;
+            }
+
+            var path = _store.SqlPath(entry.Id);
+            if (File.Exists(path) && MigrationStore.Hash(_store.ReadSql(entry.Id)) != recorded)
+                problems.Add(
+                    $"{entry.Id}: the SQL file no longer matches what the database ran. "
+                    + "Applied migrations are history, not drafts: add a new one instead of editing it.");
+        }
+
+        var pending = journal.Entries.Where(entry => !applied.ContainsKey(entry.Id)).ToArray();
+        var unknown = applied.Keys
+            .Where(id => !known.Contains(id) && !MigrationStore.IsBaseline(id))
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+        if (pending.Length > 0 && unknown.Length > 0)
+        {
+            problems.Add(
+                "the database has migrations this checkout does not have ("
+                + string.Join(", ", unknown)
+                + "), and this checkout has migrations the database has not run ("
+                + string.Join(", ", pending.Select(entry => entry.Id).Order(StringComparer.Ordinal))
+                + "). The two histories diverged.");
+        }
+
+        return problems;
+    }
+
+    /// <summary>Hashes are opaque; the first characters are enough to tell two apart in a message.</summary>
+    private static string Short(string hash) => hash.Length <= 12 ? hash : hash[..12];
 
     /// <summary>A pending entry was recorded earlier and is being replayed now — possibly against a
     /// database that changed since. Re-check the recorded drops against the current catalog and ask
@@ -593,16 +666,28 @@ internal sealed class MigrationRunner
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
-    private static async Task<HashSet<string>> ReadAppliedAsync(NpgsqlConnection connection, CancellationToken cancellationToken)
+    /// <summary>What this database has applied, as id → hash. A missing table is an empty history:
+    /// a read-only inspection must not create it.</summary>
+    private static async Task<Dictionary<string, string>> ReadAppliedAsync(
+        NpgsqlConnection connection,
+        CancellationToken cancellationToken)
     {
+        await using (var exists = new NpgsqlCommand(
+            """SELECT to_regclass('"chetah"."migrations"') IS NOT NULL""",
+            connection))
+        {
+            if (!(bool)(await exists.ExecuteScalarAsync(cancellationToken))!)
+                return new Dictionary<string, string>(StringComparer.Ordinal);
+        }
+
         await using var command = new NpgsqlCommand(
-            $"SELECT name FROM {PostgresCatalog.StateTable}",
+            $"SELECT name, hash FROM {PostgresCatalog.StateTable}",
             connection);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
 
-        var applied = new HashSet<string>(StringComparer.Ordinal);
+        var applied = new Dictionary<string, string>(StringComparer.Ordinal);
         while (await reader.ReadAsync(cancellationToken))
-            applied.Add(reader.GetString(0));
+            applied[reader.GetString(0)] = reader.GetString(1);
         return applied;
     }
 
