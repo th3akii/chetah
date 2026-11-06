@@ -109,12 +109,12 @@ Author-noted must-have, delivered as the mandatory `diff` command: **drift detec
 
 Still open after this stage: constraints/indexes (Stage 7.5), schema-JSON ergonomics (7.6), renames as paired migrations, rollback, and non-interactive applies.
 
-### Stage 7.5 — Constraint Metadata (noted by author, not started)
+### Stage 7.5 — Constraint Metadata
 
-**Status:** Candidate
+**Status:** Planned 2026-11-05, not started — approved direction is "start small and work towards full", in four phases (primary keys → foreign keys → unique/check → indexes and FK actions). Plan: [`CONSTRAINT_METADATA.md`](CONSTRAINT_METADATA.md).
 **Goal:** Carry keys and constraints — primary keys, foreign keys, unique, and other column constraints — in the schema so generated metadata can express them (needed before `Where`/`Insert` can reason about keys).
 
-**Gating question:** which constraint set is actually needed by the next consuming milestone rather than ambitious completeness?
+The gating question is answered by the plan: primary keys and foreign keys first, everything else only when a consumer needs it. Runtime query behaviour does not change in these phases; the wins are database integrity and closing the "a hand-added key makes a column permanently undroppable" hole in the migration tool.
 
 ### Stage 7.6 — Schema Format Ergonomics (noted by author, not started)
 
