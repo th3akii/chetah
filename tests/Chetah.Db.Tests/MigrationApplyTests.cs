@@ -683,6 +683,32 @@ public class MigrationApplyTests
     }
 
     [PostgresFact]
+    public async Task TypeModifiers_AreIntrospectedAndPreserved()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        const string schema = """
+            { "tables": { "t": { "columns": {
+              "id": { "type": "integer", "nullable": false },
+              "code": { "type": "varchar(100)" },
+              "at": { "type": "timestamp(3)" } } } } }
+            """;
+
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(schema)));
+
+        // The modifier is part of the type on both sides, so the same declaration is a no-op.
+        var settled = new StringWriter();
+        Assert.Equal(0, await fixture.Runner(settled).ApplyAsync(fixture.CurrentSchema()));
+        Assert.Contains("in sync", settled.ToString(), StringComparison.Ordinal);
+        Assert.Equal(1, await fixture.CountAsync("SELECT count(*) FROM chetah.migrations"));
+
+        var wider = schema.Replace("varchar(100)", "varchar(200)", StringComparison.Ordinal);
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(wider)));
+        Assert.Equal("character varying(200)", (string?)await fixture.ScalarAsync(
+            "SELECT format_type(atttypid, atttypmod) FROM pg_attribute "
+            + "WHERE attrelid = 'public.t'::regclass AND attname = 'code'"));
+    }
+
+    [PostgresFact]
     public async Task RewrittenDefaultExpressions_Converge()
     {
         await using var fixture = await Fixture.CreateAsync();

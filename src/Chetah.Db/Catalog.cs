@@ -71,18 +71,6 @@ internal sealed record CatalogState(
 /// <summary>Translates the parsed schema file into the same catalog shape introspection returns.</summary>
 internal static class SchemaCatalog
 {
-    /// <summary>Schema-file vocabulary → PostgreSQL type names. A type added to the code generator
-    /// without an entry here fails loudly instead of diffing as an unknown type.</summary>
-    private static readonly Dictionary<ClrType, string> PgTypes = new()
-    {
-        [ClrType.Integer] = "int4",
-        [ClrType.BigInt] = "int8",
-        [ClrType.Text] = "text",
-        [ClrType.Boolean] = "bool",
-        [ClrType.Uuid] = "uuid",
-        [ClrType.Timestamp] = "timestamp",
-    };
-
     public static CatalogState FromSchema(Schema schema)
     {
         var tables = new List<TableState>();
@@ -140,11 +128,7 @@ internal static class SchemaCatalog
             : ($"{parts[0]}.{parts[1]}", parts[2]);
     }
 
-    private static string PgType(ColumnSchema column) =>
-        PgTypes.TryGetValue(column.Type, out var type)
-            ? type
-            : throw new InvalidOperationException(
-                $"Column '{column.Name}': no PostgreSQL type mapped for {column.Type.Name}. Add it to SchemaCatalog.PgTypes.");
+    private static string PgType(ColumnSchema column) => column.StorageType;
 }
 
 /// <summary>Normalizes default expressions so declared text and catalog text can be compared.
@@ -260,8 +244,19 @@ internal static class PostgresCatalog
             .SelectMany(table => table.Columns.Select(column => (Table: table.Name, column.Name, column.Default)))
             .ToDictionary(entry => (entry.Table, entry.Name), entry => entry.Default);
 
+    /// <summary>Catalog type spelling with its modifier: <c>varchar(100)</c>, <c>timestamp(3)</c>.
+    /// The modifier is part of the type — a declared <c>timestamp</c> and a live <c>timestamp(3)</c>
+    /// are different columns, and a diff that ignored it would report a false match.</summary>
+    private static string TypeName(string typeName, int typeModifier) => typeName switch
+    {
+        "varchar" when typeModifier > 4 => $"varchar({typeModifier - 4})",
+        "bpchar" when typeModifier > 4 => $"bpchar({typeModifier - 4})",
+        "timestamp" when typeModifier >= 0 => $"timestamp({typeModifier})",
+        _ => typeName,
+    };
+
     private const string ColumnsQuery = """
-        SELECT c.relname, a.attname, t.typname, a.attnotnull,
+        SELECT c.relname, a.attname, t.typname, a.atttypmod, a.attnotnull,
                pg_get_expr(d.adbin, d.adrelid) AS default_expression,
                a.attidentity::text
         FROM pg_class c
@@ -392,10 +387,10 @@ internal static class PostgresCatalog
 
             columns.Add(new ColumnState(
                 reader.GetString(1),
-                reader.GetString(2),
-                reader.GetBoolean(3),
-                reader.IsDBNull(4) ? null : Defaults.Normalize(reader.GetString(4)),
-                reader.GetString(5).Length > 0));
+                TypeName(reader.GetString(2), reader.GetInt32(3)),
+                reader.GetBoolean(4),
+                reader.IsDBNull(5) ? null : Defaults.Normalize(reader.GetString(5)),
+                reader.GetString(6).Length > 0));
         }
 
         if (currentTable is not null)

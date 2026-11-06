@@ -278,6 +278,33 @@ public class SchemaDiffTests
     }
 
     [Fact]
+    public async Task TypeModifiers_AreComparedAndWideningIsFree()
+    {
+        var live = Live(Table("t", ("c", "varchar(100)", false)));
+
+        var same = Desired("""{ "tables": { "t": { "columns": { "c": { "type": "varchar(100)" } } } } }""");
+        Assert.True((await SchemaDiff.ComputeAsync(same, live, NoNulls)).IsEmpty);
+
+        var wider = Desired("""{ "tables": { "t": { "columns": { "c": { "type": "varchar(200)" } } } } }""");
+        var widening = Assert.Single((await SchemaDiff.ComputeAsync(wider, live, NoNulls)).Operations);
+        Assert.Equal("ALTER TABLE \"t\" ALTER COLUMN \"c\" TYPE varchar(200)", widening.Statement);
+        Assert.False(widening.Destructive);
+
+        var narrower = Desired("""{ "tables": { "t": { "columns": { "c": { "type": "varchar(50)" } } } } }""");
+        Assert.True((await SchemaDiff.ComputeAsync(narrower, live, NoNulls)).Operations.Single().Destructive);
+
+        // Dropping the modifier is a change too, not a silent match.
+        var unmodified = Desired("""{ "tables": { "t": { "columns": { "c": { "type": "varchar" } } } } }""");
+        Assert.True((await SchemaDiff.ComputeAsync(unmodified, live, NoNulls)).Operations.Single().Destructive);
+
+        var timestamp = Live(Table("t", ("at", "timestamp", false)));
+        var precision = Desired("""{ "tables": { "t": { "columns": { "at": { "type": "timestamp(3)" } } } } }""");
+        Assert.Equal(
+            "ALTER TABLE \"t\" ALTER COLUMN \"at\" TYPE timestamp(3)",
+            (await SchemaDiff.ComputeAsync(precision, timestamp, NoNulls)).Operations.Single().Statement);
+    }
+
+    [Fact]
     public async Task RecordedDefault_IsNotRegeneratedWhenPostgresRewritesIt()
     {
         var desired = Desired("""{ "tables": { "t": { "columns": { "a": { "type": "integer", "default": "pg_catalog.now()" } } } } }""");

@@ -5,6 +5,40 @@ namespace Chetah.CodeGen.Tests;
 public class SchemaParserTests
 {
     [Fact]
+    public void ReadsTypeModifiers()
+    {
+        var result = SchemaParser.Parse("""
+            { "tables": { "t": { "columns": {
+              "code": { "type": "varchar(100)" },
+              "at": { "type": "timestamp(3)" },
+              "free": { "type": "varchar" },
+              "plain": { "type": "text" } } } } }
+            """);
+
+        Assert.Null(result.Error);
+        var columns = result.Schema!.Tables.Single().Columns;
+        Assert.Equal("varchar(100)", columns[0].StorageType);
+        Assert.Equal("timestamp(3)", columns[1].StorageType);
+        Assert.Equal("varchar", columns[2].StorageType);
+        Assert.Equal("text", columns[3].StorageType);
+        // Both varchar and text generate a string property.
+        Assert.Equal(ClrType.Text, columns[0].Type);
+        Assert.Equal(ClrType.Timestamp, columns[1].Type);
+    }
+
+    [Theory]
+    [InlineData("""{ "tables": { "t": { "columns": { "c": { "type": "timestamp(9)" } } } } }""", "PostgreSQL does not accept")]
+    [InlineData("""{ "tables": { "t": { "columns": { "c": { "type": "varchar(0)" } } } } }""", "PostgreSQL does not accept")]
+    [InlineData("""{ "tables": { "t": { "columns": { "c": { "type": "integer(3)" } } } } }""", "PostgreSQL does not accept")]
+    [InlineData("""{ "tables": { "t": { "columns": { "c": { "type": "varchar(abc)" } } } } }""", "malformed type")]
+    [InlineData("""{ "tables": { "t": { "columns": { "c": { "type": "varchar(10" } } } } }""", "malformed type")]
+    public void RejectsUnusableTypeModifiers(string json, string expected)
+    {
+        var result = SchemaParser.Parse(json);
+        Assert.Contains(expected, result.Error, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ReadsIdentityMembers()
     {
         var result = SchemaParser.Parse("""
@@ -198,7 +232,7 @@ public class SchemaParserTests
     }
 
     [Theory]
-    [InlineData("""{ "tables": { "t": { "columns": { "id": {} } } } }""", "unsupported type ''")]
+    [InlineData("""{ "tables": { "t": { "columns": { "id": {} } } } }""", "must declare a \"type\" string")]
     [InlineData("""{ "tables": { "t": { "columns": { "id": { "type": "integer", "collation": "C" } } } } }""", "unknown property 'collation'")]
     [InlineData("""{ "tables": { "t": { "columns": { "id": { "type": "integer", "nullable": "false" } } } } }""", "non-boolean \"nullable\"")]
     public void RejectsMalformedColumnEntries(string json, string expectedErrorFragment)

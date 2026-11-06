@@ -135,7 +135,7 @@ internal static class SchemaDiff
 
                 if (liveColumn.Type != column.Type)
                 {
-                    var widening = (liveColumn.Type, column.Type) is ("int4", "int8");
+                    var widening = IsWidening(liveColumn.Type, column.Type);
                     operations.Add(new Operation(
                         $"ALTER TABLE {Quote(table.Name)} ALTER COLUMN {Quote(column.Name)} TYPE {column.SqlType}",
                         $"type_{table.Name}_{column.Name}",
@@ -230,6 +230,34 @@ internal static class SchemaDiff
         }
 
         return new MigrationPlan(operations);
+    }
+
+    /// <summary>Widening PostgreSQL performs without losing data: <c>int4</c> → <c>int8</c>, and a
+    /// larger modifier of the same type (<c>varchar(100)</c> → <c>varchar(200)</c>,
+    /// <c>timestamp(3)</c> → <c>timestamp(6)</c>). Everything else is gated.</summary>
+    private static bool IsWidening(string live, string declared)
+    {
+        if ((live, declared) is ("int4", "int8"))
+            return true;
+
+        var (liveBase, liveModifier) = SplitType(live);
+        var (declaredBase, declaredModifier) = SplitType(declared);
+
+        return liveBase == declaredBase
+            && liveBase is "varchar" or "timestamp"
+            && liveModifier is { } from
+            && declaredModifier is { } to
+            && to >= from;
+    }
+
+    private static (string Base, int? Modifier) SplitType(string type)
+    {
+        var open = type.IndexOf('(');
+        if (open < 0)
+            return (type, null);
+
+        var close = type.IndexOf(')', open + 1);
+        return (type[..open], int.Parse(type[(open + 1)..close]));
     }
 
     /// <summary>Whether a default really changed.
