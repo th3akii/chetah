@@ -14,15 +14,27 @@ Do not re-report these: read-only `diff --check`; identity resolution before any
 write; `diff` on a never-migrated database; default convergence
 (`1 + 1`, `pg_catalog.now()`); verbatim default emission (`'a  b'`, `::date`);
 cast-only default edits; type modifiers (`varchar(100)`, `timestamp(3)`);
-composite UNIQUE / FOREIGN KEY and `ON DELETE` / `ON UPDATE`; expression,
-partial, covering (`INCLUDE`) and non-btree indexes, non-default opclasses and
-non-default sort orders protected instead of matched or dropped; foreign keys
-from another schema detected; duplicate unique index over a live constraint;
-statement-level failure reporting; renaming a table or column carries its
-constraints and indexes with it (they were discarded, so a rename re-added all
-of them and failed on the duplicate); a baseline no longer records the schema
-file's declarations as applied, so a declined or blocked migration cannot
-suppress the default it was going to set.
+composite UNIQUE / FOREIGN KEY and `ON DELETE` / `ON UPDATE` (including
+`SET NULL` / `SET DEFAULT` on both directions, removal, and renames of the
+tables or columns they cover); expression, partial, covering (`INCLUDE`) and
+non-btree indexes, non-default opclasses and non-default sort orders protected
+instead of matched or dropped; foreign keys from another schema detected;
+duplicate unique index over a live constraint; statement-level failure reporting;
+renaming a table or column carries its constraints and indexes with it; a
+baseline no longer records the schema file's declarations as applied.
+
+Also fixed by the ordering pass:
+
+- drops are ordered by dependency, not by name: a foreign key before the primary
+  or unique key it references (composite keys included), a referencing table
+  before the table it references, and mutual references resolved by dropping the
+  foreign keys explicitly — never `CASCADE`. A schema file that keeps a foreign
+  key onto a dropped table is refused with that constraint named.
+- divergent migration histories are refused with the migration ids and hashes:
+  a journal edited after a migration ran, a SQL file that no longer matches what
+  ran, or a database that has migrations this checkout does not have while the
+  checkout has migrations the database has not run. `--check` reports it and
+  exits non-zero; nothing is rewritten or merged. Baselines are excluded.
 
 ## Open issues by severity
 
@@ -44,8 +56,9 @@ suppress the default it was going to set.
 | 14 | Low | CLI | `--check` takes no lock, so its several catalog queries can straddle a concurrent commit |
 | 15 | Low | CLI | A migration longer than the 30 s lock wait makes concurrent runs fail (retry manually) |
 | 16 | Low | History | Journals are per checkout; only `"chetah"."migrations"` says what ran on the database |
-| 17 | Low | Scope | No down/rollback migrations (**by design**) |
-| 18 | Low | Scope | No RLS, no INSERT/UPDATE/DELETE/UPSERT, no other dialect (**by design**) |
+| 17 | Low | History | Divergence is detected only when both sides have something the other lacks; a checkout with an *empty* journal (deleted migrations directory) against a database with history is treated as a fresh checkout and allowed to append |
+| 18 | Low | Scope | No down/rollback migrations (**by design**) |
+| 19 | Low | Scope | No RLS, no INSERT/UPDATE/DELETE/UPSERT, no other dialect (**by design**) |
 
 ## Details
 
@@ -201,7 +214,21 @@ for the same logical schema; the file is the record that travels.
 - The journal lives in the checkout; only `"chetah"."migrations"` describes the
   database. Two checkouts sharing a database keep separate journals by design.
 
-### 17–18. Out of scope by design
+### 17. Divergence needs both sides to be non-empty — Low
+
+The check compares the checkout's journal with `"chetah"."migrations"` and
+refuses when *each* has migrations the other lacks, or when a migration that ran
+no longer matches its journal entry or SQL file.
+
+A checkout whose migrations directory was deleted therefore has an empty journal:
+it is treated like a fresh clone sharing someone else's history (which must keep
+working — two checkouts on one database is a normal setup), and it is allowed to
+append a new migration to a history it cannot see. If that matters, restore the
+migrations directory from version control instead of deleting it; the applied
+state, the ids and the hashes are all that detect it, and an empty journal
+carries none of them.
+
+### 18–19. Out of scope by design
 
 Down/rollback migrations, seeds/data migrations, an automatic CI apply mode,
 RLS, INSERT/UPDATE/DELETE/UPSERT, and any database other than PostgreSQL.
