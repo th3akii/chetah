@@ -38,6 +38,16 @@ public class SchemaParserTests
         Assert.Contains(expected, result.Error, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("""{ "tables": { "t": { "columns": { "a": { "type": "integer", "unique": true } }, "unique": ["a"] } } }""", "already declares")]
+    [InlineData("""{ "tables": { "t": { "primaryKey": ["a"], "columns": { "a": { "type": "integer" } }, "foreignKeys": { "t_pkey": { "columns": ["a"], "references": "r", "referenceColumns": ["a"] } } } } }""", "collides with the name")]
+    [InlineData("""{ "tables": { "t": { "columns": { "a": { "type": "integer", "unique": true } }, "foreignKeys": { "t_a_key": { "columns": ["a"], "references": "r", "referenceColumns": ["a"] } } } } }""", "collides with the name")]
+    public void RejectsConstraintNamesThatWouldCollide(string json, string expected)
+    {
+        var result = SchemaParser.Parse(json);
+        Assert.Contains(expected, result.Error, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void ReadsCompositeKeysAndReferentialActions()
     {

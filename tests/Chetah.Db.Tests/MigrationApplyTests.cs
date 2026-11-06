@@ -423,10 +423,11 @@ public class MigrationApplyTests
         Assert.Equal(0, await fixture.CountAsync(
             "SELECT count(*) FROM pg_constraint WHERE conrelid = 'public.users'::regclass AND conname = 'users_email_key'"));
 
-        // The drop order is recorded, so a refused replay is not needed to prove it.
+        // The drop order is recorded, so a refused replay is not needed to prove it: the constraint
+        // goes before the index, because a unique index can be what a foreign key relies on.
         var entry = new MigrationStore(fixture.MigrationsDirectory).ReadJournal().Entries.Last();
         Assert.Equal(
-            new[] { OperationKinds.DropIndex, OperationKinds.DropConstraint, OperationKinds.DropColumn },
+            new[] { OperationKinds.DropConstraint, OperationKinds.DropIndex, OperationKinds.DropColumn },
             entry.Operations!.Select(operation => operation.Kind));
     }
 
@@ -818,6 +819,8 @@ public class MigrationApplyTests
         Assert.Equal(1, await second.CheckRunner().DiffAsync(second.Schema));
         Assert.Contains("warning:", second.Output.ToString(), StringComparison.Ordinal);
         Assert.Equal(0, await fixture.CountAsync(ColumnExists("users", "note")));
+        // Nor are identities recorded onto a database whose history cannot be trusted.
+        Assert.DoesNotContain("\"$id\"", File.ReadAllText(second.SchemaPath), StringComparison.Ordinal);
     }
 
     [PostgresFact]
@@ -871,6 +874,110 @@ public class MigrationApplyTests
         Assert.Equal(await first.Identities(), await second.Identities());
         Assert.Equal(1, await first.CountAsync("SELECT count(*) FROM chetah.migrations"));
         Assert.Equal(1, await second.CountAsync("SELECT count(*) FROM chetah.migrations"));
+    }
+
+    [PostgresFact]
+    public async Task ChangingAKeyWhileTheReferencingTableIsDropped_Applies()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        const string before = """
+            { "tables": {
+              "parent": { "primaryKey": ["id"], "columns": {
+                "id": { "type": "integer", "nullable": false },
+                "name": { "type": "text", "nullable": false } } },
+              "child": {
+                "columns": { "parent_id": { "type": "integer", "nullable": false } },
+                "foreignKeys": { "child_fkey": {
+                  "columns": ["parent_id"], "references": "parent", "referenceColumns": ["id"] } } } } }
+            """;
+        const string after = """
+            { "tables": {
+              "parent": { "primaryKey": ["name"], "columns": {
+                "id": { "type": "integer", "nullable": false },
+                "name": { "type": "text", "nullable": false } } } } }
+            """;
+
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(before)));
+        await fixture.ExecuteAsync("INSERT INTO parent VALUES (1, 'kept')");
+        await fixture.ExecuteAsync("INSERT INTO child VALUES (1)");
+
+        // Was a rollback before the fix: the child's foreign key lives on a table that goes away, so
+        // it was never dropped before the parent key changed.
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(after)));
+
+        Assert.Equal(0, await fixture.CountAsync(TableExists("child")));
+        Assert.Equal("kept", (string?)await fixture.ScalarAsync("SELECT name FROM parent"));
+        Assert.Equal(1, await fixture.CountAsync(
+            "SELECT count(*) FROM pg_constraint WHERE conrelid = 'public.parent'::regclass "
+            + "AND contype = 'p' AND array_length(conkey, 1) = 1"));
+    }
+
+    [PostgresFact]
+    public async Task ForeignKeyBackedByAUniqueIndex_IsCreatedAfterTheIndex()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        const string schema = """
+            { "tables": {
+              "parent": { "indexes": { "parent_a_idx": { "columns": ["a"], "unique": true } },
+                "columns": { "a": { "type": "integer", "nullable": false } } },
+              "child": { "columns": { "a": { "type": "integer", "nullable": false } },
+                "foreignKeys": { "child_fkey": {
+                  "columns": ["a"], "references": "parent", "referenceColumns": ["a"] } } } } }
+            """;
+
+        // Was a rollback before the fix: the foreign key was added before the index it needs.
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(schema)));
+
+        Assert.Equal(1, await fixture.CountAsync(
+            "SELECT count(*) FROM pg_constraint WHERE conname = 'child_fkey' AND contype = 'f'"));
+        Assert.Equal(1, await fixture.CountAsync(
+            "SELECT count(*) FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'parent_a_idx'"));
+
+        var settled = new StringWriter();
+        Assert.Equal(0, await fixture.Runner(settled).ApplyAsync(fixture.CurrentSchema()));
+        Assert.Contains("in sync", settled.ToString(), StringComparison.Ordinal);
+    }
+
+    [PostgresFact]
+    public async Task UniqueIndexBehindAForeignKey_IsKeptWhileTheKeyIsDeclared()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        await fixture.ExecuteAsync("""
+            CREATE TABLE parent (a integer NOT NULL);
+            CREATE UNIQUE INDEX parent_a_idx ON parent (a);
+            CREATE TABLE child (a integer NOT NULL);
+            ALTER TABLE child ADD CONSTRAINT child_fkey FOREIGN KEY (a) REFERENCES parent (a);
+            """);
+
+        // The schema keeps the foreign key but no longer declares the index that backs it: dropping
+        // the index would leave the declaration unsatisfiable.
+        const string declared = """
+            { "tables": {
+              "parent": { "columns": { "a": { "type": "integer", "nullable": false } } },
+              "child": {
+                "columns": { "a": { "type": "integer", "nullable": false } },
+                "foreignKeys": { "child_fkey": {
+                  "columns": ["a"], "references": "parent", "referenceColumns": ["a"] } } } } }
+            """;
+        var refused = new StringWriter();
+        Assert.Equal(1, await fixture.Runner(refused).ApplyAsync(fixture.Parse(declared)));
+        Assert.Contains("Refusing to apply", refused.ToString(), StringComparison.Ordinal);
+        Assert.Contains("declared foreign key", refused.ToString(), StringComparison.Ordinal);
+        Assert.Equal(1, await fixture.CountAsync(
+            "SELECT count(*) FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'parent_a_idx'"));
+
+        // Dropping the key as well makes the index removable, and the key goes first.
+        const string neither = """
+            { "tables": {
+              "parent": { "columns": { "a": { "type": "integer", "nullable": false } } },
+              "child": { "columns": { "a": { "type": "integer", "nullable": false } } } } }
+            """;
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(neither)));
+
+        Assert.Equal(0, await fixture.CountAsync(
+            "SELECT count(*) FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'parent_a_idx'"));
+        Assert.Equal(0, await fixture.CountAsync(
+            "SELECT count(*) FROM pg_constraint WHERE conname = 'child_fkey'"));
     }
 
     [PostgresFact]

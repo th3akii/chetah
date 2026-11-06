@@ -161,7 +161,7 @@ public class SchemaDiffTests
         var plan = await SchemaDiff.ComputeAsync(desired, live, NoNulls);
 
         Assert.Equal(
-            new[] { OperationKinds.DropIndex, OperationKinds.DropConstraint, OperationKinds.DropColumn },
+            new[] { OperationKinds.DropConstraint, OperationKinds.DropIndex, OperationKinds.DropColumn },
             plan.Operations.Select(operation => operation.Target!.Kind));
 
         var drop = plan.Operations.Last();
@@ -226,8 +226,8 @@ public class SchemaDiffTests
             new[]
             {
                 "ALTER TABLE \"roles\" ADD CONSTRAINT \"roles_pkey\" PRIMARY KEY (\"id\")",
-                "ALTER TABLE \"users\" ADD CONSTRAINT \"users_role_id_fkey\" FOREIGN KEY (\"role_id\") REFERENCES \"roles\" (\"id\")",
                 "CREATE INDEX \"users_role_idx\" ON \"users\" (\"role_id\")",
+                "ALTER TABLE \"users\" ADD CONSTRAINT \"users_role_id_fkey\" FOREIGN KEY (\"role_id\") REFERENCES \"roles\" (\"id\")",
             },
             plan.Operations.Select(operation => operation.Statement));
 
@@ -438,6 +438,93 @@ public class SchemaDiffTests
                 OperationKinds.DropTable,
                 OperationKinds.DropTable,
             },
+            plan.Operations.Select(operation => operation.Target!.Kind));
+    }
+
+    [Fact]
+    public async Task PermutedReferenceColumns_StillOrderTheForeignKeyFirst()
+    {
+        // The foreign key lists the referenced columns in the other order. PostgreSQL's dependency is
+        // on the index, not the order, so the key still cannot be dropped first.
+        var desired = Desired("""
+            { "tables": {
+              "parent": { "primaryKey": ["a"], "columns": {
+                "a": { "type": "integer", "nullable": false }, "b": { "type": "integer", "nullable": false } } },
+              "child": { "columns": {
+                "pa": { "type": "integer", "nullable": false }, "pb": { "type": "integer", "nullable": false } },
+                "foreignKeys": { "child_fkey": {
+                  "columns": ["pa", "pb"], "references": "parent", "referenceColumns": ["a", "b"] } } } } }
+            """);
+        var live = Live(
+            Table("parent", ("a", "int4", true), ("b", "int4", true)),
+            Table("child", ("pa", "int4", true), ("pb", "int4", true))) with
+        {
+            Constraints =
+            [
+                new ConstraintState("parent_pkey", "p", "parent", ["a", "b"]),
+                new ConstraintState("child_fkey", "f", "child", ["pa", "pb"], "parent", ["b", "a"]),
+            ],
+        };
+
+        var plan = await SchemaDiff.ComputeAsync(desired, live, NoNulls);
+
+        var drops = plan.Operations
+            .Where(operation => operation.Target!.Kind == OperationKinds.DropConstraint)
+            .ToArray();
+
+        Assert.Equal(2, drops.Length);
+        Assert.StartsWith("ALTER TABLE \"child\" DROP CONSTRAINT \"child_fkey\"", drops[0].Statement, StringComparison.Ordinal);
+        Assert.StartsWith("ALTER TABLE \"parent\" DROP CONSTRAINT \"parent_pkey\"", drops[1].Statement, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task DeclaredForeignKeyBackedByAUniqueIndex_BlocksTheIndexRemoval()
+    {
+        // PostgreSQL accepts a unique index (rather than a constraint) as a foreign key's target, and
+        // refuses to drop it while the key exists.
+        var desired = Desired("""
+            { "tables": {
+              "parent": { "columns": { "a": { "type": "integer", "nullable": false } } },
+              "child": {
+                "columns": { "a": { "type": "integer", "nullable": false } },
+                "foreignKeys": { "child_fkey": {
+                  "columns": ["a"], "references": "parent", "referenceColumns": ["a"] } } } } }
+            """);
+        var live = Live(
+            Table("parent", ("a", "int4", true)),
+            Table("child", ("a", "int4", true))) with
+        {
+            Constraints = [new ConstraintState("child_fkey", "f", "child", ["a"], "parent", ["a"])],
+            Indexes = [new IndexState("parent_a_idx", "parent", ["a"], true)],
+        };
+
+        var plan = await SchemaDiff.ComputeAsync(desired, live, NoNulls);
+
+        var drop = Assert.Single(plan.Operations, operation => operation.Target!.Kind == OperationKinds.DropIndex);
+        Assert.True(drop.Blocked);
+        Assert.Contains(drop.Dependents!, dependent => dependent.Contains("declared foreign key", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task DroppedForeignKey_IsRemovedBeforeTheUniqueIndexItUsed()
+    {
+        var desired = Desired("""
+            { "tables": {
+              "parent": { "columns": { "a": { "type": "integer", "nullable": false } } },
+              "child": { "columns": { "a": { "type": "integer", "nullable": false } } } } }
+            """);
+        var live = Live(
+            Table("parent", ("a", "int4", true)),
+            Table("child", ("a", "int4", true))) with
+        {
+            Constraints = [new ConstraintState("child_fkey", "f", "child", ["a"], "parent", ["a"])],
+            Indexes = [new IndexState("parent_a_idx", "parent", ["a"], true)],
+        };
+
+        var plan = await SchemaDiff.ComputeAsync(desired, live, NoNulls);
+
+        Assert.Equal(
+            new[] { OperationKinds.DropConstraint, OperationKinds.DropIndex },
             plan.Operations.Select(operation => operation.Target!.Kind));
     }
 

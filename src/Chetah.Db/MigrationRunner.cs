@@ -163,7 +163,12 @@ internal sealed class MigrationRunner
             return RefuseIdentity(identities);
 
         // Only now, with identity resolved and consistent, does the run record what it resolved.
-        await PersistIdentitiesAsync(schema, ids, cancellationToken);
+        // Not when the history is inconsistent: that database must be reconciled before anything is
+        // written on its behalf, including identity metadata.
+        if (history.Count > 0)
+            _output.WriteLine("Identity members were not written: resolve the history problem first.");
+        else
+            await PersistIdentitiesAsync(schema, ids, cancellationToken);
 
         var plan = await SchemaDiff.ComputeAsync(
             SchemaCatalog.FromSchema(schema),

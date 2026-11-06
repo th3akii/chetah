@@ -67,6 +67,20 @@ public class MigrationStoreTests : IDisposable
         Assert.Equal(2, _store.ReadJournal().Entries.Count);
     }
 
+    [Theory]
+    [InlineData("20260101000000_baseline", true)]
+    [InlineData("20260101000000_baseline-2", true)]
+    [InlineData("20260101000000_create_baseline", false)]
+    [InlineData("20260101000000_notnull_t_baseline", false)]
+    [InlineData("20260101000000_drop_baseline", false)]
+    [InlineData("20260101000000_legacy", false)]
+    public void BaselineIds_AreRecognizedPrecisely(string id, bool expected)
+    {
+        // A migration whose slug merely ends in "baseline" is real history; only the adopted-database
+        // entry is exempt from divergence detection.
+        Assert.Equal(expected, MigrationStore.IsBaseline(id));
+    }
+
     private static Operation Statement(string sql) =>
         new(sql, "test", null, Target: new OperationTarget("statement", "t", null));
 }

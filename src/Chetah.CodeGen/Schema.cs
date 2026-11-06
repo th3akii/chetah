@@ -490,6 +490,12 @@ public static class SchemaParser
                                 $"Table '{tableName}': \"unique\" names column '{keyColumn}', which is not declared.");
                     }
 
+                    if (keyColumns.Count == 1
+                        && columns.First(column => column.Name == keyColumns[0]).Unique)
+                        return SchemaParserResult.Fail(
+                            $"Table '{tableName}': \"unique\" lists column '{keyColumns[0]}', which already declares "
+                            + "\"unique\": true. Keep one of them: both would create the same constraint.");
+
                     if (uniqueKeys.Any(existing => existing.SequenceEqual(keyColumns, StringComparer.Ordinal)))
                         return SchemaParserResult.Fail(
                             $"Table '{tableName}': \"unique\" lists {string.Join("+", keyColumns)} twice.");
@@ -569,6 +575,23 @@ public static class SchemaParser
                         onUpdate));
                 }
             }
+
+            // Constraint names are synthesized for inline declarations; a declared name must not
+            // collide with one of them, or the same constraint name is used twice.
+            var synthesizedNames = new HashSet<string>(StringComparer.Ordinal);
+            if (primaryKey.Count > 0)
+                synthesizedNames.Add($"{tableName}_pkey");
+            foreach (var column in columns.Where(column => column.Unique))
+                synthesizedNames.Add($"{tableName}_{column.Name}_key");
+            foreach (var keyColumns in uniqueKeys)
+                synthesizedNames.Add($"{tableName}_{string.Join("_", keyColumns)}_key");
+            foreach (var column in columns.Where(column => column.References is not null))
+                synthesizedNames.Add($"{tableName}_{column.Name}_fkey");
+
+            foreach (var foreignKey in foreignKeys.Where(foreignKey => synthesizedNames.Contains(foreignKey.Name)))
+                return SchemaParserResult.Fail(
+                    $"Table '{tableName}': foreign key '{foreignKey.Name}' collides with the name Chetah generates for a "
+                    + "constraint declared on this table. Rename it.");
 
             tables.Add(new TableSchema(
                 tableName,

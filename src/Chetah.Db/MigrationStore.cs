@@ -87,9 +87,20 @@ internal sealed class MigrationStore
 
     private string JournalPath => Path.Combine(MigrationsDirectory, "_journal.json");
 
-    /// <summary>A baseline describes an adopted database and is recorded once per database. A
-    /// checkout that does not have it is not diverging: it never recorded one.</summary>
-    internal static bool IsBaseline(string id) => id.EndsWith("_baseline", StringComparison.Ordinal);
+    /// <summary>A baseline is the entry whose slug is exactly <c>baseline</c>, with the timestamp
+    /// prefix (<c>UniqueId</c> may add <c>-N</c>). A migration whose slug merely ends in
+    /// <c>baseline</c> — <c>create_baseline</c>, <c>drop_baseline</c> — is real history, and must
+    /// stay visible to divergence detection.</summary>
+    internal static bool IsBaseline(string id)
+    {
+        if (id.Length <= 14 || !id[..14].All(char.IsAsciiDigit))
+            return false;
+
+        var suffix = id[14..];
+        return suffix == "_baseline"
+            || (suffix.StartsWith("_baseline-", StringComparison.Ordinal)
+                && int.TryParse(suffix["_baseline-".Length..], out _));
+    }
 
     /// <summary>Two applies inside one second must not reuse a file name.</summary>
     private static string UniqueId(Journal journal, string stamp, string slug)

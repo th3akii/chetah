@@ -19,22 +19,35 @@ composite UNIQUE / FOREIGN KEY and `ON DELETE` / `ON UPDATE` (including
 tables or columns they cover); expression, partial, covering (`INCLUDE`) and
 non-btree indexes, non-default opclasses and non-default sort orders protected
 instead of matched or dropped; foreign keys from another schema detected;
-duplicate unique index over a live constraint; statement-level failure reporting;
+a declared unique index is not duplicated on top of a live unique constraint
+(the skip is silent — see item 9); statement-level failure reporting;
 renaming a table or column carries its constraints and indexes with it; a
 baseline no longer records the schema file's declarations as applied.
 
 Also fixed by the ordering pass:
 
-- drops are ordered by dependency, not by name: a foreign key before the primary
-  or unique key it references (composite keys included), a referencing table
-  before the table it references, and mutual references resolved by dropping the
-  foreign keys explicitly — never `CASCADE`. A schema file that keeps a foreign
-  key onto a dropped table is refused with that constraint named.
-- divergent migration histories are refused with the migration ids and hashes:
-  a journal edited after a migration ran, a SQL file that no longer matches what
-  ran, or a database that has migrations this checkout does not have while the
-  checkout has migrations the database has not run. `--check` reports it and
-  exits non-zero; nothing is rewritten or merged. Baselines are excluded.
+- drops are ordered by dependency, not by name: a foreign key before the key it
+  references (composite keys included, and the referenced columns are matched in
+  any order), a referencing table before the table it references, and mutual
+  references resolved by dropping the foreign keys explicitly — never `CASCADE`.
+  A foreign key that lives on a table being dropped is dropped before the
+  surviving table's key or column changes; a declared foreign key onto a dropped
+  object is refused with that constraint named.
+- constraints are dropped before indexes, and indexes are created before foreign
+  keys: a unique index can be what a foreign key relies on, so it must outlive
+  the drop and exist before the add. An index that a foreign key references is
+  now visible to the diff (a foreign key records the referenced index in
+  `conindid`, which used to hide it as constraint-owned and re-create it).
+- duplicate constraint declarations are rejected: a column `"unique": true`
+  repeated as a table `"unique"` entry, and a declared foreign-key name that
+  collides with a generated primary-key, unique or reference constraint name.
+- divergent migration histories are refused and reported with the migration ids
+  (edits also name the two conflicting hashes): a journal edited after a
+  migration ran, a SQL file that no longer matches what ran, or a database that
+  has migrations this checkout does not have while the checkout has migrations
+  the database has not run. `--check` reports it and exits non-zero; nothing is
+  rewritten or merged. Only the real adopted-database entry is exempt — a
+  migration whose slug merely ends in `baseline` stays visible.
 
 ## Open issues by severity
 
@@ -57,8 +70,11 @@ Also fixed by the ordering pass:
 | 15 | Low | CLI | A migration longer than the 30 s lock wait makes concurrent runs fail (retry manually) |
 | 16 | Low | History | Journals are per checkout; only `"chetah"."migrations"` says what ran on the database |
 | 17 | Low | History | Divergence is detected only when both sides have something the other lacks; a checkout with an *empty* journal (deleted migrations directory) against a database with history is treated as a fresh checkout and allowed to append |
-| 18 | Low | Scope | No down/rollback migrations (**by design**) |
-| 19 | Low | Scope | No RLS, no INSERT/UPDATE/DELETE/UPSERT, no other dialect (**by design**) |
+| 18 | Low | Dependencies | Objects that are neither constraints nor indexes — views, triggers, policies, functions, extension members — on a dropped column or table are not detected; the drop fails at apply with a raw PostgreSQL error and rolls back |
+| 19 | Low | History | A replayed migration executes the recorded statement order verbatim (history is never re-planned), so an order that was valid when written and is not valid now fails at apply |
+| 20 | Low | History | Two histories that applied the same ids in a different order are not detected; the journal records order, the database records `id` values |
+| 21 | Low | Scope | No down/rollback migrations (**by design**) |
+| 22 | Low | Scope | No RLS, no INSERT/UPDATE/DELETE/UPSERT, no other dialect (**by design**) |
 
 ## Details
 
@@ -228,7 +244,28 @@ migrations directory from version control instead of deleting it; the applied
 state, the ids and the hashes are all that detect it, and an empty journal
 carries none of them.
 
-### 18–19. Out of scope by design
+### 18. Dependencies that are not constraints or indexes — Low
+
+A view, materialised view, trigger, RLS policy, function or extension member
+that depends on a column or table is not read from the catalog, so a `DROP
+COLUMN`/`DROP TABLE` that would break it is attempted. PostgreSQL refuses and
+the migration rolls back with its own error (`2BP01`), which names the dependent
+object. Nothing is lost, but the diagnostic comes from the server rather than
+from the plan. Fix: extend the foreign-object query to `pg_depend` and report
+those objects the way check constraints and inbound foreign keys are reported.
+
+### 19–20. Recorded order and applied order — Low
+
+A migration that is replayed executes its recorded statements in the order they
+were written, because history is never re-planned. If the catalog changed shape
+since (a dependency appeared that the recorded order does not satisfy), the
+migration fails at apply and rolls back instead of being re-ordered.
+
+Two histories that applied the same migration ids in a different order are not
+detected: the journal has an order, the database has its own `id` sequence, and
+neither is compared. Ids are timestamps, so this requires editing a journal.
+
+### 21–22. Out of scope by design
 
 Down/rollback migrations, seeds/data migrations, an automatic CI apply mode,
 RLS, INSERT/UPDATE/DELETE/UPSERT, and any database other than PostgreSQL.

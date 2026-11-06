@@ -96,16 +96,24 @@ internal static class SchemaCatalog
             if (table.PrimaryKey is { Count: > 0 } primaryKey)
                 constraints.Add(new ConstraintState($"{table.Name}_pkey", "p", table.Name, primaryKey));
 
+            // Column flags and table entries can describe the same key; each definition is declared
+            // once, or CREATE TABLE would carry two constraints with the same name.
+            var uniqueColumns = new List<IReadOnlyList<string>>();
             foreach (var column in table.Columns.Where(column => column.Unique))
-                constraints.Add(new ConstraintState($"{table.Name}_{column.Name}_key", "u", table.Name, [column.Name]));
-
+                uniqueColumns.Add([column.Name]);
             foreach (var uniqueKey in table.UniqueKeys ?? [])
             {
+                if (!uniqueColumns.Any(existing => existing.SequenceEqual(uniqueKey, StringComparer.Ordinal)))
+                    uniqueColumns.Add(uniqueKey);
+            }
+
+            foreach (var columns in uniqueColumns)
+            {
                 constraints.Add(new ConstraintState(
-                    $"{table.Name}_{string.Join("_", uniqueKey)}_key",
+                    $"{table.Name}_{string.Join("_", columns)}_key",
                     "u",
                     table.Name,
-                    uniqueKey));
+                    columns));
             }
 
             foreach (var column in table.Columns.Where(column => column.References is not null))
@@ -389,9 +397,11 @@ internal static class PostgresCatalog
         ORDER BY c.relname, con.conname, a.attnum
         """;
 
-    /// <summary>Standalone indexes only: the index backing a constraint is already reported as that
-    /// constraint, and reporting both would just double the noise. Expression and partial indexes are
-    /// excluded too — their definition is not just a column list, so they are protected instead.</summary>
+    /// <summary>Standalone indexes only: the index backing a primary key, unique or exclusion
+    /// constraint is already reported as that constraint, and reporting both would double the noise.
+    /// A foreign key also records the referenced index in <c>conindid</c>, but it does not own it, so
+    /// the filter asks for the constraint kinds that do. Expression and partial indexes are excluded
+    /// here too — their definition is not just a column list, so they are protected instead.</summary>
     private const string IndexesQuery = """
         SELECT ic.relname,
                c.relname,
@@ -414,7 +424,8 @@ internal static class PostgresCatalog
                           WHERE NOT opc.opcdefault)
           AND NOT EXISTS (SELECT 1 FROM unnest(i.indoption::int2[]) AS option(value)
                           WHERE option.value <> 0)
-          AND NOT EXISTS (SELECT 1 FROM pg_constraint con WHERE con.conindid = i.indexrelid)
+          AND NOT EXISTS (SELECT 1 FROM pg_constraint con
+                 WHERE con.conindid = i.indexrelid AND con.contype IN ('p', 'u', 'x'))
         ORDER BY c.relname, ic.relname
         """;
 
@@ -440,7 +451,8 @@ internal static class PostgresCatalog
                           WHERE NOT opc.opcdefault)
                OR EXISTS (SELECT 1 FROM unnest(i.indoption::int2[]) AS option(value)
                           WHERE option.value <> 0))
-          AND NOT EXISTS (SELECT 1 FROM pg_constraint con WHERE con.conindid = i.indexrelid)
+          AND NOT EXISTS (SELECT 1 FROM pg_constraint con
+                 WHERE con.conindid = i.indexrelid AND con.contype IN ('p', 'u', 'x'))
         ORDER BY c.relname, ic.relname
         """;
 

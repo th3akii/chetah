@@ -93,16 +93,9 @@ internal static class SchemaDiff
             .Select(table => table.Name)
             .ToHashSet(StringComparer.Ordinal);
 
-        // Indexes and constraints go before columns so an object is never dropped implicitly by the
-        // column or table that carries it; a table that disappears takes its objects with it.
-        foreach (var index in live.ScopedIndexes.Where(index => !dropped.Contains(index.Table)))
-        {
-            if (!desired.ScopedIndexes.Any(desiredIndex => SameDefinition(desiredIndex, index)))
-                operations.Add(DropIndex(index));
-        }
-
-        // A unique constraint that the file expresses as a unique index is the same guarantee under
-        // another name: it satisfies the index and is not dropped.
+        // Constraints go first: a foreign key must be gone before the key or column it references
+        // changes, and a table that is being dropped still owns foreign keys that point at tables
+        // which stay. Indexes follow, because a unique index can be what a foreign key relies on.
         var coveredUnique = live.ScopedConstraints
             .Where(constraint => constraint.Kind == "u"
                 && desired.ScopedIndexes.Any(index => index.Unique
@@ -111,8 +104,12 @@ internal static class SchemaDiff
             .ToArray();
 
         var constraintDrops = live.ScopedConstraints
-            .Where(constraint => !dropped.Contains(constraint.Table) && !coveredUnique.Contains(constraint))
-            .Where(constraint => !desired.ScopedConstraints.Any(desiredConstraint => SameDefinition(desiredConstraint, constraint)))
+            .Where(constraint => !coveredUnique.Contains(constraint))
+            .Where(constraint => dropped.Contains(constraint.Table)
+                // Kept only to unblock what the drop removes anyway: a foreign key on a table that is
+                // going away, pointing at a table that is not.
+                ? constraint.Kind == "f" && constraint.RefTable is { } target && !dropped.Contains(target)
+                : !desired.ScopedConstraints.Any(desiredConstraint => SameDefinition(desiredConstraint, constraint)))
             .ToArray();
 
         // A foreign key must go before the key it references: PostgreSQL refuses to drop a key that
@@ -124,6 +121,30 @@ internal static class SchemaDiff
 
         foreach (var constraint in orderedConstraintDrops)
             operations.Add(DropConstraint(constraint));
+
+        foreach (var index in live.ScopedIndexes.Where(index => !dropped.Contains(index.Table)))
+        {
+            if (desired.ScopedIndexes.Any(desiredIndex => SameDefinition(desiredIndex, index)))
+                continue;
+
+            // A unique index can be the uniqueness a declared foreign key relies on; removing it
+            // would leave that declaration unsatisfiable, so the drop is refused with its name.
+            var dependent = desired.ScopedConstraints.FirstOrDefault(constraint =>
+                index.Unique
+                && constraint.Kind == "f"
+                && constraint.RefTable == index.Table
+                && SameColumns(constraint.RefColumns ?? [], index.Columns));
+
+            operations.Add(dependent is null
+                ? DropIndex(index)
+                : DropIndex(index) with
+                {
+                    Dependents =
+                    [
+                        $"declared foreign key {Quote(dependent.Name)} on {Quote(dependent.Table)}",
+                    ],
+                });
+        }
 
         foreach (var table in desired.Tables)
         {
@@ -264,15 +285,16 @@ internal static class SchemaDiff
             }
         }
 
-        // New tables carry their primary key and unique constraints inline; foreign keys come last
-        // because they may point at a table that only now exists.
-        foreach (var constraint in desired.ScopedConstraints
+        // New tables carry their primary key and unique constraints inline. Keys and indexes are
+        // added before foreign keys: PostgreSQL requires the referenced columns to be unique by
+        // constraint or index at the moment the foreign key is created.
+        var missingConstraints = desired.ScopedConstraints
             .Where(constraint => !live.ScopedConstraints.Any(liveConstraint => SameDefinition(constraint, liveConstraint)))
             .Where(constraint => !(created.Contains(constraint.Table) && constraint.Kind is "p" or "u"))
-            .OrderBy(constraint => constraint.Kind switch { "p" => 0, "u" => 1, _ => 2 }))
-        {
+            .ToArray();
+
+        foreach (var constraint in missingConstraints.Where(constraint => constraint.Kind is "p" or "u"))
             operations.Add(AddConstraint(constraint));
-        }
 
         foreach (var index in desired.ScopedIndexes)
         {
@@ -289,6 +311,9 @@ internal static class SchemaDiff
 
             operations.Add(CreateIndex(index));
         }
+
+        foreach (var constraint in missingConstraints.Where(constraint => constraint.Kind == "f"))
+            operations.Add(AddConstraint(constraint));
 
         return new MigrationPlan(operations);
     }
@@ -622,12 +647,18 @@ internal static class SchemaDiff
         return ordered;
     }
 
-    /// <summary>A foreign key cannot outlive the key it references, so it must be dropped first.</summary>
+    /// <summary>A foreign key cannot outlive the key it references, so it must be dropped first. The
+    /// referenced columns are compared as a multiset: a foreign key may list them in another order,
+    /// and PostgreSQL's dependency is on the index, not on the order.</summary>
     private static bool ReferencesKey(ConstraintState dependent, ConstraintState prerequisite) =>
         dependent.Kind == "f"
         && prerequisite.Kind is "p" or "u"
         && dependent.RefTable == prerequisite.Table
-        && (dependent.RefColumns ?? []).SequenceEqual(prerequisite.Columns, StringComparer.Ordinal);
+        && SameColumns(dependent.RefColumns ?? [], prerequisite.Columns);
+
+    private static bool SameColumns(IReadOnlyList<string> left, IReadOnlyList<string> right) =>
+        left.Count == right.Count
+        && left.Order(StringComparer.Ordinal).SequenceEqual(right.Order(StringComparer.Ordinal), StringComparer.Ordinal);
 
     private static IReadOnlyList<string>? Names(IEnumerable<string> names)
     {
