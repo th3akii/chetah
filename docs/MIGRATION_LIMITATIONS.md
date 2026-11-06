@@ -56,6 +56,13 @@ Also fixed by the ordering pass:
   rather than divergence, and nothing is ever rewritten or merged automatically.
   `--check` reports it and exits non-zero. Only the real adopted-database entry
   is exempt — a migration whose slug merely ends in `baseline` stays visible.
+- identities are scoped: table ids are unique among tables, column ids are
+  numbered **per table**, and the registry key is `(kind, parent, id)`. Two
+  branches adding a column to *different* tables no longer collide on merge
+  (both used to allocate the same global next number and be refused as a
+  duplicate). Older registries with a global primary key on `id` are migrated by
+  the bootstrap. An id Chetah never issued, for an object it does not know, is
+  refused.
 
 ## Open issues by severity
 
@@ -82,8 +89,9 @@ Also fixed by the ordering pass:
 | 19 | Low | History | A replayed migration executes the recorded statement order verbatim (history is never re-planned), so an order that was valid when written and is not valid now fails at apply |
 | 20 | Low | History | Two histories that applied the same ids in a different order are not detected; the journal records order, the database records `id` values |
 | 21 | Low | Constraints | Constraint and index *names* in the schema file are used when an object is created; renaming one where an equivalent definition already exists does not rename the database object, so a rename is a drop plus a create |
-| 22 | Low | Scope | No down/rollback migrations (**by design**) |
-| 23 | Low | Scope | No RLS, no INSERT/UPDATE/DELETE/UPSERT, no other dialect (**by design**) |
+| 22 | Low | Identities | A hand-written `"$id"` that matches an existing object in its scope is indistinguishable from a rename, so it will rename that object rather than be rejected. Ids are tool-owned by rule; a signature over the file would be needed to enforce it, which git merges would break |
+| 23 | Low | Scope | No down/rollback migrations (**by design**) |
+| 24 | Low | Scope | No RLS, no INSERT/UPDATE/DELETE/UPSERT, no other dialect (**by design**) |
 
 ## Details
 
@@ -302,7 +310,26 @@ Two histories that applied the same migration ids in a different order are not
 detected: the journal has an order, the database has its own `id` sequence, and
 neither is compared. Ids are timestamps, so this requires editing a journal.
 
-### 21–22. Out of scope by design
+### 21. Constraint and index names — Low
+
+A constraint or index name in the file is used when the object is created.
+Renaming it where an equivalent definition already exists does not rename the
+database object: matching is by definition, so the live object satisfies the
+declaration and the new name never reaches PostgreSQL. Renaming an existing
+object out of the file's definitions is a drop plus a create.
+
+### 22. A hand-written id that matches an object — Low
+
+Ids are documented as tool-owned and the tool refuses the cases it can prove:
+a duplicate in the scope, a tombstoned id, an id that contradicts the registry,
+an id the scope never issued. What it cannot prove is intent — a `"$id"` that
+coincides with an existing object in its scope is exactly how a rename is
+declared, so writing one by hand renames that object instead of being rejected.
+Enforcing "tool-issued only" would need a signature over the file (git merges
+would invalidate it) or a lock file with the same forgeability, so the rule stays
+a convention with these refusals around it.
+
+### 23–24. Out of scope by design
 
 Down/rollback migrations, seeds/data migrations, an automatic CI apply mode,
 RLS, INSERT/UPDATE/DELETE/UPSERT, and any database other than PostgreSQL.

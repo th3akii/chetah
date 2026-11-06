@@ -253,6 +253,24 @@ including tombstones for objects that were dropped.
   order, so it is deterministic and never reissues a tombstoned id. No sequence
   is needed, and `diff` — which may be the run that records the ids — writes
   only the schema file.
+- **Two scopes.** Table ids are unique among tables (one counter per schema).
+  Column ids are numbered per table, so `users`' columns are 1, 2, 3 and
+  `orders`' are 1, 2, …: the same number can name a column in two tables. The
+  registry key is therefore `(kind, coalesce(table_id, 0), id)`, and older
+  registries with a global primary key on `id` are migrated by the bootstrap.
+  The reason is merge behaviour: with one global counter, two branches each
+  adding a column — to *different* tables — allocate the same next number and
+  the merge is refused as a duplicate id, which is a false conflict. Scoping
+  makes those two allocations independent.
+- The price of scoping is that an id alone no longer names a column: identity is
+  `(table, id)`, and copying a `$id` from one table to another is legal rather
+  than caught.
+- A `"$id"` this database never issued for an object it does not know is refused
+  ("was never issued by Chetah"); a genuinely portable id from another
+  environment is above what the scope has issued, so it is accepted. A
+  hand-written id that coincides with an existing object is indistinguishable
+  from a rename — that is inherent to keeping the id in the file, and the
+  documented rule is that ids are tool-owned.
 - The file is edited textually by a small JSONC reader that locates the table
   and column objects, because a re-serialize would delete the comments users
   keep in the file.

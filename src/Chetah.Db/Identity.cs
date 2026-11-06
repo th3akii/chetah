@@ -17,14 +17,31 @@ internal sealed record IdentityRow(
     string? DeclaredDefault = null,
     string? AppliedDefault = null);
 
-/// <summary>The recorded identities, live and tombstoned.</summary>
+/// <summary>The recorded identities, live and tombstoned. Table ids are unique among tables; column
+/// ids are unique within their table, so a column id is only meaningful together with its table.</summary>
 internal sealed record IdentityRegistry(IReadOnlyList<IdentityRow> Rows)
 {
     public static readonly IdentityRegistry Empty = new([]);
 
-    public long MaxId => Rows.Select(row => row.Id).DefaultIfEmpty(0).Max();
+    /// <summary>Highest table id ever handed out, tombstones included.</summary>
+    public long MaxTableId => Rows
+        .Where(row => row.Kind == "table")
+        .Select(row => row.Id)
+        .DefaultIfEmpty(0)
+        .Max();
 
-    public IdentityRow? Row(long id) => Rows.FirstOrDefault(row => row.Id == id);
+    /// <summary>Highest column id handed out inside one table, tombstones included.</summary>
+    public long MaxColumnId(long tableId) => Rows
+        .Where(row => row.Kind == "column" && row.TableId == tableId)
+        .Select(row => row.Id)
+        .DefaultIfEmpty(0)
+        .Max();
+
+    public IdentityRow? Table(long id) =>
+        Rows.FirstOrDefault(row => row.Kind == "table" && row.Id == id);
+
+    public IdentityRow? Column(long tableId, long id) =>
+        Rows.FirstOrDefault(row => row.Kind == "column" && row.TableId == tableId && row.Id == id);
 
     public IReadOnlyList<IdentityRow> Live(string kind) =>
         Rows.Where(row => !row.Dropped && row.Kind == kind).ToArray();
@@ -176,7 +193,7 @@ internal sealed record IdentityRegistry(IReadOnlyList<IdentityRow> Rows)
             INSERT INTO "chetah"."objects"
                 (id, kind, table_id, name, declared_default, applied_default)
             SELECT * FROM unnest($1::bigint[], $2::text[], $3::bigint[], $4::text[], $5::text[], $6::text[])
-            ON CONFLICT (id) DO UPDATE SET
+            ON CONFLICT (kind, coalesce(table_id, 0), id) DO UPDATE SET
                 name = EXCLUDED.name,
                 dropped_at = NULL,
                 declared_default = EXCLUDED.declared_default,
@@ -194,9 +211,13 @@ internal sealed record IdentityRegistry(IReadOnlyList<IdentityRow> Rows)
             await declare.ExecuteNonQueryAsync(cancellationToken);
         }
 
-        // Keep an id when it is declared (a later pending migration may still create it) or when its
-        // object still physically exists (drift this plan did not remove).
-        var surviving = objectIds.ToHashSet();
+        // Keep an identity when it is declared (a later pending migration may still create it) or
+        // when its object still physically exists (drift this plan did not remove). Keys are scoped:
+        // the same number can name a column in two tables, so the number alone is not an identity.
+        var surviving = new HashSet<(string Kind, long Scope, long Id)>();
+        for (var index = 0; index < objectIds.Count; index++)
+            surviving.Add((kinds[index], tableIds[index] ?? 0, objectIds[index]));
+
         var tableNames = registry.Rows
             .Where(row => !row.Dropped && row.Kind == "table")
             .ToDictionary(row => row.Id, row => row.Name);
@@ -211,18 +232,26 @@ internal sealed record IdentityRegistry(IReadOnlyList<IdentityRow> Rows)
                     && columns.Contains(row.Name);
 
             if (present)
-                surviving.Add(row.Id);
+                surviving.Add((row.Kind, row.TableId ?? 0, row.Id));
         }
 
         await using var tombstone = new NpgsqlCommand(
             """
-            UPDATE "chetah"."objects"
+            UPDATE "chetah"."objects" AS object
             SET dropped_at = now()
-            WHERE dropped_at IS NULL AND NOT (id = ANY ($1::bigint[]))
+            WHERE object.dropped_at IS NULL
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM unnest($1::text[], $2::bigint[], $3::bigint[]) AS keep(kind, scope, id)
+                  WHERE keep.kind = object.kind
+                    AND keep.scope = coalesce(object.table_id, 0)
+                    AND keep.id = object.id)
             """,
             connection,
             transaction);
-        tombstone.Parameters.Add(new NpgsqlParameter { Value = surviving.ToArray() });
+        tombstone.Parameters.Add(new NpgsqlParameter { Value = surviving.Select(key => key.Kind).ToArray() });
+        tombstone.Parameters.Add(new NpgsqlParameter { Value = surviving.Select(key => key.Scope).ToArray() });
+        tombstone.Parameters.Add(new NpgsqlParameter { Value = surviving.Select(key => key.Id).ToArray() });
         await tombstone.ExecuteNonQueryAsync(cancellationToken);
     }
 }
@@ -273,24 +302,19 @@ internal static class Identity
         var tables = new Dictionary<string, ResolvedTable>(StringComparer.Ordinal);
         var columns = new Dictionary<(string Table, string Column), ResolvedColumn>();
         var claimedTables = new HashSet<long>();
-        var claimedColumns = new HashSet<long>();
+        // Column ids are scoped to their table, so the table is part of the key.
+        var claimedColumns = new HashSet<(long TableId, long Id)>();
 
         foreach (var table in schema.Tables)
         {
             var id = ids.Tables[table.Name];
-            var row = registry.Row(id);
+            var row = registry.Table(id);
 
             if (row is { Dropped: true })
             {
                 refusals.Add(
                     $"Table '{table.Name}': \"$id\" {id} was removed from this database earlier. Ids are never reused; "
                     + "delete that \"$id\" so a fresh one is allocated.");
-                continue;
-            }
-
-            if (row is not null && (row.Kind != "table" || row.TableId is not null))
-            {
-                refusals.Add($"Table '{table.Name}': \"$id\" {id} already identifies another object.");
                 continue;
             }
 
@@ -316,6 +340,17 @@ internal static class Identity
                 continue;
             }
 
+            // Ids are issued by Chetah. A number this database never issued, for a table it does not
+            // know, is a hand-written id: it cannot be allowed to collide with one issued later.
+            if (row is null && id <= registry.MaxTableId)
+            {
+                refusals.Add(
+                    $"Table '{table.Name}': \"$id\" {id} was never issued by Chetah (this database has issued table "
+                    + $"ids up to {registry.MaxTableId}). Ids are assigned by the tool; delete that \"$id\" so a fresh "
+                    + "one is allocated.");
+                continue;
+            }
+
             claimedTables.Add(id);
             tables[table.Name] = new ResolvedTable(table.Name, id, row?.Name);
         }
@@ -328,20 +363,13 @@ internal static class Identity
             foreach (var column in table.Columns)
             {
                 var id = ids.Columns[(table.Name, column.Name)];
-                var row = registry.Row(id);
+                var row = registry.Column(resolved.Id, id);
 
                 if (row is { Dropped: true })
                 {
                     refusals.Add(
                         $"Column '{table.Name}.{column.Name}': \"$id\" {id} was removed from this database earlier. "
                         + "Ids are never reused; delete that \"$id\" so a fresh one is allocated.");
-                    continue;
-                }
-
-                if (row is not null && (row.Kind != "column" || row.TableId != resolved.Id))
-                {
-                    refusals.Add(
-                        $"Column '{table.Name}.{column.Name}': \"$id\" {id} identifies an object outside this table.");
                     continue;
                 }
 
@@ -367,7 +395,19 @@ internal static class Identity
                     continue;
                 }
 
-                claimedColumns.Add(id);
+                // Same rule inside a table: an id this database never issued for this table, for a
+                // column it does not know, was written by hand rather than allocated.
+                var issued = registry.MaxColumnId(resolved.Id);
+                if (row is null && id <= issued)
+                {
+                    refusals.Add(
+                        $"Column '{table.Name}.{column.Name}': \"$id\" {id} was never issued by Chetah for table "
+                        + $"'{table.Name}' (it has issued up to {issued}). Ids are assigned by the tool; delete that "
+                        + "\"$id\" so a fresh one is allocated.");
+                    continue;
+                }
+
+                claimedColumns.Add((resolved.Id, id));
                 columns[(table.Name, column.Name)] = new ResolvedColumn(
                     table.Name,
                     resolved.Id,
@@ -394,7 +434,7 @@ internal static class Identity
         Dictionary<string, ResolvedTable> tables,
         Dictionary<(string Table, string Column), ResolvedColumn> columns,
         HashSet<long> claimedTables,
-        HashSet<long> claimedColumns,
+        HashSet<(long TableId, long Id)> claimedColumns,
         List<string> refusals)
     {
         var vanishedTables = registry.Live("table")
@@ -407,7 +447,7 @@ internal static class Identity
             foreach (var table in schema.Tables)
             {
                 if (!tables.TryGetValue(table.Name, out var resolved)
-                    || !ids.Assigned.Contains(resolved.Id)
+                    || !ids.Assigned.Contains(("table", 0, resolved.Id))
                     || dropAdd.Contains(table.Name))
                     continue;
 
@@ -424,7 +464,7 @@ internal static class Identity
                 continue;
 
             var vanished = registry.Live("column")
-                .Where(row => row.TableId == resolved.Id && !claimedColumns.Contains(row.Id))
+                .Where(row => row.TableId == resolved.Id && !claimedColumns.Contains((resolved.Id, row.Id)))
                 .Select(row => row.Name)
                 .ToArray();
 
@@ -434,7 +474,7 @@ internal static class Identity
             foreach (var column in table.Columns)
             {
                 if (!columns.TryGetValue((table.Name, column.Name), out var resolvedColumn)
-                    || !ids.Assigned.Contains(resolvedColumn.Id)
+                    || !ids.Assigned.Contains(("column", resolved.Id, resolvedColumn.Id))
                     || dropAdd.Contains($"{table.Name}.{column.Name}"))
                     continue;
 

@@ -186,8 +186,8 @@ public static class SchemaParser
         var tables = new List<TableSchema>();
         var tableNames = new HashSet<string>(StringComparer.Ordinal);
         var csharpNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "ChetahSchema", "Bindings" };
-        // Identity is global: one id names one object, whether it is a table or a column.
-        var objectIds = new HashSet<long>();
+        // Table ids are unique among tables; column ids are scoped to their table.
+        var tableIds = new HashSet<long>();
         // Index names share the schema namespace in PostgreSQL.
         var indexNames = new HashSet<string>(StringComparer.Ordinal);
         // Constraint names do too.
@@ -215,10 +215,10 @@ public static class SchemaParser
             if (!TryPositiveId(tableElement, out var tableId))
                 return SchemaParserResult.Fail($"Table '{tableName}': \"$id\" must be a positive integer.");
 
-            if (tableId is { } tableIdentity && !objectIds.Add(tableIdentity))
+            if (tableId is { } tableIdentity && !tableIds.Add(tableIdentity))
                 return SchemaParserResult.Fail(
-                    $"Table '{tableName}': \"$id\" {tableIdentity} is already used by another object. Ids identify one object forever; "
-                    + "delete the duplicated \"$id\" so a fresh one is allocated.");
+                    $"Table '{tableName}': \"$id\" {tableIdentity} is already used by another table. Ids identify one "
+                    + "table forever; delete the duplicated \"$id\" so a fresh one is allocated.");
 
             var accessorName = PascalCase(tableName) + "Table";
 
@@ -244,6 +244,9 @@ public static class SchemaParser
 
             var columns = new List<ColumnSchema>();
             var columnNames = new HashSet<string>(StringComparer.Ordinal);
+            // Column ids are unique within their table; the same number may name a column in another
+            // table, which is what keeps two branches touching different tables mergeable.
+            var columnIds = new HashSet<long>();
             // Generated C# property names must also be unique: "user_id" and
             // "userId" would otherwise emit the same member twice.
             var propertyNames = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -271,10 +274,11 @@ public static class SchemaParser
                     return SchemaParserResult.Fail(
                         $"Table '{tableName}': column '{columnName}': \"$id\" must be a positive integer.");
 
-                if (columnId is { } columnIdentity && !objectIds.Add(columnIdentity))
+                if (columnId is { } columnIdentity && !columnIds.Add(columnIdentity))
                     return SchemaParserResult.Fail(
-                        $"Table '{tableName}': column '{columnName}': \"$id\" {columnIdentity} is already used by another object. "
-                        + "Ids identify one object forever; delete the duplicated \"$id\" so a fresh one is allocated.");
+                        $"Table '{tableName}': column '{columnName}': \"$id\" {columnIdentity} is already used by "
+                        + $"another column in table '{tableName}'. Ids identify one column forever within their table; "
+                        + "delete the duplicated \"$id\" so a fresh one is allocated.");
 
                 if (!IsValidIdentifier(columnName))
                     return SchemaParserResult.Fail(

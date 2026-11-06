@@ -112,6 +112,30 @@ public class SchemaParserTests
     }
 
     [Fact]
+    public void ScopesColumnIdsToTheirTable()
+    {
+        var result = SchemaParser.Parse("""
+            { "tables": {
+              "users": { "$id": 1, "columns": { "id": { "$id": 1, "type": "integer" } } },
+              "orders": { "$id": 2, "columns": { "id": { "$id": 1, "type": "integer" } } } } }
+            """);
+
+        Assert.Null(result.Error);
+        // The same number names a column in each table, and may also equal a table id.
+        Assert.Equal(1, result.Schema!.Tables[0].Id);
+        Assert.Equal(1, result.Schema.Tables[0].Columns[0].Id);
+        Assert.Equal(1, result.Schema.Tables[1].Columns[0].Id);
+    }
+
+    [Theory]
+    [InlineData("""{ "tables": { "t": { "columns": { "a": { "$id": 1, "type": "integer" }, "b": { "$id": 1, "type": "integer" } } } } }""", "already used by another column in table")]
+    [InlineData("""{ "tables": { "a": { "$id": 1, "columns": { "x": { "type": "integer" } } }, "b": { "$id": 1, "columns": { "x": { "type": "integer" } } } } }""", "already used by another table")]
+    public void RejectsDuplicateIdsInsideTheirScope(string json, string expected)
+    {
+        Assert.Contains(expected, SchemaParser.Parse(json).Error, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void DuplicateIdentity_IsRejected()
     {
         // What a merge of two branches that both allocated id 2 looks like.
@@ -125,7 +149,7 @@ public class SchemaParserTests
             }
             """);
 
-        Assert.Contains("already used by another object", result.Error, StringComparison.Ordinal);
+        Assert.Contains("already used by another column in table", result.Error, StringComparison.Ordinal);
     }
 
     [Fact]

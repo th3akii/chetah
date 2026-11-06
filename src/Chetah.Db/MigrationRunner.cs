@@ -27,10 +27,17 @@ internal sealed class MigrationRunner
             table_id bigint,
             name text NOT NULL,
             dropped_at timestamptz,
-            CONSTRAINT objects_pkey PRIMARY KEY (id),
             CONSTRAINT objects_kind_check CHECK (kind IN ('table', 'column')),
             CONSTRAINT objects_parent_check CHECK ((kind = 'table') = (table_id IS NULL))
         );
+
+        -- Column ids are scoped to their table, so the identity key is (kind, parent, id): the same
+        -- number may name a column in two different tables. Registries written before that change
+        -- carried a global primary key on id, which is dropped here.
+        ALTER TABLE "chetah"."objects" DROP CONSTRAINT IF EXISTS "objects_pkey";
+
+        CREATE UNIQUE INDEX IF NOT EXISTS "objects_scoped_id"
+            ON "chetah"."objects" (kind, coalesce(table_id, 0), id);
 
         CREATE UNIQUE INDEX IF NOT EXISTS "objects_live_name"
             ON "chetah"."objects" (kind, coalesce(table_id, 0), name)

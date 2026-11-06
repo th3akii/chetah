@@ -55,6 +55,58 @@ public class SchemaFileTests : IDisposable
     }
 
     [Fact]
+    public async Task AllocatesColumnIdsPerTable()
+    {
+        const string json = """
+            { "tables": {
+              "users": { "columns": { "id": { "type": "integer" }, "name": { "type": "text" } } },
+              "orders": { "columns": { "id": { "type": "integer" } } } } }
+            """;
+        File.WriteAllText(_path, json);
+        var schema = SchemaParser.Parse(json).Schema!;
+
+        var ids = SchemaFile.ResolveIds(schema, IdentityRegistry.Empty);
+
+        // Tables share one counter; columns are numbered inside their table, so both first columns
+        // are 1 and users' second column is 2.
+        Assert.Equal(1, ids.Tables["users"]);
+        Assert.Equal(2, ids.Tables["orders"]);
+        Assert.Equal(1, ids.Columns[("users", "id")]);
+        Assert.Equal(2, ids.Columns[("users", "name")]);
+        Assert.Equal(1, ids.Columns[("orders", "id")]);
+
+        // Written back, the same file resolves to the same ids and allocates nothing.
+        await SchemaFile.PersistIdsAsync(_path, schema, ids);
+        var reread = SchemaParser.Parse(File.ReadAllText(_path)).Schema!;
+        var again = SchemaFile.ResolveIds(reread, IdentityRegistry.Empty);
+        Assert.Empty(again.Assigned);
+        Assert.Equal(ids.Columns[("users", "name")], again.Columns[("users", "name")]);
+    }
+
+    [Fact]
+    public async Task ContinuesEachTableCounterAfterItsDeletions()
+    {
+        // users has issued column ids 1 and 2, and 2 was deleted: the next column must not reuse it.
+        var registry = new IdentityRegistry(
+        [
+            new IdentityRow(1, "table", null, "users", false),
+            new IdentityRow(1, "column", 1, "id", false),
+            new IdentityRow(2, "column", 1, "gone", true),
+        ]);
+        const string json = """
+            { "tables": { "users": { "columns": {
+              "id": { "type": "integer" },
+              "fresh": { "type": "text" } } } } }
+            """;
+        File.WriteAllText(_path, json);
+
+        var ids = SchemaFile.ResolveIds(SchemaParser.Parse(json).Schema!, registry);
+
+        Assert.Equal(1, ids.Columns[("users", "id")]);      // adopted by name
+        Assert.Equal(3, ids.Columns[("users", "fresh")]);   // above the tombstone
+    }
+
+    [Fact]
     public async Task SecondRun_WritesNothing()
     {
         const string json = """{ "tables": { "t": { "columns": { "c": { "type": "text" } } } } }""";

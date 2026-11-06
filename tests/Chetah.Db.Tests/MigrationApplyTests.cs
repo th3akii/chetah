@@ -786,6 +786,123 @@ public class MigrationApplyTests
     }
 
     [PostgresFact]
+    public async Task BranchesAddingToDifferentTables_MergeWithoutAnIdConflict()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        const string baseSchema = """
+            { "tables": {
+              "users": { "columns": { "id": { "type": "integer", "nullable": false } } },
+              "orders": { "columns": { "id": { "type": "integer", "nullable": false } } } } }
+            """;
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(baseSchema)));
+        Assert.Equal(1, await fixture.CountAsync(
+            "SELECT count(*) FROM chetah.objects WHERE kind = 'table' AND name = 'users' AND id = 1"));
+
+        // Two branches, each adding a column to its own table. Both allocations are the next number
+        // *in their table*, so they are both 2 and the merged file is valid.
+        const string branchA = """
+            { "tables": {
+              "users": { "$id": 1, "columns": {
+                "id": { "$id": 1, "type": "integer", "nullable": false },
+                "email": { "type": "text" } } },
+              "orders": { "$id": 2, "columns": { "id": { "$id": 1, "type": "integer", "nullable": false } } } } }
+            """;
+        const string branchB = """
+            { "tables": {
+              "users": { "$id": 1, "columns": { "id": { "$id": 1, "type": "integer", "nullable": false } } },
+              "orders": { "$id": 2, "columns": {
+                "id": { "$id": 1, "type": "integer", "nullable": false },
+                "total": { "type": "integer" } } } } }
+            """;
+
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).DiffAsync(fixture.Parse(branchA)));
+        Assert.Equal(2, fixture.CurrentSchema().Tables[0].Columns[1].Id);
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).DiffAsync(fixture.Parse(branchB)));
+        Assert.Equal(2, fixture.CurrentSchema().Tables[1].Columns[1].Id);
+
+        const string merged = """
+            { "tables": {
+              "users": { "$id": 1, "columns": {
+                "id": { "$id": 1, "type": "integer", "nullable": false },
+                "email": { "$id": 2, "type": "text" } } },
+              "orders": { "$id": 2, "columns": {
+                "id": { "$id": 1, "type": "integer", "nullable": false },
+                "total": { "$id": 2, "type": "integer" } } } } }
+            """;
+
+        // Same number, different table: both columns are new and both apply.
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(merged)));
+        Assert.Equal(1, await fixture.CountAsync(ColumnExists("users", "email")));
+        Assert.Equal(1, await fixture.CountAsync(ColumnExists("orders", "total")));
+        Assert.Equal(2, await fixture.CountAsync(
+            "SELECT count(*) FROM chetah.objects WHERE kind = 'column' AND id = 2 AND name IN ('email', 'total')"));
+    }
+
+    [PostgresFact]
+    public async Task AnIdChetahNeverIssued_IsRefused()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse("""
+            { "tables": { "users": { "columns": { "id": { "type": "integer", "nullable": false } } } } }
+            """)));
+
+        // A merge can leave a gap: this database has issued column id 5 in users (and dropped it).
+        await fixture.ExecuteAsync("""
+            INSERT INTO chetah.objects (id, kind, table_id, name, dropped_at)
+            VALUES (5, 'column', (SELECT id FROM chetah.objects WHERE kind = 'table' AND name = 'users'),
+                    'ghost', now());
+            """);
+
+        // A hand-written id below what the table has issued, and unknown in that table.
+        var output = new StringWriter();
+        Assert.Equal(1, await fixture.Runner(output).ApplyAsync(fixture.Parse("""
+            { "tables": { "users": { "columns": {
+              "id": { "$id": 1, "type": "integer", "nullable": false },
+              "note": { "$id": 3, "type": "text" } } } } }
+            """)));
+
+        Assert.Contains("was never issued by Chetah", output.ToString(), StringComparison.Ordinal);
+        Assert.Equal(0, await fixture.CountAsync(ColumnExists("users", "note")));
+        Assert.Equal(1, await fixture.CountAsync("SELECT count(*) FROM chetah.migrations"));
+    }
+
+    [PostgresFact]
+    public async Task RegistriesWrittenBeforeScoping_AreMigrated()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+
+        // The shape written before column ids were scoped: a global primary key on id.
+        await fixture.ExecuteAsync("""
+            CREATE SCHEMA chetah;
+
+            CREATE TABLE chetah.objects (
+                id bigint NOT NULL,
+                kind text NOT NULL,
+                table_id bigint,
+                name text NOT NULL,
+                dropped_at timestamptz,
+                CONSTRAINT objects_pkey PRIMARY KEY (id)
+            );
+
+            INSERT INTO chetah.objects (id, kind, table_id, name)
+            VALUES (1, 'table', NULL, 'users'), (2, 'column', 1, 'id');
+            """);
+
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(UsersSchema)));
+
+        // The global key is gone, the scoped key replaced it, and the recorded identities survived.
+        Assert.Equal(0, await fixture.CountAsync(
+            "SELECT count(*) FROM pg_constraint WHERE conname = 'objects_pkey'"));
+        Assert.Equal(1, await fixture.CountAsync(
+            "SELECT count(*) FROM pg_indexes WHERE schemaname = 'chetah' AND indexname = 'objects_scoped_id'"));
+        Assert.Equal(1, await fixture.CountAsync(
+            "SELECT count(*) FROM chetah.objects WHERE kind = 'table' AND id = 1 AND name = 'users'"));
+        Assert.Equal(1, await fixture.CountAsync(
+            "SELECT count(*) FROM chetah.objects WHERE kind = 'column' AND table_id = 1 AND id = 2 AND name = 'id'"));
+        Assert.Equal(1, await fixture.CountAsync(ColumnExists("users", "name")));
+    }
+
+    [PostgresFact]
     public async Task AMigrationThisCheckoutLacks_BlocksGeneratingAnother()
     {
         await using var fixture = await Fixture.CreateAsync();
@@ -1586,13 +1703,15 @@ public class MigrationApplyTests
         await using var fixture = await Fixture.CreateAsync();
         Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(UsersSchema)));
 
-        // The id that already names the users *table*, claimed by a column, plus a brand-new table
+        // A column claiming the id of a different column in the same table, plus a brand-new table
         // whose ids were never assigned. The refusal must come before any write.
-        var tableId = Convert.ToInt64(
-            await fixture.ScalarAsync("SELECT id FROM chetah.objects WHERE kind = 'table' AND name = 'users'"));
+        var nameColumnId = Convert.ToInt64(
+            await fixture.ScalarAsync(
+                "SELECT id FROM chetah.objects WHERE kind = 'column' AND name = 'name' "
+                + "AND table_id = (SELECT id FROM chetah.objects WHERE kind = 'table' AND name = 'users')"));
         var conflicting = $$"""
             { "tables": {
-              "users": { "columns": { "id": { "$id": {{tableId}}, "type": "integer", "nullable": false } } },
+              "users": { "columns": { "id": { "$id": {{nameColumnId}}, "type": "integer", "nullable": false } } },
               "widgets": { "columns": { "id": { "type": "integer", "nullable": false } } } } }
             """;
         fixture.Parse(conflicting);
@@ -1601,7 +1720,7 @@ public class MigrationApplyTests
         var output = new StringWriter();
         Assert.Equal(1, await fixture.Runner(output).DiffAsync(fixture.CurrentSchema()));
 
-        Assert.Contains("outside this table", output.ToString(), StringComparison.Ordinal);
+        Assert.Contains("currently names", output.ToString(), StringComparison.Ordinal);
         Assert.Equal(before, File.ReadAllText(fixture.SchemaPath));
     }
 

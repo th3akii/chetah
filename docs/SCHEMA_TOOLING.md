@@ -131,6 +131,11 @@ column therefore carries a persistent `"$id"` in `chetah-schema.json`:
 - **Generated, not authored.** The tool writes the members it is missing, by
   editing the file textually (a small JSONC reader locates the objects), so
   comments and layout survive. Users never assign ids by hand.
+- **Two scopes.** Table ids are unique among tables; **column ids are numbered
+  per table** (`users`' columns 1, 2, 3, `orders`' columns 1, 2, …). Adding a
+  column to one table never moves another table's numbers, so two branches that
+  touch different tables merge without an id conflict. A column id only means
+  something together with its table.
 - **A rename keeps the id.** Renaming the key while keeping `"$id": 3` declares
   the rename; the plan emits `ALTER TABLE … RENAME COLUMN` and reads the catalog
   as if the rename had already happened, so the column is neither dropped nor
@@ -139,12 +144,18 @@ column therefore carries a persistent `"$id"` in `chetah-schema.json`:
   object that vanished is ambiguous, and the plan is refused with both
   resolutions named: keep the `"$id"` for a rename, or pass
   `--drop-add table.column` to record a real drop plus add (still gated).
-- **Ids are never reused.** `"chetah"."objects"` records every id with its name;
-  dropped objects stay as tombstones, and allocation starts above the highest id
-  the file or the registry has ever seen.
-- **Conflicts are refused, not guessed.** A `"$id"` duplicated by two branches,
-  a `"$id"` claimed by a different object, or one that names a dropped object
-  stops the run with the offending pair.
+- **Ids are never reused.** `"chetah"."objects"` records every id with its
+  scope; dropped objects stay as tombstones, and allocation starts above the
+  highest id that scope has ever issued.
+- **Ids are issued by the tool.** A `"$id"` that this database never issued, for
+  an object it does not know, is refused ("was never issued by Chetah") instead
+  of being honoured — the one exception is a genuinely portable id from another
+  environment, which is above what this scope has issued. A hand-written id that
+  happens to match an existing object is indistinguishable from a rename, which
+  is why editing ids by hand is unsupported.
+- **Conflicts are refused, not guessed.** A `"$id"` duplicated by two branches
+  in the same scope, a `"$id"` claimed by a different object, or one that names
+  a dropped object stops the run with the offending pair.
 - **Existing files adopt.** A schema file without `"$id"`s keeps the ids the
   registry already holds for its names, so a declaration written before
   identities existed is not mistaken for a rewrite.

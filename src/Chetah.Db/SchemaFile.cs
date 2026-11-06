@@ -4,15 +4,14 @@ using Chetah.CodeGen;
 
 namespace Chetah.Db;
 
-/// <summary>The identities the schema file declares, plus any this run had to allocate.</summary>
+/// <summary>The identities the schema file declares, plus any this run had to allocate. Table ids are
+/// unique among tables; column ids are numbered per table, so a column id only means something
+/// together with its table. <see cref="Assigned"/> records what this run allocated, by scope, so the
+/// diff can tell a brand-new object from an id the file is simply carrying.</summary>
 internal sealed record SchemaIds(
     IReadOnlyDictionary<string, long> Tables,
     IReadOnlyDictionary<(string Table, string Column), long> Columns,
-    IReadOnlySet<long> Assigned)
-{
-    /// <summary>Highest id this file knows about, declared or allocated.</summary>
-    public long Max => Tables.Values.Concat(Columns.Values).DefaultIfEmpty(0).Max();
-}
+    IReadOnlySet<(string Kind, long Scope, long Id)> Assigned);
 
 /// <summary>Maintains the <c>"$id"</c> members in the schema file.
 ///
@@ -35,33 +34,57 @@ internal static class SchemaFile
     {
         var tables = new Dictionary<string, long>(StringComparer.Ordinal);
         var columns = new Dictionary<(string Table, string Column), long>();
-        var assigned = new HashSet<long>();
-
-        var highest = Math.Max(DeclaredMax(schema), registry.MaxId);
-        long Allocate()
-        {
-            var id = ++highest;
-            assigned.Add(id);
-            return id;
-        }
+        var assigned = new HashSet<(string Kind, long Scope, long Id)>();
 
         var knownTables = registry.Live("table").ToDictionary(row => row.Name, row => row.Id, StringComparer.Ordinal);
         var knownColumns = registry.Live("column")
             .Where(row => row.TableId is not null)
             .ToDictionary(row => (row.TableId!.Value, row.Name), row => row.Id);
 
-        foreach (var table in schema.Tables)
-            tables[table.Name] = table.Id
-                ?? (knownTables.TryGetValue(table.Name, out var known) ? known : Allocate());
+        // A table id has to be unique among tables, so tables share one counter.
+        var nextTable = Math.Max(DeclaredTableMax(schema), registry.MaxTableId) + 1;
 
         foreach (var table in schema.Tables)
         {
+            if (table.Id is { } declared)
+            {
+                tables[table.Name] = declared;
+            }
+            else if (knownTables.TryGetValue(table.Name, out var known))
+            {
+                tables[table.Name] = known;
+            }
+            else
+            {
+                tables[table.Name] = nextTable;
+                assigned.Add(("table", 0, nextTable));
+                nextTable++;
+            }
+        }
+
+        // Columns are numbered per table: adding a column to one table never moves another table's
+        // numbers, so two branches touching different tables merge without an id conflict.
+        foreach (var table in schema.Tables)
+        {
             var tableId = tables[table.Name];
+            var nextColumn = Math.Max(DeclaredColumnMax(table), registry.MaxColumnId(tableId)) + 1;
+
             foreach (var column in table.Columns)
             {
-                var key = (tableId, column.Name);
-                columns[(table.Name, column.Name)] = column.Id
-                    ?? (knownColumns.TryGetValue(key, out var known) ? known : Allocate());
+                if (column.Id is { } declared)
+                {
+                    columns[(table.Name, column.Name)] = declared;
+                }
+                else if (knownColumns.TryGetValue((tableId, column.Name), out var known))
+                {
+                    columns[(table.Name, column.Name)] = known;
+                }
+                else
+                {
+                    columns[(table.Name, column.Name)] = nextColumn;
+                    assigned.Add(("column", tableId, nextColumn));
+                    nextColumn++;
+                }
             }
         }
 
@@ -119,11 +142,13 @@ internal static class SchemaFile
         return edits.Count;
     }
 
-    private static long DeclaredMax(Schema schema) =>
-        schema.Tables
-            .SelectMany(table => table.Columns.Select(column => column.Id ?? 0).Append(table.Id ?? 0))
-            .DefaultIfEmpty(0)
-            .Max();
+    /// <summary>Highest table id the file declares; a column id cannot raise it.</summary>
+    private static long DeclaredTableMax(Schema schema) =>
+        schema.Tables.Select(table => table.Id ?? 0).DefaultIfEmpty(0).Max();
+
+    /// <summary>Highest column id this table declares.</summary>
+    private static long DeclaredColumnMax(TableSchema table) =>
+        table.Columns.Select(column => column.Id ?? 0).DefaultIfEmpty(0).Max();
 
     private static bool HasBom(byte[] bytes) =>
         bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF;
