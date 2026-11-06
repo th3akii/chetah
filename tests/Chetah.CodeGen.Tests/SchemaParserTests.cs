@@ -199,7 +199,7 @@ public class SchemaParserTests
 
     [Theory]
     [InlineData("""{ "tables": { "t": { "columns": { "id": {} } } } }""", "unsupported type ''")]
-    [InlineData("""{ "tables": { "t": { "columns": { "id": { "type": "integer", "default": "1" } } } } }""", "unknown property 'default'")]
+    [InlineData("""{ "tables": { "t": { "columns": { "id": { "type": "integer", "collation": "C" } } } } }""", "unknown property 'collation'")]
     [InlineData("""{ "tables": { "t": { "columns": { "id": { "type": "integer", "nullable": "false" } } } } }""", "non-boolean \"nullable\"")]
     public void RejectsMalformedColumnEntries(string json, string expectedErrorFragment)
     {

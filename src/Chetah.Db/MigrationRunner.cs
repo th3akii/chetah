@@ -257,7 +257,7 @@ internal sealed class MigrationRunner
             var live = await PostgresCatalog.ReadAsync(connection, _schema, cancellationToken);
             foreach (var drop in drops)
             {
-                var dependents = SchemaDiff.Dependents(
+                var dependents = SchemaDiff.ReplayDependents(
                     live,
                     drop.Table,
                     drop.Kind == OperationKinds.DropTable ? null : drop.Column);

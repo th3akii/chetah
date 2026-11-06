@@ -389,7 +389,7 @@ public class MigrationApplyTests
     }
 
     [PostgresFact]
-    public async Task DroppedColumnWithAttachedObjects_IsRefused()
+    public async Task DroppedColumnWithExpressibleObjects_DropsThemFirst()
     {
         await using var fixture = await Fixture.CreateAsync();
 
@@ -399,24 +399,46 @@ public class MigrationApplyTests
 
         var diff = new StringWriter();
         Assert.Equal(0, await fixture.Runner(diff).DiffAsync(fixture.Parse(IdOnlySchema)));
-        Assert.Contains("refused", diff.ToString(), StringComparison.Ordinal);
-        Assert.Contains("idx_users_email", diff.ToString(), StringComparison.Ordinal);
+        // Both are expressible, so they are removed explicitly instead of blocking the drop.
+        Assert.Contains("DROP INDEX \"idx_users_email\"", diff.ToString(), StringComparison.Ordinal);
+        Assert.Contains("DROP CONSTRAINT \"users_email_key\"", diff.ToString(), StringComparison.Ordinal);
+        Assert.Contains("DROP COLUMN \"email\"", diff.ToString(), StringComparison.Ordinal);
+
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(IdOnlySchema)));
+
+        Assert.Equal(0, await fixture.CountAsync(ColumnExists("users", "email")));
+        Assert.Equal(0, await fixture.CountAsync(
+            "SELECT count(*) FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'idx_users_email'"));
+        Assert.Equal(0, await fixture.CountAsync(
+            "SELECT count(*) FROM pg_constraint WHERE conrelid = 'public.users'::regclass AND conname = 'users_email_key'"));
+
+        // The drop order is recorded, so a refused replay is not needed to prove it.
+        var entry = new MigrationStore(fixture.MigrationsDirectory).ReadJournal().Entries.Last();
+        Assert.Equal(
+            new[] { OperationKinds.DropIndex, OperationKinds.DropConstraint, OperationKinds.DropColumn },
+            entry.Operations!.Select(operation => operation.Kind));
+    }
+
+    [PostgresFact]
+    public async Task DroppedColumnWithACheckConstraint_IsRefused()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(EmailSchema)));
+        await fixture.ExecuteAsync("ALTER TABLE users ADD CONSTRAINT users_email_check CHECK (email <> '')");
 
         var output = new StringWriter();
         Assert.Equal(1, await fixture.Runner(output).ApplyAsync(fixture.Parse(IdOnlySchema)));
 
+        // A check constraint cannot be expressed yet, so it is never removed implicitly.
         Assert.Contains("Refusing to apply", output.ToString(), StringComparison.Ordinal);
+        Assert.Contains("users_email_check", output.ToString(), StringComparison.Ordinal);
         Assert.Equal(1, await fixture.CountAsync(ColumnExists("users", "email")));
-        Assert.Equal(1, await fixture.CountAsync(
-            "SELECT count(*) FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'idx_users_email'"));
-        Assert.Equal(1, await fixture.CountAsync(
-            "SELECT count(*) FROM pg_constraint WHERE conrelid = 'public.users'::regclass AND conname = 'users_email_key'"));
         Assert.Single(new MigrationStore(fixture.MigrationsDirectory).ReadJournal().Entries);
-        Assert.Equal(1, await fixture.CountAsync("SELECT count(*) FROM chetah.migrations"));
     }
 
     [PostgresFact]
-    public async Task DroppedTableWithAttachedObjects_IsRefused()
+    public async Task DroppedTableWithACheckConstraint_IsRefused()
     {
         await using var fixture = await Fixture.CreateAsync();
         const string withNotes = """
@@ -429,17 +451,111 @@ public class MigrationApplyTests
             """;
 
         Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(withNotes)));
-        await fixture.ExecuteAsync("CREATE INDEX idx_notes_body ON notes (body)");
+        await fixture.ExecuteAsync("ALTER TABLE notes ADD CONSTRAINT notes_body_check CHECK (body <> '')");
 
         var output = new StringWriter();
         Assert.Equal(1, await fixture.Runner(output).ApplyAsync(fixture.Parse(withoutNotes)));
 
         Assert.Contains("Refusing to apply", output.ToString(), StringComparison.Ordinal);
         Assert.Equal(1, await fixture.CountAsync(TableExists("notes")));
-        Assert.Equal(1, await fixture.CountAsync(
-            "SELECT count(*) FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'idx_notes_body'"));
         Assert.Single(new MigrationStore(fixture.MigrationsDirectory).ReadJournal().Entries);
         Assert.Equal(1, await fixture.CountAsync("SELECT count(*) FROM chetah.migrations"));
+    }
+
+    [PostgresFact]
+    public async Task TableWithConstraintsDefaultsAndIndexes_IsCreated()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        const string schema = """
+            { "tables": {
+              "roles": {
+                "primaryKey": ["id"],
+                "columns": { "id": { "type": "integer", "nullable": false, "identity": true } } },
+              "users": {
+                "primaryKey": ["id"],
+                "indexes": { "users_email_idx": { "columns": ["email"], "unique": true } },
+                "columns": {
+                  "id": { "type": "bigint", "nullable": false, "identity": true },
+                  "email": { "type": "text", "nullable": false, "unique": true },
+                  "role_id": { "type": "integer", "references": "roles.id" },
+                  "created_at": { "type": "timestamp", "nullable": false, "default": "now()" } } } } }
+            """;
+
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(schema)));
+
+        Assert.Equal(1, await fixture.CountAsync(
+            "SELECT count(*) FROM pg_constraint WHERE conrelid = 'public.users'::regclass AND contype = 'p'"));
+        Assert.Equal(1, await fixture.CountAsync(
+            "SELECT count(*) FROM pg_constraint WHERE conrelid = 'public.users'::regclass AND contype = 'u' AND conname = 'users_email_key'"));
+        Assert.Equal(1, await fixture.CountAsync(
+            "SELECT count(*) FROM pg_constraint WHERE conrelid = 'public.users'::regclass AND contype = 'f' "
+            + "AND confrelid = 'public.roles'::regclass"));
+        Assert.Equal(1, await fixture.CountAsync(
+            "SELECT count(*) FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'users_email_idx'"));
+        Assert.Equal("YES", (string?)await fixture.ScalarAsync(
+            "SELECT is_identity FROM information_schema.columns WHERE table_schema = 'public' "
+            + "AND table_name = 'users' AND column_name = 'id'"));
+        Assert.Contains("now()", (string?)await fixture.ScalarAsync(
+            "SELECT column_default FROM information_schema.columns WHERE table_schema = 'public' "
+            + "AND table_name = 'users' AND column_name = 'created_at'") ?? "", StringComparison.Ordinal);
+
+        // A second apply finds nothing to do: definitions are compared, not names.
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(schema)));
+        Assert.Single(new MigrationStore(fixture.MigrationsDirectory).ReadJournal().Entries);
+    }
+
+    [PostgresFact]
+    public async Task ConstraintIndexAndDefaultChanges_AreApplied()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        const string before = """
+            { "tables": {
+              "roles": {
+                "primaryKey": ["id"],
+                "columns": { "id": { "type": "integer", "nullable": false } } },
+              "users": {
+                "primaryKey": ["id"],
+                "indexes": { "users_email_idx": { "columns": ["email"] } },
+                "columns": {
+                  "id": { "type": "integer", "nullable": false },
+                  "email": { "type": "text", "nullable": false, "unique": true },
+                  "role_id": { "type": "integer", "references": "roles.id" },
+                  "state": { "type": "text", "nullable": false, "default": "'new'" } } } } }
+            """;
+        const string after = """
+            { "tables": {
+              "roles": {
+                "primaryKey": ["id"],
+                "columns": { "id": { "type": "integer", "nullable": false } } },
+              "users": {
+                "primaryKey": ["id", "email"],
+                "indexes": { "users_role_idx": { "columns": ["role_id"] } },
+                "columns": {
+                  "id": { "type": "integer", "nullable": false },
+                  "email": { "type": "text", "nullable": false },
+                  "role_id": { "type": "integer", "nullable": false },
+                  "state": { "type": "text", "nullable": false, "default": "'active'" } } } } }
+            """;
+
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(before)));
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(after)));
+
+        // The composite primary key replaced the single-column one.
+        Assert.Equal(2, await fixture.CountAsync(
+            "SELECT array_length(conkey, 1) FROM pg_constraint WHERE conrelid = 'public.users'::regclass AND contype = 'p'"));
+        // Uniqueness and the foreign key are gone because they are no longer declared.
+        Assert.Equal(0, await fixture.CountAsync(
+            "SELECT count(*) FROM pg_constraint WHERE conrelid = 'public.users'::regclass AND contype = 'u'"));
+        Assert.Equal(0, await fixture.CountAsync(
+            "SELECT count(*) FROM pg_constraint WHERE conrelid = 'public.users'::regclass AND contype = 'f'"));
+        // The index was replaced by the declared one and the default changed.
+        Assert.Equal(0, await fixture.CountAsync(
+            "SELECT count(*) FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'users_email_idx'"));
+        Assert.Equal(1, await fixture.CountAsync(
+            "SELECT count(*) FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'users_role_idx'"));
+        Assert.Contains("active", (string?)await fixture.ScalarAsync(
+            "SELECT column_default FROM information_schema.columns WHERE table_schema = 'public' "
+            + "AND table_name = 'users' AND column_name = 'state'") ?? "", StringComparison.Ordinal);
     }
 
     [PostgresFact]
