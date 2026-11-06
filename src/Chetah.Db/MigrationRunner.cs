@@ -9,7 +9,7 @@ namespace Chetah.Db;
 internal sealed class MigrationRunner
 {
     private const string CreateStateTable = """
-        CREATE TABLE IF NOT EXISTS "chetah_migrations" (
+        CREATE TABLE IF NOT EXISTS "chetah"."migrations" (
             id bigserial NOT NULL,
             hash text NOT NULL,
             name text NOT NULL,
@@ -21,6 +21,7 @@ internal sealed class MigrationRunner
     private readonly MigrationStore _store;
     private readonly TextWriter _output;
     private readonly Func<IReadOnlyList<Operation>, bool> _confirm;
+    private string _schema = "";
 
     /// <param name="confirm">Destructive confirmation gate; called only when the plan contains
     /// statements that cannot be undone.</param>
@@ -42,8 +43,8 @@ internal sealed class MigrationRunner
         await using var connection = await OpenAsync(cancellationToken);
         var plan = await SchemaDiff.ComputeAsync(
             SchemaCatalog.FromSchema(schema),
-            await PostgresCatalog.ReadAsync(connection, cancellationToken),
-            (table, column) => HasNullsAsync(connection, table, column, cancellationToken));
+            await PostgresCatalog.ReadAsync(connection, _schema, cancellationToken),
+            (table, column) => HasNullsAsync(connection, _schema, table, column, cancellationToken));
 
         if (plan.IsEmpty)
         {
@@ -73,6 +74,7 @@ internal sealed class MigrationRunner
     public async Task<int> ApplyAsync(Schema schema, CancellationToken cancellationToken = default)
     {
         await using var connection = await OpenAsync(cancellationToken);
+        await EnsureInternalSchemaAsync(connection, cancellationToken);
         await ExecuteAsync(connection, null, CreateStateTable, cancellationToken);
 
         var journal = _store.ReadJournal();
@@ -105,7 +107,7 @@ internal sealed class MigrationRunner
             applied.Add(entry.Id);
         }
 
-        var live = await PostgresCatalog.ReadAsync(connection, cancellationToken);
+        var live = await PostgresCatalog.ReadAsync(connection, _schema, cancellationToken);
         var desired = SchemaCatalog.FromSchema(schema);
 
         if (journal.Entries.Count == 0 && live.Tables.Count > 0)
@@ -118,7 +120,7 @@ internal sealed class MigrationRunner
         var plan = await SchemaDiff.ComputeAsync(
             desired,
             live,
-            (table, column) => HasNullsAsync(connection, table, column, cancellationToken));
+            (table, column) => HasNullsAsync(connection, _schema, table, column, cancellationToken));
 
         if (plan.IsEmpty)
         {
@@ -182,7 +184,7 @@ internal sealed class MigrationRunner
 
         if (drops.Length > 0)
         {
-            var live = await PostgresCatalog.ReadAsync(connection, cancellationToken);
+            var live = await PostgresCatalog.ReadAsync(connection, _schema, cancellationToken);
             foreach (var drop in drops)
             {
                 var dependents = SchemaDiff.Dependents(
@@ -219,20 +221,86 @@ internal sealed class MigrationRunner
         var connection = new NpgsqlConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
 
-        await using var command = new NpgsqlCommand("SELECT current_schema()", connection);
-        if (await command.ExecuteScalarAsync(cancellationToken) is null or DBNull)
+        // Skip Chetah's own schema: it may be on the search path (a role named `chetah` puts it
+        // first), and application objects never live there.
+        await using var command = new NpgsqlCommand(
+            $"""
+            SELECT s
+            FROM unnest(current_schemas(false)) WITH ORDINALITY AS t(s, i)
+            WHERE s <> 'chetah'
+            ORDER BY i
+            LIMIT 1
+            """,
+            connection);
+        var schema = await command.ExecuteScalarAsync(cancellationToken);
+        if (schema is null or DBNull)
         {
             await connection.DisposeAsync();
             throw new InvalidOperationException(
-                "The connection's search path resolves to no existing schema. "
-                + "Create the schema, or point the connection at one that exists.");
+                "The connection's search path resolves to no application schema. "
+                + "Point it at a schema that exists; Chetah's own \"chetah\" schema is not a candidate.");
         }
+
+        _schema = (string)schema;
+
+        // Recorded SQL uses unqualified object names, so the connection must resolve exactly one
+        // application schema: the one the plan was computed against. Without this, a role-named
+        // schema on the search path could capture objects Chetah creates.
+        await using (var pin = new NpgsqlCommand($"SET search_path TO {SchemaDiff.Quote(_schema)}", connection))
+            await pin.ExecuteNonQueryAsync(cancellationToken);
 
         return connection;
     }
 
+    /// <summary>Creates the internal schema and moves an applied-state table from before the move
+    /// into it, so an existing database keeps its migration history and ids.</summary>
+    private async Task EnsureInternalSchemaAsync(
+        NpgsqlConnection connection,
+        CancellationToken cancellationToken)
+    {
+        await ExecuteAsync(
+            connection,
+            null,
+            $"CREATE SCHEMA IF NOT EXISTS {PostgresCatalog.InternalSchema}",
+            cancellationToken);
+
+        if (!await RelationExistsAsync(connection, _schema, PostgresCatalog.LegacyStateTable, cancellationToken)
+            || await RelationExistsAsync(connection, PostgresCatalog.InternalSchemaName, "migrations", cancellationToken))
+            return;
+
+        await ExecuteAsync(
+            connection,
+            null,
+            $"ALTER TABLE {PostgresCatalog.Qualified(_schema, PostgresCatalog.LegacyStateTable)} SET SCHEMA {PostgresCatalog.InternalSchema}",
+            cancellationToken);
+        await ExecuteAsync(
+            connection,
+            null,
+            $"ALTER TABLE {PostgresCatalog.Qualified(PostgresCatalog.InternalSchemaName, PostgresCatalog.LegacyStateTable)} RENAME TO \"migrations\"",
+            cancellationToken);
+    }
+
+    private static async Task<bool> RelationExistsAsync(
+        NpgsqlConnection connection,
+        string schema,
+        string relation,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT EXISTS (
+                SELECT 1 FROM pg_class c
+                JOIN pg_namespace n ON n.oid = c.relnamespace
+                WHERE n.nspname = $1 AND c.relname = $2 AND c.relkind = 'r')
+            """,
+            connection);
+        command.Parameters.Add(new NpgsqlParameter { Value = schema });
+        command.Parameters.Add(new NpgsqlParameter { Value = relation });
+        return (bool)(await command.ExecuteScalarAsync(cancellationToken))!;
+    }
+
     /// <summary>Executes the recorded SQL and the applied-state row in one transaction: a failed
-    /// statement leaves the database and <c>chetah_migrations</c> untouched.</summary>
+    /// statement leaves the database and <c>chetah.migrations</c> untouched.</summary>
     private async Task<bool> ApplyMigrationAsync(
         NpgsqlConnection connection,
         JournalEntry entry,
@@ -270,7 +338,7 @@ internal sealed class MigrationRunner
         CancellationToken cancellationToken)
     {
         await using var command = new NpgsqlCommand(
-            $"INSERT INTO {SchemaDiff.Quote(PostgresCatalog.StateTableName)} (hash, name) VALUES ($1, $2)",
+            $"INSERT INTO {PostgresCatalog.StateTable} (hash, name) VALUES ($1, $2)",
             connection,
             transaction);
         command.Parameters.Add(new NpgsqlParameter { Value = entry.Hash });
@@ -291,7 +359,7 @@ internal sealed class MigrationRunner
     private static async Task<HashSet<string>> ReadAppliedAsync(NpgsqlConnection connection, CancellationToken cancellationToken)
     {
         await using var command = new NpgsqlCommand(
-            $"SELECT name FROM {SchemaDiff.Quote(PostgresCatalog.StateTableName)}",
+            $"SELECT name FROM {PostgresCatalog.StateTable}",
             connection);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
 
@@ -303,12 +371,13 @@ internal sealed class MigrationRunner
 
     private static async Task<bool> HasNullsAsync(
         NpgsqlConnection connection,
+        string schema,
         string table,
         string column,
         CancellationToken cancellationToken)
     {
         await using var command = new NpgsqlCommand(
-            $"SELECT EXISTS (SELECT 1 FROM {SchemaDiff.Quote(table)} WHERE {SchemaDiff.Quote(column)} IS NULL)",
+            $"SELECT EXISTS (SELECT 1 FROM {PostgresCatalog.Qualified(schema, table)} WHERE {SchemaDiff.Quote(column)} IS NULL)",
             connection);
         return (bool)(await command.ExecuteScalarAsync(cancellationToken))!;
     }

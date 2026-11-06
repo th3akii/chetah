@@ -73,7 +73,21 @@ internal static class SchemaCatalog
 /// <summary>Reads the live table/column state of the schema the connection resolves.</summary>
 internal static class PostgresCatalog
 {
-    internal const string StateTableName = "chetah_migrations";
+    /// <summary>Chetah's own schema. Internal metadata lives here so it can never collide with
+    /// an application table and is never part of an application schema diff: introspection reads
+    /// the resolved application schema only.</summary>
+    internal const string InternalSchemaName = "chetah";
+
+    internal const string InternalSchema = "\"chetah\"";
+
+    internal const string StateTable = "\"chetah\".\"migrations\"";
+
+    internal static string Qualified(string schema, string name) =>
+        $"{SchemaDiff.Quote(schema)}.{SchemaDiff.Quote(name)}";
+
+    /// <summary>Legacy location of the applied-state table, before it moved into the internal
+    /// schema. Only read to migrate an existing database.</summary>
+    internal const string LegacyStateTable = "chetah_migrations";
 
     private const string ColumnsQuery = """
         SELECT c.relname, a.attname, t.typname, a.attnotnull
@@ -81,11 +95,10 @@ internal static class PostgresCatalog
         JOIN pg_namespace n ON n.oid = c.relnamespace
         JOIN pg_attribute a ON a.attrelid = c.oid
         JOIN pg_type t ON t.oid = a.atttypid
-        WHERE n.nspname = current_schema()
+        WHERE n.nspname = $1
           AND c.relkind = 'r'
           AND a.attnum > 0
           AND NOT a.attisdropped
-          AND c.relname <> 'chetah_migrations'
         ORDER BY c.relname, a.attnum
         """;
 
@@ -97,7 +110,7 @@ internal static class PostgresCatalog
         JOIN pg_class c ON c.oid = con.conrelid
         JOIN pg_namespace n ON n.oid = c.relnamespace
         LEFT JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = ANY (con.conkey)
-        WHERE n.nspname = current_schema()
+        WHERE n.nspname = $1
         ORDER BY c.relname, con.conname, a.attnum
         """;
 
@@ -110,23 +123,33 @@ internal static class PostgresCatalog
         JOIN pg_class ic ON ic.oid = i.indexrelid
         JOIN pg_namespace n ON n.oid = c.relnamespace
         LEFT JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY (i.indkey::int2[])
-        WHERE n.nspname = current_schema()
+        WHERE n.nspname = $1
           AND NOT EXISTS (SELECT 1 FROM pg_constraint con WHERE con.conindid = i.indexrelid)
         ORDER BY c.relname, ic.relname
         """;
 
-    public static async Task<CatalogState> ReadAsync(NpgsqlConnection connection, CancellationToken cancellationToken)
+    /// <param name="schema">The application schema resolved once when the connection opened. Not
+    /// <c>current_schema()</c>: creating Chetah's own schema can change what the search path
+    /// resolves to mid-run, and introspection must not shift underneath the plan.</param>
+    public static async Task<CatalogState> ReadAsync(
+        NpgsqlConnection connection,
+        string schema,
+        CancellationToken cancellationToken)
     {
-        var tables = await ReadTablesAsync(connection, cancellationToken);
+        var tables = await ReadTablesAsync(connection, schema, cancellationToken);
         var foreign = new List<ForeignObject>();
-        foreign.AddRange(await ReadForeignAsync(connection, ConstraintsQuery, "constraint", cancellationToken));
-        foreign.AddRange(await ReadForeignAsync(connection, IndexesQuery, "index", cancellationToken));
+        foreign.AddRange(await ReadForeignAsync(connection, schema, ConstraintsQuery, "constraint", cancellationToken));
+        foreign.AddRange(await ReadForeignAsync(connection, schema, IndexesQuery, "index", cancellationToken));
         return new CatalogState(tables, foreign);
     }
 
-    private static async Task<List<TableState>> ReadTablesAsync(NpgsqlConnection connection, CancellationToken cancellationToken)
+    private static async Task<List<TableState>> ReadTablesAsync(
+        NpgsqlConnection connection,
+        string schema,
+        CancellationToken cancellationToken)
     {
         await using var command = new NpgsqlCommand(ColumnsQuery, connection);
+        command.Parameters.Add(new NpgsqlParameter { Value = schema });
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
 
         var tables = new List<TableState>();
@@ -155,11 +178,13 @@ internal static class PostgresCatalog
 
     private static async Task<List<ForeignObject>> ReadForeignAsync(
         NpgsqlConnection connection,
+        string schema,
         string query,
         string kind,
         CancellationToken cancellationToken)
     {
         await using var command = new NpgsqlCommand(query, connection);
+        command.Parameters.Add(new NpgsqlParameter { Value = schema });
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
 
         var objects = new List<ForeignObject>();

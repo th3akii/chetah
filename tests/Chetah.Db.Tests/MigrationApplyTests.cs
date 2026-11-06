@@ -65,7 +65,7 @@ public class MigrationApplyTests
         // Widened type, dropped/added column, dropped column and dropped table all really applied.
         Assert.Equal("bigint", (string?)await fixture.ScalarAsync("""
             SELECT data_type FROM information_schema.columns
-            WHERE table_schema = current_schema() AND table_name = 'users' AND column_name = 'id'
+            WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'id'
             """));
         Assert.Equal(0, await fixture.CountAsync(ColumnExists("users", "adress")));
         Assert.Equal(1, await fixture.CountAsync(ColumnExists("users", "address")));
@@ -74,7 +74,7 @@ public class MigrationApplyTests
         Assert.Equal(0, await fixture.CountAsync(ColumnExists("legacy", "extra")));
         Assert.Equal("kept", (string?)await fixture.ScalarAsync("SELECT keep FROM legacy"));
         Assert.Equal(0, await fixture.CountAsync(TableExists("notes")));
-        Assert.Equal(2, await fixture.CountAsync("SELECT count(*) FROM chetah_migrations"));
+        Assert.Equal(2, await fixture.CountAsync("SELECT count(*) FROM chetah.migrations"));
     }
 
     [PostgresFact]
@@ -92,14 +92,14 @@ public class MigrationApplyTests
         Assert.Equal(1, entry.Statements);
         Assert.Equal(MigrationStore.Hash(store.ReadSql(entry.Id)), entry.Hash);
         Assert.Contains("CREATE TABLE \"users\"", store.ReadSql(entry.Id), StringComparison.Ordinal);
-        Assert.Equal(entry.Hash, (string?)await fixture.ScalarAsync("SELECT hash FROM chetah_migrations"));
-        Assert.Equal(entry.Id, (string?)await fixture.ScalarAsync("SELECT name FROM chetah_migrations"));
+        Assert.Equal(entry.Hash, (string?)await fixture.ScalarAsync("SELECT hash FROM chetah.migrations"));
+        Assert.Equal(entry.Id, (string?)await fixture.ScalarAsync("SELECT name FROM chetah.migrations"));
         Assert.True(File.Exists(store.SnapshotPath(entry.Id)));
         Assert.True(File.Exists(store.SqlPath(entry.Id)));
 
         // Nothing changed: a second apply is a no-op.
         Assert.Equal(0, await fixture.Runner(output).ApplyAsync(Parse(UsersSchema)));
-        Assert.Equal(1, await fixture.CountAsync("SELECT count(*) FROM chetah_migrations"));
+        Assert.Equal(1, await fixture.CountAsync("SELECT count(*) FROM chetah.migrations"));
     }
 
     [PostgresFact]
@@ -115,7 +115,7 @@ public class MigrationApplyTests
         Assert.Contains("destructive", output.ToString(), StringComparison.Ordinal);
         Assert.Contains("ALTER TABLE \"users\" DROP COLUMN \"stray\"", output.ToString(), StringComparison.Ordinal);
         Assert.Single(new MigrationStore(fixture.MigrationsDirectory).ReadJournal().Entries);
-        Assert.Equal(1, await fixture.CountAsync("SELECT count(*) FROM chetah_migrations"));
+        Assert.Equal(1, await fixture.CountAsync("SELECT count(*) FROM chetah.migrations"));
     }
 
     [PostgresFact]
@@ -131,7 +131,7 @@ public class MigrationApplyTests
         Assert.Contains("Aborted", output.ToString(), StringComparison.Ordinal);
         Assert.Equal(1, await fixture.CountAsync(ColumnExists("users", "stray")));
         Assert.Single(new MigrationStore(fixture.MigrationsDirectory).ReadJournal().Entries);
-        Assert.Equal(1, await fixture.CountAsync("SELECT count(*) FROM chetah_migrations"));
+        Assert.Equal(1, await fixture.CountAsync("SELECT count(*) FROM chetah.migrations"));
     }
 
     [PostgresFact]
@@ -158,7 +158,7 @@ public class MigrationApplyTests
 
         Assert.Contains("rolled back", output.ToString(), StringComparison.Ordinal);
         Assert.Equal(0, await fixture.CountAsync(TableExists("rollback_probe")));
-        Assert.Equal(0, await fixture.CountAsync("SELECT count(*) FROM chetah_migrations"));
+        Assert.Equal(0, await fixture.CountAsync("SELECT count(*) FROM chetah.migrations"));
         Assert.Single(new MigrationStore(fixture.MigrationsDirectory).ReadJournal().Entries);
 
         // The recorded-but-unapplied migration is retried once the SQL is fixed. Nothing destructive
@@ -168,7 +168,7 @@ public class MigrationApplyTests
 
         Assert.Equal(0, await fixture.Runner(new StringWriter(), _ => throw new InvalidOperationException("no confirmation expected")).ApplyAsync(Parse(schema)));
         Assert.Equal(1, await fixture.CountAsync(TableExists("rollback_probe")));
-        Assert.Equal(1, await fixture.CountAsync("SELECT count(*) FROM chetah_migrations"));
+        Assert.Equal(1, await fixture.CountAsync("SELECT count(*) FROM chetah.migrations"));
     }
 
     [PostgresFact]
@@ -186,7 +186,7 @@ public class MigrationApplyTests
 
         Assert.Contains("Refusing", output.ToString(), StringComparison.Ordinal);
         Assert.Equal(0, await fixture.CountAsync(TableExists("tampered")));
-        Assert.Equal(0, await fixture.CountAsync("SELECT count(*) FROM chetah_migrations"));
+        Assert.Equal(0, await fixture.CountAsync("SELECT count(*) FROM chetah.migrations"));
     }
 
     [PostgresFact]
@@ -211,7 +211,7 @@ public class MigrationApplyTests
         Assert.Contains("idx_users_email", output.ToString(), StringComparison.Ordinal);
         Assert.Equal(1, await fixture.CountAsync(ColumnExists("users", "email")));
         Assert.Equal(1, await fixture.CountAsync(
-            "SELECT count(*) FROM pg_indexes WHERE schemaname = current_schema() AND indexname = 'idx_users_email'"));
+            "SELECT count(*) FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'idx_users_email'"));
     }
 
     [PostgresFact]
@@ -231,11 +231,11 @@ public class MigrationApplyTests
 
         Assert.Contains("Aborted", denied.ToString(), StringComparison.Ordinal);
         Assert.Equal(1, await fixture.CountAsync(ColumnExists("users", "email")));
-        Assert.Equal(1, await fixture.CountAsync("SELECT count(*) FROM chetah_migrations"));
+        Assert.Equal(1, await fixture.CountAsync("SELECT count(*) FROM chetah.migrations"));
 
         Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(Parse(IdOnlySchema)));
         Assert.Equal(0, await fixture.CountAsync(ColumnExists("users", "email")));
-        Assert.Equal(2, await fixture.CountAsync("SELECT count(*) FROM chetah_migrations"));
+        Assert.Equal(2, await fixture.CountAsync("SELECT count(*) FROM chetah.migrations"));
     }
 
     [PostgresFact]
@@ -251,7 +251,7 @@ public class MigrationApplyTests
 
         Assert.Contains("no recorded operation metadata", denied.ToString(), StringComparison.Ordinal);
         Assert.Equal(0, await fixture.CountAsync(TableExists("probe")));
-        Assert.Equal(1, await fixture.CountAsync("SELECT count(*) FROM chetah_migrations"));
+        Assert.Equal(1, await fixture.CountAsync("SELECT count(*) FROM chetah.migrations"));
     }
 
     [PostgresFact]
@@ -274,11 +274,11 @@ public class MigrationApplyTests
         Assert.Contains("Refusing to apply", output.ToString(), StringComparison.Ordinal);
         Assert.Equal(1, await fixture.CountAsync(ColumnExists("users", "email")));
         Assert.Equal(1, await fixture.CountAsync(
-            "SELECT count(*) FROM pg_indexes WHERE schemaname = current_schema() AND indexname = 'idx_users_email'"));
+            "SELECT count(*) FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'idx_users_email'"));
         Assert.Equal(1, await fixture.CountAsync(
-            "SELECT count(*) FROM pg_constraint WHERE conrelid = 'users'::regclass AND conname = 'users_email_key'"));
+            "SELECT count(*) FROM pg_constraint WHERE conrelid = 'public.users'::regclass AND conname = 'users_email_key'"));
         Assert.Single(new MigrationStore(fixture.MigrationsDirectory).ReadJournal().Entries);
-        Assert.Equal(1, await fixture.CountAsync("SELECT count(*) FROM chetah_migrations"));
+        Assert.Equal(1, await fixture.CountAsync("SELECT count(*) FROM chetah.migrations"));
     }
 
     [PostgresFact]
@@ -303,9 +303,9 @@ public class MigrationApplyTests
         Assert.Contains("Refusing to apply", output.ToString(), StringComparison.Ordinal);
         Assert.Equal(1, await fixture.CountAsync(TableExists("notes")));
         Assert.Equal(1, await fixture.CountAsync(
-            "SELECT count(*) FROM pg_indexes WHERE schemaname = current_schema() AND indexname = 'idx_notes_body'"));
+            "SELECT count(*) FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'idx_notes_body'"));
         Assert.Single(new MigrationStore(fixture.MigrationsDirectory).ReadJournal().Entries);
-        Assert.Equal(1, await fixture.CountAsync("SELECT count(*) FROM chetah_migrations"));
+        Assert.Equal(1, await fixture.CountAsync("SELECT count(*) FROM chetah.migrations"));
     }
 
     [PostgresFact]
@@ -321,26 +321,55 @@ public class MigrationApplyTests
         Assert.Equal("baseline", entry.Slug);
         Assert.Equal(0, entry.Statements);
         Assert.StartsWith("-- baseline", store.ReadSql(entry.Id), StringComparison.Ordinal);
-        Assert.Equal(1, await fixture.CountAsync("SELECT count(*) FROM chetah_migrations"));
+        Assert.Equal(1, await fixture.CountAsync("SELECT count(*) FROM chetah.migrations"));
+    }
+
+    [PostgresFact]
+    public async Task LegacyStateTable_IsMovedIntoTheInternalSchema_KeepingHistory()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        await fixture.ExecuteAsync("""
+            CREATE TABLE public.chetah_migrations (
+                id bigserial NOT NULL,
+                hash text NOT NULL,
+                name text NOT NULL,
+                applied_at timestamptz NOT NULL DEFAULT now()
+            );
+
+            INSERT INTO public.chetah_migrations (hash, name) VALUES ('deadbeef', '20260101000000_legacy');
+            """);
+
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(Parse(UsersSchema)));
+
+        // The old table is gone from the application schema and its row survived the move.
+        Assert.Equal(0, await fixture.CountAsync("""
+            SELECT count(*) FROM information_schema.tables
+            WHERE table_schema = 'public' AND table_name = 'chetah_migrations'
+            """));
+        Assert.Equal("20260101000000_legacy", (string?)await fixture.ScalarAsync(
+            "SELECT name FROM chetah.migrations WHERE hash = 'deadbeef'"));
+        Assert.Equal(2, await fixture.CountAsync("SELECT count(*) FROM chetah.migrations"));
     }
 
     private static Schema Parse(string json) => SchemaParser.Parse(json).Schema!;
 
     private static string TableExists(string name) =>
-        $"SELECT count(*) FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = '{name}'";
+        $"SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '{name}'";
 
     private static string ColumnExists(string table, string column) =>
-        $"SELECT count(*) FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = '{table}' AND column_name = '{column}'";
+        $"SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = '{table}' AND column_name = '{column}'";
 
     private sealed class Fixture : IAsyncDisposable
     {
         private readonly string _root;
-        private readonly string _schemaName = "chetah_db_" + Guid.NewGuid().ToString("N");
+        // Internal metadata now lives in a fixed `chetah` schema, so tests cannot share a database
+        // and stay independent: each fixture owns a throwaway database.
+        private readonly string _database = "chetah_test_" + Guid.NewGuid().ToString("N");
 
         private Fixture(string root)
         {
             _root = root;
-            ConnectionString = new NpgsqlConnectionStringBuilder(root) { SearchPath = _schemaName }.ConnectionString;
+            ConnectionString = new NpgsqlConnectionStringBuilder(root) { Database = _database }.ConnectionString;
         }
 
         internal string ConnectionString { get; }
@@ -356,7 +385,7 @@ public class MigrationApplyTests
 
             await using var connection = new NpgsqlConnection(root);
             await connection.OpenAsync();
-            await using var command = new NpgsqlCommand($"CREATE SCHEMA \"{fixture._schemaName}\"", connection);
+            await using var command = new NpgsqlCommand($"CREATE DATABASE \"{fixture._database}\"", connection);
             await command.ExecuteNonQueryAsync();
             return fixture;
         }
@@ -413,7 +442,7 @@ public class MigrationApplyTests
             {
                 await using var connection = new NpgsqlConnection(_root);
                 await connection.OpenAsync();
-                await using var command = new NpgsqlCommand($"DROP SCHEMA IF EXISTS \"{_schemaName}\" CASCADE", connection);
+                await using var command = new NpgsqlCommand($"DROP DATABASE IF EXISTS \"{_database}\" WITH (FORCE)", connection);
                 await command.ExecuteNonQueryAsync();
             }
             finally
