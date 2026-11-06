@@ -49,46 +49,6 @@ public static class UsersTable
 
 public sealed record User(int Id, string Name, int? Age);
 
-public static class ManualUserTestTable
-{
-    public static readonly MyOrm.Column<Guid> Id = new("id");
-    public static readonly MyOrm.Column<string> Name = new("name");
-    public static readonly MyOrm.Column<string?> Adress = new("adress");
-
-    public static readonly MyOrm.Table Table = new("manual_user_test", Id.Name, Name.Name, Adress.Name);
-
-    public static readonly System.Collections.Generic.IReadOnlyDictionary<string, string> PropertyColumns =
-        new System.Collections.Generic.Dictionary<string, string>(System.StringComparer.Ordinal)
-        {
-            [nameof(ManualUsers.Id)] = "id",
-            [nameof(ManualUsers.Name)] = "name",
-            [nameof(ManualUsers.Adress)] = "adress",
-        };
-
-    public static ManualUsers Map(NpgsqlDataReader reader)
-    {
-        var adressOrdinal = reader.GetOrdinal("adress");
-
-        return new ManualUsers(
-            reader.GetGuid(reader.GetOrdinal("id")),
-            reader.GetString(reader.GetOrdinal("name")),
-            reader.IsDBNull(adressOrdinal) ? null : reader.GetString(adressOrdinal)
-        );
-    }
-
-    public static ManualUsers MapAt(NpgsqlDataReader reader, int offset)
-    {
-        return new ManualUsers(
-            reader.GetGuid(offset + 0),
-            reader.GetString(offset + 1),
-            reader.IsDBNull(offset + 2) ? null : reader.GetString(offset + 2)
-        );
-    }
-
-}
-
-public sealed record ManualUsers(Guid Id, string Name, string? Adress);
-
 public static class OrdersTable
 {
     public static readonly MyOrm.Column<int> Id = new("id");
@@ -136,14 +96,12 @@ public sealed record Order(int Id, int UserId, int Amount, string? Note);
 public static class MyOrmSchema
 {
     public static readonly MyOrm.Postgres.TableBinding<User> UserBinding = new(UsersTable.Table, UsersTable.Map, UsersTable.MapAt, UsersTable.PropertyColumns);
-    public static readonly MyOrm.Postgres.TableBinding<ManualUsers> ManualUsersBinding = new(ManualUserTestTable.Table, ManualUserTestTable.Map, ManualUserTestTable.MapAt, ManualUserTestTable.PropertyColumns);
     public static readonly MyOrm.Postgres.TableBinding<Order> OrderBinding = new(OrdersTable.Table, OrdersTable.Map, OrdersTable.MapAt, OrdersTable.PropertyColumns);
 
     public static readonly System.Collections.Generic.IReadOnlyDictionary<System.Type, MyOrm.Postgres.ITableBinding> Bindings =
         new System.Collections.Generic.Dictionary<System.Type, MyOrm.Postgres.ITableBinding>
         {
             [typeof(User)] = UserBinding,
-            [typeof(ManualUsers)] = ManualUsersBinding,
             [typeof(Order)] = OrderBinding,
         };
 }

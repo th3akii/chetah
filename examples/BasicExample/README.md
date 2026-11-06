@@ -21,13 +21,10 @@ Requires PostgreSQL and two tables matching the schema:
 CREATE TABLE users (id integer PRIMARY KEY, name text NOT NULL, age integer);
 INSERT INTO users (id, name, age) VALUES (1, 'Ada', 36), (2, 'Grace', 45);
 
-CREATE TABLE manual_user_test (id uuid PRIMARY KEY, name text NOT NULL, adress text);
-INSERT INTO manual_user_test (id, name, adress) VALUES
-    ('e6b1c8a0-2f1e-4a1d-9c2f-8a5f4e1d2b3c', 'Jane Manual', NULL),
-    ('f8a2d9b1-3e2f-4b2e-8d3a-9b6e5f2c3d4a', 'Bob Sample', 'Unter den Linden 1');
+CREATE TABLE orders (id integer PRIMARY KEY, user_id integer NOT NULL, amount integer NOT NULL, note text);
 ```
 
-(`age` and `adress` may be `NULL`; they map to `int?` and `string?`.)
+(`age` and `note` may be `NULL`; they map to `int?` and `string?`.)
 
 ## Run
 

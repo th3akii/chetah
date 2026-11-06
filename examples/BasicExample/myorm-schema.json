@@ -8,14 +8,6 @@
         "age": { "type": "integer" }
       }
     },
-    "manual_user_test": {
-      "model": "ManualUsers",
-      "columns": {
-        "id": { "type": "uuid", "nullable": false },
-        "name": { "type": "text", "nullable": false },
-        "adress": { "type": "text" }
-      }
-    },
     "orders": {
       "model": "Order",
       "columns": {
