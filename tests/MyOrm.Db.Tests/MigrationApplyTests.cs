@@ -16,19 +16,19 @@ public sealed class PostgresFactAttribute : FactAttribute
 public class MigrationApplyTests
 {
     private const string UsersSchema = """
-        { "tables": [ { "name": "users", "columns": [
-          { "name": "id", "type": "integer", "nullable": false },
-          { "name": "name", "type": "text", "nullable": false } ] } ] }
+        { "tables": { "users": { "columns": {
+          "id": { "type": "integer", "nullable": false },
+          "name": { "type": "text", "nullable": false } } } } }
         """;
 
     private const string EmailSchema = """
-        { "tables": [ { "name": "users", "columns": [
-          { "name": "id", "type": "integer", "nullable": false },
-          { "name": "email", "type": "text" } ] } ] }
+        { "tables": { "users": { "columns": {
+          "id": { "type": "integer", "nullable": false },
+          "email": { "type": "text" } } } } }
         """;
 
     private const string IdOnlySchema = """
-        { "tables": [ { "name": "users", "columns": [ { "name": "id", "type": "integer", "nullable": false } ] } ] }
+        { "tables": { "users": { "columns": { "id": { "type": "integer", "nullable": false } } } } }
         """;
 
     [PostgresFact]
@@ -36,22 +36,22 @@ public class MigrationApplyTests
     {
         await using var fixture = await Fixture.CreateAsync();
         const string before = """
-            { "tables": [
-              { "name": "users", "columns": [
-                { "name": "id", "type": "integer", "nullable": false },
-                { "name": "adress", "type": "text" } ] },
-              { "name": "legacy", "columns": [
-                { "name": "keep", "type": "text" },
-                { "name": "extra", "type": "text" } ] },
-              { "name": "notes", "columns": [ { "name": "body", "type": "text" } ] } ] }
+            { "tables": {
+              "users": { "columns": {
+                "id": { "type": "integer", "nullable": false },
+                "adress": { "type": "text" } } },
+              "legacy": { "columns": {
+                "keep": { "type": "text" },
+                "extra": { "type": "text" } } },
+              "notes": { "columns": { "body": { "type": "text" } } } } }
             """;
         // Rename is not paired: `adress` becomes a drop, `address` an add.
         const string after = """
-            { "tables": [
-              { "name": "users", "columns": [
-                { "name": "id", "type": "bigint", "nullable": false },
-                { "name": "address", "type": "text" } ] },
-              { "name": "legacy", "columns": [ { "name": "keep", "type": "text" } ] } ] }
+            { "tables": {
+              "users": { "columns": {
+                "id": { "type": "bigint", "nullable": false },
+                "address": { "type": "text" } } },
+              "legacy": { "columns": { "keep": { "type": "text" } } } } }
             """;
 
         Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(Parse(before)));
@@ -138,7 +138,7 @@ public class MigrationApplyTests
     {
         await using var fixture = await Fixture.CreateAsync();
         const string schema = """
-            { "tables": [ { "name": "rollback_probe", "columns": [ { "name": "id", "type": "integer", "nullable": false } ] } ] }
+            { "tables": { "rollback_probe": { "columns": { "id": { "type": "integer", "nullable": false } } } } }
             """;
         const string id = "20260101000000_broken";
 
@@ -285,12 +285,12 @@ public class MigrationApplyTests
     {
         await using var fixture = await Fixture.CreateAsync();
         const string withNotes = """
-            { "tables": [
-              { "name": "users", "columns": [ { "name": "id", "type": "integer", "nullable": false } ] },
-              { "name": "notes", "columns": [ { "name": "body", "type": "text" } ] } ] }
+            { "tables": {
+              "users": { "columns": { "id": { "type": "integer", "nullable": false } } },
+              "notes": { "columns": { "body": { "type": "text" } } } } }
             """;
         const string withoutNotes = """
-            { "tables": [ { "name": "users", "columns": [ { "name": "id", "type": "integer", "nullable": false } ] } ] }
+            { "tables": { "users": { "columns": { "id": { "type": "integer", "nullable": false } } } } }
             """;
 
         Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(Parse(withNotes)));

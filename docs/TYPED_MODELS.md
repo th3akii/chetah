@@ -19,42 +19,46 @@ execute → map layering; nothing below changes those boundaries.
 
 ## Step 1 — the schema file
 
-The schema is JSON, parsed with `System.Text.Json` (no custom parser). Example
+The schema is JSONC ("JSON with comments"), parsed with `System.Text.Json`
+(no custom parser). Example
 ([`examples/BasicExample/myorm-schema.json`](../examples/BasicExample/myorm-schema.json)):
 
 ```json
 {
-  "tables": [
-    {
-      "name": "users",
+  // Tables are keyed by their PostgreSQL name; columns by their column name.
+  "tables": {
+    "users": {
       "model": "User",
-      "columns": [
-        { "name": "id", "type": "integer", "nullable": false },
-        { "name": "name", "type": "text", "nullable": false },
-        { "name": "age", "type": "integer" }
-      ]
+      "columns": {
+        "id": { "type": "integer", "nullable": false },
+        "name": { "type": "text", "nullable": false },
+        "age": { "type": "integer" }
+      }
     }
-  ]
+  }
 }
 ```
 
 Rules:
 
-- `name` — the real PostgreSQL table name (stored raw; the dialect compiler
-  quotes it at SQL generation time, exactly as in milestone 001). Letters,
-  digits, underscores and hyphens are supported; names that cannot produce a
-  valid C# accessor class (everything else, e.g. spaces or quotes) are
-  rejected with that reason in the error.
+- A key in `tables` — the real PostgreSQL table name (stored raw; the dialect
+  compiler quotes it at SQL generation time, exactly as in milestone 001).
+  Letters, digits, underscores and hyphens are supported; names that cannot
+  produce a valid C# accessor class (everything else, e.g. spaces or quotes)
+  are rejected with that reason in the error.
 - `model` — optional C# model name. Default: PascalCase of the table name.
   Model and accessor names must be unique across the whole schema.
-- `columns[].type` — one of `integer`, `bigint`, `text`, `boolean`, `uuid`,
-  `timestamp`. Anything else is rejected with the supported list in the error.
-- `columns[].nullable` — optional. **Omitted means nullable**, matching
-  PostgreSQL's own default. `"nullable": false` marks a NOT NULL column.
+- A key in `columns` — one of `integer`, `bigint`, `text`, `boolean`, `uuid`,
+  `timestamp`, with `type` naming it. Anything else is rejected with the
+  supported list in the error.
+- `nullable` — optional. **Omitted means nullable**, matching PostgreSQL's own
+  default. `"nullable": false` marks a NOT NULL column.
 - Column names must be plain identifiers (`[A-Za-z_][A-Za-z0-9_]*`) because they
   become C# property names (`first_name` → `FirstName`) and database rows are
   read by name. PostgreSQL columns that require quoting (spaces, `@`…) are
   rejected rather than half-supported.
+- Unknown properties are rejected rather than ignored, so a typo cannot silently
+  change nullability or drop a setting.
 - Validation errors: empty/duplicate names, unsupported types, invalid or
   clashing C# names, columns whose PascalCase forms collide (`user_id` and
   `user__id` both map to `UserId`), zero columns/tables. The parser never

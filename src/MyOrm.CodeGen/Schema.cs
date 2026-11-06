@@ -42,7 +42,8 @@ public static class SchemaParser
         JsonDocument document;
         try
         {
-            document = JsonDocument.Parse(json);
+            // JSONC: comments are allowed so schema files can document decisions inline.
+            document = JsonDocument.Parse(json, new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip });
         }
         catch (JsonException e)
         {
@@ -55,19 +56,34 @@ public static class SchemaParser
         if (root.ValueKind != JsonValueKind.Object)
             return SchemaParserResult.Fail("Schema root must be an object.");
 
-        if (!TryTablesArray(root, out var tablesElement))
-            return SchemaParserResult.Fail("Schema must contain a \"tables\" array.");
+        if (UnknownProperty(root, "tables") is { } rootProperty)
+            return SchemaParserResult.Fail(
+                $"Unknown top-level property '{rootProperty}'. The schema contains only \"tables\".");
+
+        if (!root.TryGetProperty("tables", out var tablesElement) || tablesElement.ValueKind != JsonValueKind.Object)
+            return SchemaParserResult.Fail("Schema must contain a \"tables\" object keyed by table name.");
 
         var tables = new List<TableSchema>();
+        var tableNames = new HashSet<string>(StringComparer.Ordinal);
         var csharpNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "MyOrmSchema", "Bindings" };
 
-        foreach (var tableElement in tablesElement.EnumerateArray())
+        foreach (var tableProperty in tablesElement.EnumerateObject())
         {
-            if (tableElement.ValueKind != JsonValueKind.Object)
-                return SchemaParserResult.Fail("Each entry in \"tables\" must be an object.");
+            var tableName = tableProperty.Name;
 
-            if (!TryNonEmptyString(tableElement, "name", out var tableName))
-                return SchemaParserResult.Fail("Each table must have a non-empty \"name\" string.");
+            if (tableName.Length == 0)
+                return SchemaParserResult.Fail("Table names must not be empty.");
+
+            if (!tableNames.Add(tableName))
+                return SchemaParserResult.Fail($"Table '{tableName}' is defined more than once.");
+
+            var tableElement = tableProperty.Value;
+            if (tableElement.ValueKind != JsonValueKind.Object)
+                return SchemaParserResult.Fail($"Table '{tableName}' must be an object.");
+
+            if (UnknownProperty(tableElement, "model", "columns") is { } tableEntryProperty)
+                return SchemaParserResult.Fail(
+                    $"Table '{tableName}': unknown property '{tableEntryProperty}'. Allowed properties: \"model\", \"columns\".");
 
             var accessorName = PascalCase(tableName) + "Table";
 
@@ -88,8 +104,8 @@ public static class SchemaParser
                         + "Set an explicit \"model\" name.");
             }
 
-            if (!tableElement.TryGetProperty("columns", out var columnsElement) || columnsElement.ValueKind != JsonValueKind.Array)
-                return SchemaParserResult.Fail($"Table '{tableName}' must contain a \"columns\" array.");
+            if (!tableElement.TryGetProperty("columns", out var columnsElement) || columnsElement.ValueKind != JsonValueKind.Object)
+                return SchemaParserResult.Fail($"Table '{tableName}' must contain a \"columns\" object keyed by column name.");
 
             var columns = new List<ColumnSchema>();
             var columnNames = new HashSet<string>(StringComparer.Ordinal);
@@ -97,21 +113,29 @@ public static class SchemaParser
             // "userId" would otherwise emit the same member twice.
             var propertyNames = new Dictionary<string, string>(StringComparer.Ordinal);
 
-            foreach (var columnElement in columnsElement.EnumerateArray())
+            foreach (var columnProperty in columnsElement.EnumerateObject())
             {
-                if (columnElement.ValueKind != JsonValueKind.Object)
-                    return SchemaParserResult.Fail($"Table '{tableName}': each column must be an object.");
+                var columnName = columnProperty.Name;
 
-                if (!TryNonEmptyString(columnElement, "name", out var columnName))
-                    return SchemaParserResult.Fail($"Table '{tableName}': each column must have a non-empty \"name\" string.");
+                if (columnName.Length == 0)
+                    return SchemaParserResult.Fail($"Table '{tableName}': column names must not be empty.");
+
+                if (!columnNames.Add(columnName))
+                    return SchemaParserResult.Fail($"Table '{tableName}': column '{columnName}' is defined more than once.");
+
+                var columnElement = columnProperty.Value;
+                if (columnElement.ValueKind != JsonValueKind.Object)
+                    return SchemaParserResult.Fail($"Table '{tableName}': column '{columnName}' must be an object.");
+
+                if (UnknownProperty(columnElement, "type", "nullable") is { } columnEntryProperty)
+                    return SchemaParserResult.Fail(
+                        $"Table '{tableName}': column '{columnName}' has unknown property '{columnEntryProperty}'. "
+                        + "Allowed properties: \"type\", \"nullable\".");
 
                 if (!IsValidIdentifier(columnName))
                     return SchemaParserResult.Fail(
                         $"Table '{tableName}': column name '{columnName}' is not a plain identifier "
                         + "(letters, digits, underscores; must not start with a digit). Renaming the column may be simpler.");
-
-                if (!columnNames.Add(columnName))
-                    return SchemaParserResult.Fail($"Table '{tableName}': column '{columnName}' is defined more than once.");
 
                 var propertyName = PascalCase(columnName);
                 if (!IsValidIdentifier(propertyName))
@@ -126,8 +150,15 @@ public static class SchemaParser
                         $"Table '{tableName}': column '{columnName}' has unsupported type '{typeName ?? "(missing)"}'. "
                         + $"Supported: {string.Join(", ", Types.Keys)}.");
 
-                var nullable = !columnElement.TryGetProperty("nullable", out var nullableValue)
-                    || nullableValue.ValueKind != JsonValueKind.False;
+                var nullable = true;
+                if (columnElement.TryGetProperty("nullable", out var nullableValue))
+                {
+                    if (nullableValue.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+                        return SchemaParserResult.Fail(
+                            $"Table '{tableName}': column '{columnName}' has a non-boolean \"nullable\" value; use true or false.");
+
+                    nullable = nullableValue.ValueKind == JsonValueKind.True;
+                }
 
                 columns.Add(new ColumnSchema(columnName, type, nullable));
             }
@@ -144,15 +175,16 @@ public static class SchemaParser
         return SchemaParserResult.Ok(new Schema(tables));
     }
 
-    private static bool TryTablesArray(JsonElement root, out JsonElement tables)
+    /// <summary>First property outside <paramref name="allowed"/>, or null when every property is known.
+    /// Rejecting unknown keys turns a typo into a schema error instead of a silently ignored setting.</summary>
+    private static string? UnknownProperty(JsonElement element, params string[] allowed)
     {
-        tables = default;
-        if (root.TryGetProperty("tables", out var value) && value.ValueKind == JsonValueKind.Array)
+        foreach (var property in element.EnumerateObject())
         {
-            tables = value;
-            return true;
+            if (!allowed.Contains(property.Name, StringComparer.Ordinal))
+                return property.Name;
         }
-        return false;
+        return null;
     }
 
     private static bool TryNonEmptyString(JsonElement element, string property, out string value)

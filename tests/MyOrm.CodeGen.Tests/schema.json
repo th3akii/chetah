@@ -1,34 +1,32 @@
 {
-  "tables": [
-    {
-      "name": "test_widgets",
-      "columns": [
-        { "name": "id", "type": "integer", "nullable": false },
-        { "name": "label", "type": "text" },
-        { "name": "quantity", "type": "bigint", "nullable": false },
-        { "name": "active", "type": "boolean", "nullable": false },
-        { "name": "token", "type": "uuid" },
-        { "name": "created", "type": "timestamp", "nullable": false }
-      ]
+  // Comments are allowed: the parser reads JSONC.
+  "tables": {
+    "test_widgets": {
+      "columns": {
+        "id": { "type": "integer", "nullable": false },
+        "label": { "type": "text" },
+        "quantity": { "type": "bigint", "nullable": false },
+        "active": { "type": "boolean", "nullable": false },
+        "token": { "type": "uuid" },
+        "created": { "type": "timestamp", "nullable": false }
+      }
     },
-    {
-      "name": "users",
+    "users": {
       "model": "Stage2User",
-      "columns": [
-        { "name": "id", "type": "integer", "nullable": false },
-        { "name": "name", "type": "text", "nullable": false },
-        { "name": "age", "type": "integer" }
-      ]
+      "columns": {
+        "id": { "type": "integer", "nullable": false },
+        "name": { "type": "text", "nullable": false },
+        "age": { "type": "integer" }
+      }
     },
-    {
-      "name": "orders",
+    "orders": {
       "model": "Stage2Order",
-      "columns": [
-        { "name": "id", "type": "integer", "nullable": false },
-        { "name": "user_id", "type": "integer", "nullable": false },
-        { "name": "amount", "type": "integer", "nullable": false },
-        { "name": "note", "type": "text" }
-      ]
+      "columns": {
+        "id": { "type": "integer", "nullable": false },
+        "user_id": { "type": "integer", "nullable": false },
+        "amount": { "type": "integer", "nullable": false },
+        "note": { "type": "text" }
+      }
     }
-  ]
+  }
 }

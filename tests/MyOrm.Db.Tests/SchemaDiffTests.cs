@@ -11,10 +11,10 @@ public class SchemaDiffTests
     public async Task FreshDatabase_CreatesTablesInSchemaOrder()
     {
         var desired = Desired("""
-            { "tables": [ { "name": "users", "columns": [
-              { "name": "id", "type": "integer", "nullable": false },
-              { "name": "name", "type": "text", "nullable": false },
-              { "name": "age", "type": "integer" } ] } ] }
+            { "tables": { "users": { "columns": {
+              "id": { "type": "integer", "nullable": false },
+              "name": { "type": "text", "nullable": false },
+              "age": { "type": "integer" } } } } }
             """);
 
         var plan = await SchemaDiff.ComputeAsync(desired, new CatalogState([]), NoNulls);
@@ -35,9 +35,9 @@ public class SchemaDiffTests
     public async Task MissingColumn_IsAdded_DroppedColumnIsDestructive()
     {
         var desired = Desired("""
-            { "tables": [ { "name": "users", "columns": [
-              { "name": "id", "type": "integer", "nullable": false },
-              { "name": "name", "type": "text", "nullable": false } ] } ] }
+            { "tables": { "users": { "columns": {
+              "id": { "type": "integer", "nullable": false },
+              "name": { "type": "text", "nullable": false } } } } }
             """);
         var live = Live(Table("users", ("id", "int4", true), ("age", "int4", false)));
 
@@ -56,7 +56,7 @@ public class SchemaDiffTests
     public async Task Rename_IsReportedAsAddAndDestructiveDrop()
     {
         var desired = Desired("""
-            { "tables": [ { "name": "users", "columns": [ { "name": "address", "type": "text" } ] } ] }
+            { "tables": { "users": { "columns": { "address": { "type": "text" } } } } }
             """);
         var live = Live(Table("users", ("adress", "text", false)));
 
@@ -93,7 +93,7 @@ public class SchemaDiffTests
     public async Task WideningIsFree_NarrowingIsDestructive()
     {
         var widened = await SchemaDiff.ComputeAsync(
-            Desired("""{ "tables": [ { "name": "t", "columns": [ { "name": "c", "type": "bigint", "nullable": false } ] } ] }"""),
+            Desired("""{ "tables": { "t": { "columns": { "c": { "type": "bigint", "nullable": false } } } } }"""),
             Live(Table("t", ("c", "int4", true))),
             NoNulls);
         var widening = Assert.Single(widened.Operations);
@@ -101,7 +101,7 @@ public class SchemaDiffTests
         Assert.False(widening.Destructive);
 
         var narrowed = await SchemaDiff.ComputeAsync(
-            Desired("""{ "tables": [ { "name": "t", "columns": [ { "name": "c", "type": "integer", "nullable": false } ] } ] }"""),
+            Desired("""{ "tables": { "t": { "columns": { "c": { "type": "integer", "nullable": false } } } } }"""),
             Live(Table("t", ("c", "int8", true))),
             NoNulls);
         Assert.True(Assert.Single(narrowed.Operations).Destructive);
@@ -110,7 +110,7 @@ public class SchemaDiffTests
     [Fact]
     public async Task SetNotNull_IsGatedOnlyWhenTheColumnAlreadyHoldsNulls()
     {
-        var desired = Desired("""{ "tables": [ { "name": "t", "columns": [ { "name": "c", "type": "text", "nullable": false } ] } ] }""");
+        var desired = Desired("""{ "tables": { "t": { "columns": { "c": { "type": "text", "nullable": false } } } } }""");
         var live = Live(Table("t", ("c", "text", false)));
 
         Assert.False(Assert.Single((await SchemaDiff.ComputeAsync(desired, live, NoNulls)).Operations).Destructive);
@@ -123,7 +123,7 @@ public class SchemaDiffTests
     [Fact]
     public async Task DropNotNull_IsFree()
     {
-        var desired = Desired("""{ "tables": [ { "name": "t", "columns": [ { "name": "c", "type": "text" } ] } ] }""");
+        var desired = Desired("""{ "tables": { "t": { "columns": { "c": { "type": "text" } } } } }""");
         var live = Live(Table("t", ("c", "text", true)));
 
         var operation = Assert.Single((await SchemaDiff.ComputeAsync(desired, live, AllNulls)).Operations);
@@ -134,7 +134,7 @@ public class SchemaDiffTests
     [Fact]
     public async Task MatchingCatalog_ProducesNoOperations()
     {
-        var desired = Desired("""{ "tables": [ { "name": "t", "columns": [ { "name": "c", "type": "uuid" } ] } ] }""");
+        var desired = Desired("""{ "tables": { "t": { "columns": { "c": { "type": "uuid" } } } } }""");
         var plan = await SchemaDiff.ComputeAsync(desired, Live(Table("t", ("c", "uuid", false))), NoNulls);
 
         Assert.True(plan.IsEmpty);
@@ -144,7 +144,7 @@ public class SchemaDiffTests
     [Fact]
     public async Task DropColumn_WithAttachedObjects_IsBlocked()
     {
-        var desired = Desired("""{ "tables": [ { "name": "users", "columns": [ { "name": "id", "type": "integer", "nullable": false } ] } ] }""");
+        var desired = Desired("""{ "tables": { "users": { "columns": { "id": { "type": "integer", "nullable": false } } } } }""");
         var live = Live(Table("users", ("id", "int4", true), ("email", "text", false))) with
         {
             ForeignObjects =

@@ -33,23 +33,21 @@ starts. Nothing here is built in advance of a phase.
 
 ```json
 {
-  "tables": [
-    {
-      "name": "users",
+  "tables": {
+    "users": {
       "primaryKey": ["id"],
-      "columns": [
-        { "name": "id", "type": "integer", "nullable": false },
-        { "name": "email", "type": "text", "nullable": false }
-      ],
+      "columns": {
+        "id": { "type": "integer", "nullable": false },
+        "email": { "type": "text", "nullable": false }
+      },
       "unique": [["email"]]
     },
-    {
-      "name": "orders",
-      "columns": [
-        { "name": "id", "type": "integer", "nullable": false },
-        { "name": "user_id", "type": "integer", "nullable": false },
-        { "name": "amount", "type": "integer", "nullable": false }
-      ],
+    "orders": {
+      "columns": {
+        "id": { "type": "integer", "nullable": false },
+        "user_id": { "type": "integer", "nullable": false },
+        "amount": { "type": "integer", "nullable": false }
+      },
       "foreignKeys": [
         {
           "columns": ["user_id"],
@@ -59,7 +57,7 @@ starts. Nothing here is built in advance of a phase.
       ],
       "checks": [{ "name": "amount_positive", "expression": "amount > 0" }]
     }
-  ]
+  }
 }
 ```
 

@@ -1,32 +1,29 @@
 {
-  "tables": [
-    {
-      "name": "users",
+  "tables": {
+    "users": {
       "model": "User",
-      "columns": [
-        { "name": "id", "type": "integer", "nullable": false },
-        { "name": "name", "type": "text", "nullable": false },
-        { "name": "age", "type": "integer" }
-      ]
+      "columns": {
+        "id": { "type": "integer", "nullable": false },
+        "name": { "type": "text", "nullable": false },
+        "age": { "type": "integer" }
+      }
     },
-    {
-      "name": "manual_user_test",
+    "manual_user_test": {
       "model": "ManualUsers",
-      "columns": [
-        { "name": "id", "type": "uuid", "nullable": false },
-        { "name": "name", "type": "text", "nullable": false},
-        { "name": "adress", "type": "text" }
-      ]
+      "columns": {
+        "id": { "type": "uuid", "nullable": false },
+        "name": { "type": "text", "nullable": false },
+        "adress": { "type": "text" }
+      }
     },
-    {
-      "name": "orders",
+    "orders": {
       "model": "Order",
-      "columns": [
-        { "name": "id", "type": "integer", "nullable": false },
-        { "name": "user_id", "type": "integer", "nullable": false },
-        { "name": "amount", "type": "integer", "nullable": false },
-        { "name": "note", "type": "text" }
-      ]
+      "columns": {
+        "id": { "type": "integer", "nullable": false },
+        "user_id": { "type": "integer", "nullable": false },
+        "amount": { "type": "integer", "nullable": false },
+        "note": { "type": "text" }
+      }
     }
-  ]
+  }
 }

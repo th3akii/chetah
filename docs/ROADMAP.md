@@ -116,12 +116,15 @@ Still open after this stage: constraints/indexes (Stage 7.5), schema-JSON ergono
 
 The gating question is answered by the plan: primary keys and foreign keys first, everything else only when a consumer needs it. Runtime query behaviour does not change in these phases; the wins are database integrity and closing the "a hand-added key makes a column permanently undroppable" hole in the migration tool.
 
-### Stage 7.6 — Schema Format Ergonomics (noted by author, not started)
+### Stage 7.6 — Schema Format Ergonomics (delivered as a refactor)
 
-**Status:** Candidate
-**Goal:** Reduce the verbosity of the JSON schema (repeated `"name": …` keys per column). Possible shapes: a column shorthand (`"columns": ["id:integer!", "name:text!"]`), or a different format — decided when actual friction demands it.
+**Status:** Delivered 2026-11-06 — tables and columns are now keyed objects instead of arrays of `{ "name": … }` entries, and the file accepts JSONC comments. Column entries stay objects (no string shorthand): [`TYPED_MODELS.md`](TYPED_MODELS.md) documents the current format.
+**Goal:** Reduce the verbosity of the JSON schema (repeated `"name": …` keys per column).
 
-**Gating question:** does the verbose form actually pain-worth-shipping the next N schemas, or is a shorthand justified by real usage?
+The gating question answered itself once real schemas existed: keying by name
+removes a duplicated identifier per table and per column without inventing a
+second syntax to learn. A compact column shorthand remains parked until actual
+friction justifies it.
 
 ### Stage 8 — Distribution and Documentation
 

@@ -15,7 +15,7 @@ public class TypeMappingTests
     public void MapsPostgresTypeNamesToClrTypes(string pgType, string expected)
     {
         var schema = SchemaParser.Parse($$"""
-            { "tables": [ { "name": "t", "columns": [ { "name": "c", "type": "{{pgType}}", "nullable": false } ] } ] }
+            { "tables": { "t": { "columns": { "c": { "type": "{{pgType}}", "nullable": false } } } } }
             """).Schema!;
 
         var column = Assert.Single(schema.Tables[0].Columns);

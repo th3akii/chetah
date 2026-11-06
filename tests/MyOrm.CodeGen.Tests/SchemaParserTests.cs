@@ -9,16 +9,15 @@ public class SchemaParserTests
     {
         var result = SchemaParser.Parse("""
             {
-              "tables": [
-                {
-                  "name": "widgets",
-                  "columns": [
-                    { "name": "id", "type": "integer", "nullable": false },
-                    { "name": "label", "type": "text" },
-                    { "name": "token", "type": "uuid" }
-                  ]
+              "tables": {
+                "widgets": {
+                  "columns": {
+                    "id": { "type": "integer", "nullable": false },
+                    "label": { "type": "text" },
+                    "token": { "type": "uuid" }
+                  }
                 }
-              ]
+              }
             }
             """);
 
@@ -38,10 +37,10 @@ public class SchemaParserTests
     {
         var result = SchemaParser.Parse("""
             {
-              "tables": [
-                { "name": "user_profiles", "model": "Profile", "columns": [ { "name": "id", "type": "integer" } ] },
-                { "name": "audit_log", "columns": [ { "name": "id", "type": "integer" } ] }
-              ]
+              "tables": {
+                "user_profiles": { "model": "Profile", "columns": { "id": { "type": "integer" } } },
+                "audit_log": { "columns": { "id": { "type": "integer" } } }
+              }
             }
             """);
 
@@ -50,6 +49,28 @@ public class SchemaParserTests
         Assert.Equal("AuditLog", result.Schema!.Tables[1].ModelName);
         Assert.Equal("UserProfilesTable", result.Schema!.Tables[0].AccessorName);
         Assert.Equal("AuditLogTable", result.Schema!.Tables[1].AccessorName);
+    }
+
+    [Fact]
+    public void AcceptsComments()
+    {
+        var result = SchemaParser.Parse("""
+            {
+              // Tables are keyed by their SQL name.
+              "tables": {
+                "widgets": {
+                  "columns": {
+                    /* NOT NULL, so the model gets int. */
+                    "id": { "type": "integer", "nullable": false }
+                  }
+                }
+              }
+            }
+            """);
+
+        Assert.Null(result.Error);
+        var column = Assert.Single(result.Schema!.Tables[0].Columns);
+        Assert.Equal(("id", false), (column.Name, column.Nullable));
     }
 
     [Fact]
@@ -63,9 +84,10 @@ public class SchemaParserTests
 
     [Theory]
     [InlineData("[1, 2]", "root must be an object")]
-    [InlineData("""{ "nope": true }""", "\"tables\"")]
-    [InlineData("""{ "tables": [] }""", "at least one table")]
-    public void RejectsMissingTablesArray(string json, string expectedErrorFragment)
+    [InlineData("""{ "nope": true }""", "Unknown top-level property 'nope'")]
+    [InlineData("""{ "tables": [] }""", "\"tables\" object")]
+    [InlineData("""{ "tables": {} }""", "at least one table")]
+    public void RejectsMalformedRootOrTables(string json, string expectedErrorFragment)
     {
         var result = SchemaParser.Parse(json);
 
@@ -74,19 +96,20 @@ public class SchemaParserTests
     }
 
     [Theory]
-    [InlineData("""{ "tables": [ { "columns": [ { "name": "id", "type": "integer" } ] } ] }""")]
-    [InlineData("""{ "tables": [ { "name": "", "columns": [] } ] }""")]
-    public void RejectsMissingOrEmptyTableName(string json)
+    [InlineData("""{ "tables": { "": { "columns": { "id": { "type": "integer" } } } } }""", "Table names must not be empty")]
+    [InlineData("""{ "tables": { "t": [] } }""", "Table 't' must be an object")]
+    [InlineData("""{ "tables": { "t": { "name": "t", "columns": { "id": { "type": "integer" } } } } }""", "unknown property 'name'")]
+    public void RejectsMalformedTableEntries(string json, string expectedErrorFragment)
     {
         var result = SchemaParser.Parse(json);
 
         Assert.Null(result.Schema);
-        Assert.Contains("name", result.Error!);
+        Assert.Contains(expectedErrorFragment, result.Error);
     }
 
     [Theory]
-    [InlineData("""{ "tables": [ { "name": "t", "model": "1Bad", "columns": [ { "name": "id", "type": "integer" } ] } ] }""")]
-    [InlineData("""{ "tables": [ { "name": "t", "model": "has space", "columns": [ { "name": "id", "type": "integer" } ] } ] }""")]
+    [InlineData("""{ "tables": { "t": { "model": "1Bad", "columns": { "id": { "type": "integer" } } } } }""")]
+    [InlineData("""{ "tables": { "t": { "model": "has space", "columns": { "id": { "type": "integer" } } } } }""")]
     public void RejectsInvalidModelName(string json)
     {
         var result = SchemaParser.Parse(json);
@@ -100,10 +123,10 @@ public class SchemaParserTests
     {
         var result = SchemaParser.Parse("""
             {
-              "tables": [
-                { "name": "a", "columns": [ { "name": "id", "type": "integer" } ] },
-                { "name": "b", "model": "A", "columns": [ { "name": "id", "type": "integer" } ] }
-              ]
+              "tables": {
+                "a": { "columns": { "id": { "type": "integer" } } },
+                "b": { "model": "A", "columns": { "id": { "type": "integer" } } }
+              }
             }
             """);
 
@@ -115,7 +138,7 @@ public class SchemaParserTests
     public void RejectsUnsupportedTypeAndListsSupportedOnes()
     {
         var result = SchemaParser.Parse("""
-            { "tables": [ { "name": "t", "columns": [ { "name": "amount", "type": "decimal" } ] } ] }
+            { "tables": { "t": { "columns": { "amount": { "type": "decimal" } } } } }
             """);
 
         Assert.Null(result.Schema);
@@ -124,14 +147,26 @@ public class SchemaParserTests
     }
 
     [Theory]
-    [InlineData("""{ "tables": [ { "name": "t", "columns": [ { "type": "integer" } ] } ] }""")]
-    [InlineData("""{ "tables": [ { "name": "t", "columns": [ { "name": "", "type": "integer" } ] } ] }""")]
+    [InlineData("""{ "tables": { "t": { "columns": { "id": {} } } } }""", "unsupported type ''")]
+    [InlineData("""{ "tables": { "t": { "columns": { "id": { "type": "integer", "default": "1" } } } } }""", "unknown property 'default'")]
+    [InlineData("""{ "tables": { "t": { "columns": { "id": { "type": "integer", "nullable": "false" } } } } }""", "non-boolean \"nullable\"")]
+    public void RejectsMalformedColumnEntries(string json, string expectedErrorFragment)
+    {
+        var result = SchemaParser.Parse(json);
+
+        Assert.Null(result.Schema);
+        Assert.Contains(expectedErrorFragment, result.Error);
+    }
+
+    [Theory]
+    [InlineData("""{ "tables": { "t": { "columns": { "": { "type": "integer" } } } } }""")]
+    [InlineData("""{ "tables": { "t": { "columns": { "id": [] } } } }""")]
     public void RejectsMissingOrEmptyColumnName(string json)
     {
         var result = SchemaParser.Parse(json);
 
         Assert.Null(result.Schema);
-        Assert.Contains("name", result.Error!);
+        Assert.Contains("column", result.Error!);
     }
 
     [Theory]
@@ -140,7 +175,7 @@ public class SchemaParserTests
     [InlineData("value!")]
     public void RejectsColumnNamesThatCannotBecomeIdentifiers(string columnName)
     {
-        var json = $$"""{ "tables": [ { "name": "t", "columns": [ { "name": "{{columnName}}", "type": "integer" } ] } ] }""";
+        var json = $$"""{ "tables": { "t": { "columns": { "{{columnName}}": { "type": "integer" } } } } }""";
 
         var result = SchemaParser.Parse(json);
 
@@ -152,7 +187,7 @@ public class SchemaParserTests
     public void RejectsDuplicateColumnNames()
     {
         var result = SchemaParser.Parse("""
-            { "tables": [ { "name": "t", "columns": [ { "name": "id", "type": "integer" }, { "name": "id", "type": "text" } ] } ] }
+            { "tables": { "t": { "columns": { "id": { "type": "integer" }, "id": { "type": "text" } } } } }
             """);
 
         Assert.Null(result.Schema);
@@ -162,7 +197,7 @@ public class SchemaParserTests
     [Fact]
     public void RejectsTableWithoutColumns()
     {
-        var result = SchemaParser.Parse("""{ "tables": [ { "name": "t", "columns": [] } ] }""");
+        var result = SchemaParser.Parse("""{ "tables": { "t": { "columns": {} } } }""");
 
         Assert.Null(result.Schema);
         Assert.Contains("at least one column", result.Error);
@@ -182,7 +217,7 @@ public class SchemaParserTests
     public void AcceptsHyphenatedTableNames()
     {
         var result = SchemaParser.Parse("""
-            { "tables": [ { "name": "user-roles", "columns": [ { "name": "id", "type": "integer" } ] } ] }
+            { "tables": { "user-roles": { "columns": { "id": { "type": "integer" } } } } }
             """);
 
         Assert.Null(result.Error);
@@ -193,7 +228,7 @@ public class SchemaParserTests
     [Fact]
     public void RejectsTableNamesThatCannotBecomeAccessors()
     {
-        var json = """{ "tables": [ { "name": "my table", "columns": [ { "name": "id", "type": "integer" } ] } ] }""";
+        var json = """{ "tables": { "my table": { "columns": { "id": { "type": "integer" } } } } }""";
 
         var result = SchemaParser.Parse(json);
 
@@ -205,7 +240,7 @@ public class SchemaParserTests
     public void RejectsColumnsCollidingAfterPascalCasing()
     {
         var result = SchemaParser.Parse("""
-            { "tables": [ { "name": "t", "columns": [ { "name": "user_id", "type": "integer" }, { "name": "user__id", "type": "integer" } ] } ] }
+            { "tables": { "t": { "columns": { "user_id": { "type": "integer" }, "user__id": { "type": "integer" } } } } }
             """);
 
         Assert.Null(result.Schema);
@@ -216,7 +251,7 @@ public class SchemaParserTests
     public void RejectsColumnWithoutDerivedPropertyName()
     {
         var result = SchemaParser.Parse("""
-            { "tables": [ { "name": "t", "columns": [ { "name": "_", "type": "integer" } ] } ] }
+            { "tables": { "t": { "columns": { "_": { "type": "integer" } } } } }
             """);
 
         Assert.Null(result.Schema);
