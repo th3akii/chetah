@@ -4,8 +4,18 @@ using Npgsql;
 namespace Chetah.Db;
 
 /// <summary>One row of <c>"chetah"."objects"</c>: an identity that was handed out and may since have
-/// been dropped. Dropped rows stay as tombstones so an id is never reissued to a different object.</summary>
-internal sealed record IdentityRow(long Id, string Kind, long? TableId, string Name, bool Dropped);
+/// been dropped. Dropped rows stay as tombstones so an id is never reissued to a different object.
+/// For a column, the default pair records what the schema file asked for and what the database ended
+/// up holding: PostgreSQL rewrites some expressions (<c>1 + 1</c> stays, <c>pg_catalog.now()</c>
+/// becomes <c>now()</c>), and comparing only text would regenerate the same migration forever.</summary>
+internal sealed record IdentityRow(
+    long Id,
+    string Kind,
+    long? TableId,
+    string Name,
+    bool Dropped,
+    string? DeclaredDefault = null,
+    string? AppliedDefault = null);
 
 /// <summary>The recorded identities, live and tombstoned.</summary>
 internal sealed record IdentityRegistry(IReadOnlyList<IdentityRow> Rows)
@@ -35,12 +45,22 @@ internal sealed record IdentityRegistry(IReadOnlyList<IdentityRow> Rows)
                 return Empty;
         }
 
+        // A registry created before defaults were tracked has no such columns, and a read-only run
+        // must not add them: probe instead of assuming.
+        var tracked = await HasDefaultColumnsAsync(connection, transaction, cancellationToken);
+
         await using var command = new NpgsqlCommand(
-            """
-            SELECT id, kind, table_id, name, dropped_at IS NOT NULL
-            FROM "chetah"."objects"
-            ORDER BY id
-            """,
+            tracked
+                ? """
+                  SELECT id, kind, table_id, name, dropped_at IS NOT NULL, declared_default, applied_default
+                  FROM "chetah"."objects"
+                  ORDER BY id
+                  """
+                : """
+                  SELECT id, kind, table_id, name, dropped_at IS NOT NULL
+                  FROM "chetah"."objects"
+                  ORDER BY id
+                  """,
             connection,
             transaction);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
@@ -53,52 +73,104 @@ internal sealed record IdentityRegistry(IReadOnlyList<IdentityRow> Rows)
                 reader.GetString(1),
                 reader.IsDBNull(2) ? null : reader.GetInt64(2),
                 reader.GetString(3),
-                reader.GetBoolean(4)));
+                reader.GetBoolean(4),
+                tracked && !reader.IsDBNull(5) ? reader.GetString(5) : null,
+                tracked && !reader.IsDBNull(6) ? reader.GetString(6) : null));
         }
 
         return new IdentityRegistry(rows);
     }
 
+    private static async Task<bool> HasDefaultColumnsAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction? transaction,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT count(*) FROM information_schema.columns
+            WHERE table_schema = 'chetah' AND table_name = 'objects' AND column_name = 'declared_default'
+            """,
+            connection,
+            transaction);
+        return Convert.ToInt64(await command.ExecuteScalarAsync(cancellationToken)) > 0;
+    }
+
     /// <summary>Writes the declared state into the registry after the DDL ran: every declared object
-    /// becomes a live row carrying its id (renames included), and every id the schema no longer
+    /// becomes a live row carrying its id (renames included), every column records the default the
+    /// file asked for and the default the database now holds, and every id the schema no longer
     /// declares is kept as a tombstone. Runs inside the migration transaction, so a rollback leaves
     /// the registry untouched.</summary>
+    /// <param name="desired">The declared state, with defaults already normalized.</param>
+    /// <param name="applied">What the database holds after the DDL, read inside the same
+    /// transaction. This is what makes a rewritten default comparable: the record holds both
+    /// texts, so an unchanged declaration is never re-applied just because PostgreSQL prints it
+    /// differently.</param>
+    /// <param name="registry">The registry as it was read at the start of the run, used to keep an
+    /// id that is declared but not yet created (a pending later migration) out of the tombstones.</param>
     public static async Task SynchronizeAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
-        Schema schema,
+        CatalogState desired,
         SchemaIds ids,
+        IReadOnlyDictionary<(string Table, string Column), string?> applied,
+        IdentityRegistry registry,
         CancellationToken cancellationToken)
     {
         var kinds = new List<string>();
         var tableIds = new List<long?>();
         var objectIds = new List<long>();
         var names = new List<string>();
+        var declaredDefaults = new List<string?>();
+        var appliedDefaults = new List<string?>();
 
-        foreach (var table in schema.Tables)
+        var existing = applied.Keys
+            .GroupBy(key => key.Table, StringComparer.Ordinal)
+            .ToDictionary(
+                group => group.Key,
+                group => group.Select(key => key.Column).ToHashSet(StringComparer.Ordinal),
+                StringComparer.Ordinal);
+
+        foreach (var table in desired.Tables)
         {
+            // A replayed entry only created what it created: recording an object that is not there
+            // yet would let the registry claim ids the database has never seen.
+            if (!existing.ContainsKey(table.Name))
+                continue;
+
             kinds.Add("table");
             tableIds.Add(null);
             objectIds.Add(ids.Tables[table.Name]);
             names.Add(table.Name);
-        }
+            declaredDefaults.Add(null);
+            appliedDefaults.Add(null);
 
-        foreach (var table in schema.Tables)
-        {
             foreach (var column in table.Columns)
             {
+                if (!existing[table.Name].Contains(column.Name))
+                    continue;
+
                 kinds.Add("column");
                 tableIds.Add(ids.Tables[table.Name]);
                 objectIds.Add(ids.Columns[(table.Name, column.Name)]);
                 names.Add(column.Name);
+                declaredDefaults.Add(column.Default);
+                appliedDefaults.Add(applied.TryGetValue((table.Name, column.Name), out var appliedDefault)
+                    ? appliedDefault
+                    : null);
             }
         }
 
         await using (var declare = new NpgsqlCommand(
             """
-            INSERT INTO "chetah"."objects" (id, kind, table_id, name)
-            SELECT * FROM unnest($1::bigint[], $2::text[], $3::bigint[], $4::text[])
-            ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, dropped_at = NULL
+            INSERT INTO "chetah"."objects"
+                (id, kind, table_id, name, declared_default, applied_default)
+            SELECT * FROM unnest($1::bigint[], $2::text[], $3::bigint[], $4::text[], $5::text[], $6::text[])
+            ON CONFLICT (id) DO UPDATE SET
+                name = EXCLUDED.name,
+                dropped_at = NULL,
+                declared_default = EXCLUDED.declared_default,
+                applied_default = EXCLUDED.applied_default
             """,
             connection,
             transaction))
@@ -107,7 +179,29 @@ internal sealed record IdentityRegistry(IReadOnlyList<IdentityRow> Rows)
             declare.Parameters.Add(new NpgsqlParameter { Value = kinds.ToArray() });
             declare.Parameters.Add(new NpgsqlParameter { Value = tableIds.ToArray() });
             declare.Parameters.Add(new NpgsqlParameter { Value = names.ToArray() });
+            declare.Parameters.Add(new NpgsqlParameter { Value = declaredDefaults.ToArray() });
+            declare.Parameters.Add(new NpgsqlParameter { Value = appliedDefaults.ToArray() });
             await declare.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        // Keep an id when it is declared (a later pending migration may still create it) or when its
+        // object still physically exists (drift this plan did not remove).
+        var surviving = objectIds.ToHashSet();
+        var tableNames = registry.Rows
+            .Where(row => !row.Dropped && row.Kind == "table")
+            .ToDictionary(row => row.Id, row => row.Name);
+
+        foreach (var row in registry.Rows.Where(row => !row.Dropped))
+        {
+            var present = row.Kind == "table"
+                ? existing.ContainsKey(row.Name)
+                : row.TableId is { } parent
+                    && tableNames.TryGetValue(parent, out var parentName)
+                    && existing.TryGetValue(parentName, out var columns)
+                    && columns.Contains(row.Name);
+
+            if (present)
+                surviving.Add(row.Id);
         }
 
         await using var tombstone = new NpgsqlCommand(
@@ -118,7 +212,7 @@ internal sealed record IdentityRegistry(IReadOnlyList<IdentityRow> Rows)
             """,
             connection,
             transaction);
-        tombstone.Parameters.Add(new NpgsqlParameter { Value = objectIds.ToArray() });
+        tombstone.Parameters.Add(new NpgsqlParameter { Value = surviving.ToArray() });
         await tombstone.ExecuteNonQueryAsync(cancellationToken);
     }
 }
@@ -127,8 +221,16 @@ internal sealed record IdentityRegistry(IReadOnlyList<IdentityRow> Rows)
 /// currently records for that id, and differs from <paramref name="Name"/> only for a rename.</summary>
 internal sealed record ResolvedTable(string Name, long Id, string? LiveName);
 
-/// <summary>A declared column with its identity; <paramref name="LiveName"/> drives renames.</summary>
-internal sealed record ResolvedColumn(string Table, long TableId, string Name, long Id, string? LiveName);
+/// <summary>A declared column with its identity; <paramref name="LiveName"/> drives renames, and the
+/// recorded default pair tells the diff whether a default really changed.</summary>
+internal sealed record ResolvedColumn(
+    string Table,
+    long TableId,
+    string Name,
+    long Id,
+    string? LiveName,
+    string? DeclaredDefault = null,
+    string? AppliedDefault = null);
 
 /// <summary>Declared objects matched to their persistent ids, plus anything that must be resolved by
 /// hand before a plan can be trusted.</summary>
@@ -233,7 +335,14 @@ internal static class Identity
                 }
 
                 claimedColumns.Add(id);
-                columns[(table.Name, column.Name)] = new ResolvedColumn(table.Name, resolved.Id, column.Name, id, row?.Name);
+                columns[(table.Name, column.Name)] = new ResolvedColumn(
+                    table.Name,
+                    resolved.Id,
+                    column.Name,
+                    id,
+                    row?.Name,
+                    row?.DeclaredDefault,
+                    row?.AppliedDefault);
             }
         }
 

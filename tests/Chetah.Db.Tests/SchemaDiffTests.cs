@@ -278,6 +278,38 @@ public class SchemaDiffTests
     }
 
     [Fact]
+    public async Task RecordedDefault_IsNotRegeneratedWhenPostgresRewritesIt()
+    {
+        var desired = Desired("""{ "tables": { "t": { "columns": { "a": { "type": "integer", "default": "pg_catalog.now()" } } } } }""");
+        var live = new CatalogState([
+            new TableState("t", [new ColumnState("a", "int4", false, "now()")]),
+        ]);
+        var identities = new ResolvedIdentities(
+            new Dictionary<string, ResolvedTable> { ["t"] = new("t", 1, "t") },
+            new Dictionary<(string Table, string Column), ResolvedColumn>
+            {
+                [("t", "a")] = new("t", 1, "a", 2, "a", "pg_catalog.now()", "now()"),
+            },
+            []);
+
+        var plan = await SchemaDiff.ComputeAsync(desired, live, NoNulls, identities);
+        Assert.True(plan.IsEmpty);
+
+        // Changing the declaration is still a change.
+        var changed = Desired("""{ "tables": { "t": { "columns": { "a": { "type": "integer", "default": "now()" } } } } }""");
+        var rewrite = await SchemaDiff.ComputeAsync(changed, live, NoNulls, identities);
+        var operation = Assert.Single(rewrite.Operations);
+        Assert.Equal("ALTER TABLE \"t\" ALTER COLUMN \"a\" SET DEFAULT now()", operation.Statement);
+
+        // Drift in the database is still a change, even when the declaration did not move.
+        var drifted = new CatalogState([
+            new TableState("t", [new ColumnState("a", "int4", false, "5")]),
+        ]);
+        var drift = await SchemaDiff.ComputeAsync(desired, drifted, NoNulls, identities);
+        Assert.Single(drift.Operations);
+    }
+
+    [Fact]
     public async Task DefaultThatOnlyDiffersByCasts_IsNotChanged()
     {
         // PostgreSQL prints 'active' back as 'active'::text; that is the same default.

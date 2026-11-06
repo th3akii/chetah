@@ -683,6 +683,61 @@ public class MigrationApplyTests
     }
 
     [PostgresFact]
+    public async Task RewrittenDefaultExpressions_Converge()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        const string schema = """
+            { "tables": { "t": { "columns": {
+              "id": { "type": "integer", "nullable": false },
+              "half": { "type": "integer", "default": "1 + 1" },
+              "stamp": { "type": "timestamp", "default": "pg_catalog.now()" } } } } }
+            """;
+
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(schema)));
+        var first = File.ReadAllText(fixture.SchemaPath);
+
+        // PostgreSQL prints these back as "(1 + 1)" and "now()". Comparing text against the
+        // declaration would regenerate the same migration every time; the applied pair is recorded.
+        var second = new StringWriter();
+        Assert.Equal(0, await fixture.Runner(second).ApplyAsync(fixture.CurrentSchema()));
+        Assert.Contains("in sync", second.ToString(), StringComparison.Ordinal);
+
+        var third = new StringWriter();
+        Assert.Equal(0, await fixture.Runner(third).ApplyAsync(fixture.CurrentSchema()));
+        Assert.Contains("in sync", third.ToString(), StringComparison.Ordinal);
+
+        Assert.Equal(1, await fixture.CountAsync("SELECT count(*) FROM chetah.migrations"));
+        Assert.Single(new MigrationStore(fixture.MigrationsDirectory).ReadJournal().Entries);
+        Assert.Equal(first, File.ReadAllText(fixture.SchemaPath));
+    }
+
+    [PostgresFact]
+    public async Task DefaultChangedInTheDatabase_IsCorrected()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        const string schema = """
+            { "tables": { "t": { "columns": {
+              "id": { "type": "integer", "nullable": false },
+              "half": { "type": "integer", "default": "1 + 1" } } } } }
+            """;
+
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(schema)));
+        await fixture.ExecuteAsync("ALTER TABLE t ALTER COLUMN half SET DEFAULT 5");
+
+        var output = new StringWriter();
+        Assert.Equal(0, await fixture.Runner(output).ApplyAsync(fixture.CurrentSchema()));
+        Assert.Contains("Applied", output.ToString(), StringComparison.Ordinal);
+        Assert.Equal("(1 + 1)", (string?)await fixture.ScalarAsync(
+            "SELECT column_default FROM information_schema.columns "
+            + "WHERE table_schema = 'public' AND table_name = 't' AND column_name = 'half'"));
+
+        var settled = new StringWriter();
+        Assert.Equal(0, await fixture.Runner(settled).ApplyAsync(fixture.CurrentSchema()));
+        Assert.Contains("in sync", settled.ToString(), StringComparison.Ordinal);
+        Assert.Equal(2, await fixture.CountAsync("SELECT count(*) FROM chetah.migrations"));
+    }
+
+    [PostgresFact]
     public async Task ExistingDatabase_IsRecordedAsBaseline()
     {
         await using var fixture = await Fixture.CreateAsync();

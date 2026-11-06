@@ -35,6 +35,9 @@ internal sealed class MigrationRunner
         CREATE UNIQUE INDEX IF NOT EXISTS "objects_live_name"
             ON "chetah"."objects" (kind, coalesce(table_id, 0), name)
             WHERE dropped_at IS NULL;
+
+        ALTER TABLE "chetah"."objects" ADD COLUMN IF NOT EXISTS declared_default text;
+        ALTER TABLE "chetah"."objects" ADD COLUMN IF NOT EXISTS applied_default text;
         """;
 
     /// <summary>Session-level advisory lock key. Every command takes it, so two runs against one
@@ -149,7 +152,7 @@ internal sealed class MigrationRunner
         Schema schema,
         CancellationToken cancellationToken)
     {
-        var (ids, identities) = await ResolveIdentitiesAsync(connection, schema, cancellationToken);
+        var (ids, identities, _) = await ResolveIdentitiesAsync(connection, schema, cancellationToken);
         if (!identities.CanApply)
             return RefuseIdentity(identities);
 
@@ -197,6 +200,16 @@ internal sealed class MigrationRunner
 
         var journal = _store.ReadJournal();
         var applied = await ReadAppliedAsync(connection, cancellationToken);
+        var desired = SchemaCatalog.FromSchema(schema);
+
+        // Identity is resolved before anything runs: every statement this command executes, replayed
+        // or new, records identities in the registry, and that registry must describe the schema
+        // file, not a guess.
+        var (ids, identities, registry) = await ResolveIdentitiesAsync(connection, schema, cancellationToken);
+        if (!identities.CanApply)
+            return RefuseIdentity(identities);
+
+        await PersistIdentitiesAsync(schema, ids, cancellationToken);
 
         foreach (var entry in journal.Entries)
         {
@@ -215,7 +228,7 @@ internal sealed class MigrationRunner
             if (!await ValidatePendingAsync(connection, entry, cancellationToken))
                 return 1;
 
-            if (!await ApplyMigrationAsync(connection, entry, sql, cancellationToken))
+            if (!await ApplyMigrationAsync(connection, desired, entry, sql, ids, registry, cancellationToken))
             {
                 _output.WriteLine($"Migration {entry.Id} was rolled back. It stays in the journal and is retried by the next apply.");
                 return 1;
@@ -226,12 +239,6 @@ internal sealed class MigrationRunner
         }
 
         var live = await PostgresCatalog.ReadAsync(connection, _schema, cancellationToken);
-        var desired = SchemaCatalog.FromSchema(schema);
-        var (ids, identities) = await ResolveIdentitiesAsync(connection, schema, cancellationToken);
-        if (!identities.CanApply)
-            return RefuseIdentity(identities);
-
-        await PersistIdentitiesAsync(schema, ids, cancellationToken);
 
         // A baseline describes an adopted database once. Another checkout sharing the database must
         // not add its own copy of that same record.
@@ -240,7 +247,14 @@ internal sealed class MigrationRunner
             var baseline = _store.Write(Stamp(), "baseline", [], live);
             await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
             await RecordAsync(connection, transaction, baseline, cancellationToken);
-            await IdentityRegistry.SynchronizeAsync(connection, transaction, schema, ids, cancellationToken);
+            await IdentityRegistry.SynchronizeAsync(
+                connection,
+                transaction,
+                desired,
+                ids,
+                PostgresCatalog.DefaultsOf(live),
+                registry,
+                cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             _output.WriteLine($"Recorded baseline {baseline.Id} (no DDL executed).");
         }
@@ -278,10 +292,12 @@ internal sealed class MigrationRunner
 
         if (!await ApplyMigrationAsync(
                 connection,
+                desired,
                 migration,
                 _store.ReadSql(migration.Id),
-                cancellationToken,
-                (transaction, token) => IdentityRegistry.SynchronizeAsync(connection, transaction, schema, ids, token)))
+                ids,
+                registry,
+                cancellationToken))
         {
             _output.WriteLine($"Migration {migration.Id} was rolled back. It stays in the journal and is retried by the next apply.");
             return 1;
@@ -293,14 +309,14 @@ internal sealed class MigrationRunner
 
     /// <summary>Matches declared objects to recorded identities. Nothing is written: a run that ends
     /// in a refusal must not have touched the schema file.</summary>
-    private async Task<(SchemaIds Ids, ResolvedIdentities Identities)> ResolveIdentitiesAsync(
+    private async Task<(SchemaIds Ids, ResolvedIdentities Identities, IdentityRegistry Registry)> ResolveIdentitiesAsync(
         NpgsqlConnection connection,
         Schema schema,
         CancellationToken cancellationToken)
     {
         var registry = await IdentityRegistry.ReadAsync(connection, null, cancellationToken);
         var ids = SchemaFile.ResolveIds(schema, registry);
-        return (ids, Identity.Resolve(schema, ids, registry, _dropAdd));
+        return (ids, Identity.Resolve(schema, ids, registry, _dropAdd), registry);
     }
 
     /// <summary>Records the ids this run resolved into the schema file, unless the run is read-only.
@@ -505,15 +521,17 @@ internal sealed class MigrationRunner
 
     /// <summary>Executes the recorded SQL and the applied-state row in one transaction: a failed
     /// statement leaves the database and <c>chetah.migrations</c> untouched.</summary>
-    /// <param name="afterStatements">Runs inside the same transaction, after the DDL and before the
-    /// applied-state row commits — the identity registry is updated there so it cannot describe a
-    /// migration that rolled back.</param>
+    /// <remarks>The identity registry is updated inside the same transaction, from the catalog as it
+    /// is after the DDL, so it can neither describe a migration that rolled back nor drift from what
+    /// the database actually holds.</remarks>
     private async Task<bool> ApplyMigrationAsync(
         NpgsqlConnection connection,
+        CatalogState desired,
         JournalEntry entry,
         string sql,
-        CancellationToken cancellationToken,
-        Func<NpgsqlTransaction, CancellationToken, Task>? afterStatements = null)
+        SchemaIds ids,
+        IdentityRegistry registry,
+        CancellationToken cancellationToken)
     {
         var statements = sql
             .Split(MigrationStore.StatementBreakpoint)
@@ -522,13 +540,17 @@ internal sealed class MigrationRunner
             .ToArray();
 
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        var current = "";
         try
         {
             foreach (var statement in statements)
+            {
+                current = statement;
                 await ExecuteAsync(connection, transaction, statement, cancellationToken);
+            }
 
-            if (afterStatements is not null)
-                await afterStatements(transaction, cancellationToken);
+            var applied = await PostgresCatalog.ReadDefaultsAsync(connection, _schema, transaction, cancellationToken);
+            await IdentityRegistry.SynchronizeAsync(connection, transaction, desired, ids, applied, registry, cancellationToken);
 
             await RecordAsync(connection, transaction, entry, cancellationToken);
             await transaction.CommitAsync(cancellationToken);
@@ -537,7 +559,10 @@ internal sealed class MigrationRunner
         catch (NpgsqlException exception)
         {
             await transaction.RollbackAsync(cancellationToken);
-            _output.WriteLine($"Migration {entry.Id} failed: {exception.Message}");
+            _output.WriteLine($"Migration {entry.Id} failed and was rolled back at:");
+            _output.WriteLine($"  {current}");
+            _output.WriteLine($"  {exception.Message}");
+            _output.WriteLine("Nothing was applied. Fix the statement or the schema, then apply again.");
             return false;
         }
     }

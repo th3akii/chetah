@@ -218,6 +218,48 @@ internal static class PostgresCatalog
     /// schema. Only read to migrate an existing database.</summary>
     internal const string LegacyStateTable = "chetah_migrations";
 
+    /// <summary>Normalized defaults as they are right now, optionally inside the transaction that
+    /// just applied them. Used to record what a migration actually produced: PostgreSQL rewrites
+    /// some expressions, so the declared text alone cannot say whether a default is in sync.</summary>
+    public static async Task<IReadOnlyDictionary<(string Table, string Column), string?>> ReadDefaultsAsync(
+        NpgsqlConnection connection,
+        string schema,
+        NpgsqlTransaction? transaction,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT c.relname, a.attname, pg_get_expr(d.adbin, d.adrelid)
+            FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            JOIN pg_attribute a ON a.attrelid = c.oid
+            LEFT JOIN pg_attrdef d ON d.adrelid = c.oid AND d.adnum = a.attnum
+            WHERE n.nspname = $1
+              AND c.relkind = 'r'
+              AND a.attnum > 0
+              AND NOT a.attisdropped
+            """,
+            connection,
+            transaction);
+        command.Parameters.Add(new NpgsqlParameter { Value = schema });
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        var defaults = new Dictionary<(string Table, string Column), string?>();
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            defaults[(reader.GetString(0), reader.GetString(1))] =
+                reader.IsDBNull(2) ? null : Defaults.Normalize(reader.GetString(2));
+        }
+
+        return defaults;
+    }
+
+    /// <summary>The same shape, taken from a catalog state that was already read.</summary>
+    public static IReadOnlyDictionary<(string Table, string Column), string?> DefaultsOf(CatalogState catalog) =>
+        catalog.Tables
+            .SelectMany(table => table.Columns.Select(column => (Table: table.Name, column.Name, column.Default)))
+            .ToDictionary(entry => (entry.Table, entry.Name), entry => entry.Default);
+
     private const string ColumnsQuery = """
         SELECT c.relname, a.attname, t.typname, a.attnotnull,
                pg_get_expr(d.adbin, d.adrelid) AS default_expression,

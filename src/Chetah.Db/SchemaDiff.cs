@@ -157,7 +157,8 @@ internal static class SchemaDiff
                             column.Name)));
                 }
 
-                if (liveColumn.Default != column.Default)
+                var identity = identities?.Columns.GetValueOrDefault((table.Name, column.Name));
+                if (DefaultDiffers(liveColumn, column, identity))
                 {
                     operations.Add(column.Default is null
                         ? new Operation(
@@ -229,6 +230,26 @@ internal static class SchemaDiff
         }
 
         return new MigrationPlan(operations);
+    }
+
+    /// <summary>Whether a default really changed.
+    ///
+    /// PostgreSQL is free to print a default differently from how it was written (<c>pg_catalog.now()</c>
+    /// comes back as <c>now()</c>, a cast is added), so comparing text alone would regenerate the
+    /// same migration on every run. The registry records both the declared text and what the column
+    /// ended up holding: the default is in sync when the file still asks for the recorded declaration
+    /// and the column still holds the recorded result. With no record (first run, or adoption) the
+    /// normalized texts are compared.</summary>
+    private static bool DefaultDiffers(ColumnState live, ColumnState desired, ResolvedColumn? identity)
+    {
+        var recorded = identity is { DeclaredDefault: not null } or { AppliedDefault: not null }
+            ? identity
+            : null;
+
+        if (recorded is null)
+            return live.Default != desired.Default;
+
+        return desired.Default != recorded.DeclaredDefault || live.Default != recorded.AppliedDefault;
     }
 
     /// <summary>Constraints and indexes are matched on what they do, not what they are called, so a
