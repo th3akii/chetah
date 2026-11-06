@@ -488,6 +488,37 @@ public class MigrationApplyTests
     }
 
     [PostgresFact]
+    public async Task EditingOnlyTheCastOfADefault_IsAppliedLive()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        const string withCast = """
+            { "tables": { "t": { "columns": {
+              "id": { "type": "integer", "nullable": false },
+              "at": { "type": "timestamp", "default": "'2020-01-01 10:00'::date" } } } } }
+            """;
+
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(withCast)));
+        await fixture.ExecuteAsync("INSERT INTO t (id) VALUES (1)");
+        Assert.Equal(new DateTime(2020, 1, 1, 0, 0, 0), Assert.IsType<DateTime>(
+            await fixture.ScalarAsync("SELECT at FROM t WHERE id = 1")));
+
+        // Dropping the cast changes the value to 10:00; normalization would hide the edit.
+        var withoutCast = withCast.Replace("::date", "", StringComparison.Ordinal);
+        var output = new StringWriter();
+        Assert.Equal(0, await fixture.Runner(output).ApplyAsync(fixture.Parse(withoutCast)));
+        Assert.Contains("Applied", output.ToString(), StringComparison.Ordinal);
+
+        await fixture.ExecuteAsync("INSERT INTO t (id) VALUES (2)");
+        Assert.Equal(new DateTime(2020, 1, 1, 10, 0, 0), Assert.IsType<DateTime>(
+            await fixture.ScalarAsync("SELECT at FROM t WHERE id = 2")));
+
+        var settled = new StringWriter();
+        Assert.Equal(0, await fixture.Runner(settled).ApplyAsync(fixture.CurrentSchema()));
+        Assert.Contains("in sync", settled.ToString(), StringComparison.Ordinal);
+        Assert.Equal(2, await fixture.CountAsync("SELECT count(*) FROM chetah.migrations"));
+    }
+
+    [PostgresFact]
     public async Task DeclaredDefault_IsAppliedVerbatim()
     {
         await using var fixture = await Fixture.CreateAsync();

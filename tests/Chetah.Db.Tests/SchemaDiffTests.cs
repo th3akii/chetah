@@ -318,6 +318,42 @@ public class SchemaDiffTests
     }
 
     [Fact]
+    public async Task EditingOnlyTheCastOfADefault_IsAChange()
+    {
+        // The recorded pair says "the file declared '...'::date and the column holds the cast result".
+        var identities = new ResolvedIdentities(
+            new Dictionary<string, ResolvedTable> { ["t"] = new("t", 1, "t") },
+            new Dictionary<(string Table, string Column), ResolvedColumn>
+            {
+                [("t", "at")] = new(
+                    "t", 1, "at", 2, "at",
+                    "'2020-01-01 10:00'::date",  // recorded declaration, verbatim
+                    "'2020-01-01 10:00'"),       // recorded result, normalized
+            },
+            []);
+        var live = new CatalogState([
+            new TableState("t", [
+                new ColumnState(
+                    "at", "timestamp", false,
+                    Defaults.Normalize("'2020-01-01 10:00'::date"),
+                    false,
+                    "'2020-01-01 10:00'::date"),
+            ]),
+        ]);
+
+        var same = Desired("""{ "tables": { "t": { "columns": { "at": { "type": "timestamp", "default": "'2020-01-01 10:00'::date" } } } } }""");
+        Assert.True((await SchemaDiff.ComputeAsync(same, live, NoNulls, identities)).IsEmpty);
+
+        // Same normalized text, different value: the cast truncates the time, so dropping it must
+        // not be invisible just because normalization strips casts.
+        var withoutCast = Desired("""{ "tables": { "t": { "columns": { "at": { "type": "timestamp", "default": "'2020-01-01 10:00'" } } } } }""");
+        var plan = await SchemaDiff.ComputeAsync(withoutCast, live, NoNulls, identities);
+        Assert.Equal(
+            "ALTER TABLE \"t\" ALTER COLUMN \"at\" SET DEFAULT '2020-01-01 10:00'",
+            Assert.Single(plan.Operations).Statement);
+    }
+
+    [Fact]
     public async Task EmittedDefault_IsTheDeclarationVerbatim()
     {
         var desired = Desired("""

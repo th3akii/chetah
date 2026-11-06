@@ -154,7 +154,7 @@ internal sealed record IdentityRegistry(IReadOnlyList<IdentityRow> Rows)
                 tableIds.Add(ids.Tables[table.Name]);
                 objectIds.Add(ids.Columns[(table.Name, column.Name)]);
                 names.Add(column.Name);
-                declaredDefaults.Add(column.Default);
+                declaredDefaults.Add(column.RawDefault ?? column.Default);
                 appliedDefaults.Add(applied.TryGetValue((table.Name, column.Name), out var appliedDefault)
                     ? appliedDefault
                     : null);

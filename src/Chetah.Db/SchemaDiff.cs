@@ -283,11 +283,13 @@ internal static class SchemaDiff
     /// <summary>Whether a default really changed.
     ///
     /// PostgreSQL is free to print a default differently from how it was written (<c>pg_catalog.now()</c>
-    /// comes back as <c>now()</c>, a cast is added), so comparing text alone would regenerate the
-    /// same migration on every run. The registry records both the declared text and what the column
-    /// ended up holding: the default is in sync when the file still asks for the recorded declaration
-    /// and the column still holds the recorded result. With no record (first run, or adoption) the
-    /// normalized texts are compared.</summary>
+    /// comes back as <c>now()</c>, a cast is added), so comparing the catalog text with the
+    /// declaration would regenerate the same migration on every run. The registry records both the
+    /// declaration as written and what the column ended up holding: the default is in sync when the
+    /// file still declares exactly what was recorded and the column still holds the recorded result.
+    /// The declaration is compared verbatim so that editing a cast — which changes the stored value —
+    /// is a change, even though normalization hides it. With no record (first run, or adoption) the
+    /// normalized forms are compared.</summary>
     private static bool DefaultDiffers(ColumnState live, ColumnState desired, ResolvedColumn? identity)
     {
         var recorded = identity is { DeclaredDefault: not null } or { AppliedDefault: not null }
@@ -297,7 +299,8 @@ internal static class SchemaDiff
         if (recorded is null)
             return live.Default != desired.Default;
 
-        return desired.Default != recorded.DeclaredDefault || live.Default != recorded.AppliedDefault;
+        return (desired.RawDefault ?? desired.Default) != recorded.DeclaredDefault
+            || live.Default != recorded.AppliedDefault;
     }
 
     /// <summary>Constraints and indexes are matched on what they do, not what they are called, so a
