@@ -171,8 +171,9 @@ the statements that hit the database are always reviewable.
 - One apply path for fresh and existing databases. No `create` command. On an
   empty database the first entry is the full CREATE script; on an existing
   database it is an introspective baseline (snapshot only, no DDL).
-- `migrations/` holds `<UTC-stamp>_<slug>.sql` plus `meta/_journal.json` and
-  `meta/<id>_snapshot.json`. Statements are separated by
+- `migrations/` holds one folder per migration, `<id>/<id>.sql` plus
+  `<id>/meta/<id>_snapshot.json`, and an ordered `_journal.json` at its root.
+  Statements are separated by
   `--> statement-breakpoint`; journal entries carry the id, slug, sha256 of the
   SQL payload and statement count. `apply` re-verifies each pending file's hash
   and refuses to run a hand-edited migration.

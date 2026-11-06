@@ -32,15 +32,12 @@ internal sealed class MigrationStore
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
     };
 
-    private readonly string _metaDirectory;
-
-    public MigrationStore(string directory)
-    {
-        MigrationsDirectory = directory;
-        _metaDirectory = Path.Combine(directory, "meta");
-    }
+    public MigrationStore(string directory) => MigrationsDirectory = directory;
 
     public string MigrationsDirectory { get; }
+
+    /// <summary>Each migration owns one folder: its SQL and the snapshot taken after it.</summary>
+    public string MigrationDirectory(string id) => Path.Combine(MigrationsDirectory, id);
 
     public Journal ReadJournal()
     {
@@ -52,7 +49,9 @@ internal sealed class MigrationStore
             ?? throw new InvalidOperationException($"{path} is empty.");
     }
 
-    public string SqlPath(string id) => Path.Combine(MigrationsDirectory, id + ".sql");
+    public string SqlPath(string id) => Path.Combine(MigrationDirectory(id), id + ".sql");
+
+    public string SnapshotPath(string id) => Path.Combine(MigrationDirectory(id), "meta", id + "_snapshot.json");
 
     public string ReadSql(string id) => File.ReadAllText(SqlPath(id));
 
@@ -68,8 +67,7 @@ internal sealed class MigrationStore
             ? BaselineSql
             : string.Join($"\n\n{StatementBreakpoint}\n\n", operations.Select(operation => operation.Statement))) + "\n";
 
-        Directory.CreateDirectory(MigrationsDirectory);
-        Directory.CreateDirectory(_metaDirectory);
+        Directory.CreateDirectory(Path.Combine(MigrationDirectory(id), "meta"));
 
         var recorded = operations
             .Select(operation => new JournalOperation(
@@ -82,12 +80,12 @@ internal sealed class MigrationStore
 
         var entry = new JournalEntry(id, slug, Hash(sql), operations.Count, recorded.Length == 0 ? null : recorded);
         File.WriteAllText(SqlPath(id), sql);
-        File.WriteAllText(Path.Combine(_metaDirectory, id + "_snapshot.json"), JsonSerializer.Serialize(snapshot, Json) + "\n");
+        File.WriteAllText(SnapshotPath(id), JsonSerializer.Serialize(snapshot, Json) + "\n");
         File.WriteAllText(JournalPath, JsonSerializer.Serialize(new Journal([.. journal.Entries, entry]), Json) + "\n");
         return entry;
     }
 
-    private string JournalPath => Path.Combine(_metaDirectory, "_journal.json");
+    private string JournalPath => Path.Combine(MigrationsDirectory, "_journal.json");
 
     /// <summary>Two applies inside one second must not reuse a file name.</summary>
     private static string UniqueId(Journal journal, string stamp, string slug)

@@ -94,7 +94,8 @@ public class MigrationApplyTests
         Assert.Contains("CREATE TABLE \"users\"", store.ReadSql(entry.Id), StringComparison.Ordinal);
         Assert.Equal(entry.Hash, (string?)await fixture.ScalarAsync("SELECT hash FROM myorm_migrations"));
         Assert.Equal(entry.Id, (string?)await fixture.ScalarAsync("SELECT name FROM myorm_migrations"));
-        Assert.True(File.Exists(Path.Combine(fixture.MigrationsDirectory, "meta", entry.Id + "_snapshot.json")));
+        Assert.True(File.Exists(store.SnapshotPath(entry.Id)));
+        Assert.True(File.Exists(store.SqlPath(entry.Id)));
 
         // Nothing changed: a second apply is a no-op.
         Assert.Equal(0, await fixture.Runner(output).ApplyAsync(Parse(UsersSchema)));
@@ -178,7 +179,7 @@ public class MigrationApplyTests
 
         fixture.WriteEntry(id, "tampered", "CREATE TABLE \"tampered\" (id integer NOT NULL)\n",
             new JournalOperation(OperationKinds.CreateTable, "tampered", null, false, "CREATE TABLE \"tampered\" (id integer NOT NULL)"));
-        File.AppendAllText(Path.Combine(fixture.MigrationsDirectory, id + ".sql"), "DROP TABLE \"tampered\";\n");
+        File.AppendAllText(new MigrationStore(fixture.MigrationsDirectory).SqlPath(id), "DROP TABLE \"tampered\";\n");
 
         var output = new StringWriter();
         Assert.Equal(1, await fixture.Runner(output).ApplyAsync(Parse(UsersSchema)));
@@ -367,9 +368,9 @@ public class MigrationApplyTests
         /// No operations writes an entry with no metadata.</summary>
         internal void WriteEntry(string id, string slug, string sql, params JournalOperation[] operations)
         {
-            var meta = Path.Combine(MigrationsDirectory, "meta");
-            Directory.CreateDirectory(meta);
-            File.WriteAllText(Path.Combine(MigrationsDirectory, id + ".sql"), sql);
+            var store = new MigrationStore(MigrationsDirectory);
+            Directory.CreateDirectory(store.MigrationDirectory(id));
+            File.WriteAllText(store.SqlPath(id), sql);
 
             var statementCount = sql
                 .Split(MigrationStore.StatementBreakpoint)
@@ -382,7 +383,7 @@ public class MigrationApplyTests
                 statementCount,
                 operations.Length == 0 ? null : operations);
             File.WriteAllText(
-                Path.Combine(meta, "_journal.json"),
+                Path.Combine(MigrationsDirectory, "_journal.json"),
                 JsonSerializer.Serialize(
                     new Journal([entry]),
                     new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true }) + "\n");

@@ -25,7 +25,9 @@ public class MigrationStoreTests : IDisposable
         Assert.Equal("statement", Assert.Single(entry.Operations!).Kind);
         Assert.Equal("CREATE TABLE \"t\" (\"id\" integer NOT NULL)", Assert.Single(entry.Operations!).Statement);
         Assert.Equal(MigrationStore.Hash(_store.ReadSql(entry.Id)), entry.Hash);
-        Assert.True(File.Exists(Path.Combine(_directory, "meta", entry.Id + "_snapshot.json")));
+        Assert.True(File.Exists(Path.Combine(_directory, entry.Id, "meta", entry.Id + "_snapshot.json")));
+        Assert.Equal(Path.Combine(_directory, entry.Id, entry.Id + ".sql"), _store.SqlPath(entry.Id));
+        Assert.True(File.Exists(Path.Combine(_directory, "_journal.json")));
         Assert.Equal(entry, Assert.Single(_store.ReadJournal().Entries) with { Operations = entry.Operations });
 
         var statements = _store.Write("20260101000001", "two", [Statement("SELECT 1"), Statement("SELECT 2")], snapshot);

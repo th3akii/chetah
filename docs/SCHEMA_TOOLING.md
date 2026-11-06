@@ -47,14 +47,15 @@ A diff/push tool in the drizzle-kit mental model, with cheap inspection added:
    rejected: its executor loop is simpler, but a failure would leave a
    half-migrated database needing per-statement progress bookkeeping, and an
    already-confirmed destructive statement could not be undone.
-6. **Drizzle-style record layout:**
+6. **Drizzle-style record layout, one folder per migration:**
 
    ```text
    migrations/
-     <UTC-stamp>_<slug>.sql                      # plain SQL that was applied
-     meta/
-       _journal.json                             # ordered generation record
-       <UTC-stamp>_<slug>_snapshot.json          # full schema state after it
+     _journal.json                               # ordered generation record
+     <UTC-stamp>_<slug>/
+       <UTC-stamp>_<slug>.sql                    # plain SQL that was applied
+       meta/
+         <UTC-stamp>_<slug>_snapshot.json        # full schema state after it
    ```
 
    Statements inside a file are separated by `--> statement-breakpoint`.
