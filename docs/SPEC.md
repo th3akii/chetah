@@ -1,13 +1,13 @@
-# MyOrm — Project Specification
+# Chetah — Project Specification
 
 > **Status:** Initial draft  
-> **Project name:** MyOrm (temporary)  
+> **Project name:** Chetah  
 > **Primary language:** C# / .NET  
 > **Initial database:** PostgreSQL
 
 ## 1. Overview
 
-MyOrm is an experimental, lightweight, SQL-first data-access library for .NET, inspired by the developer experience of Drizzle ORM.
+Chetah is an experimental, lightweight, SQL-first data-access library for .NET, inspired by the developer experience of Drizzle ORM.
 
 The goal is to offer a clear, predictable way to describe database structures, construct queries, and work with strongly typed C# models without hiding SQL behavior behind unnecessary abstraction.
 
@@ -85,8 +85,8 @@ Prove the end-to-end path from a minimal C# query description to a real PostgreS
 
 The initial solution is organized around these responsibilities:
 
-- **MyOrm.Core:** Shared query concepts and public abstractions.
-- **MyOrm.Postgres:** PostgreSQL-specific SQL compilation and database access.
+- **Chetah.Core:** Shared query concepts and public abstractions.
+- **Chetah.Postgres:** PostgreSQL-specific SQL compilation and database access.
 - **Tests:** Unit and integration coverage.
 - **BasicExample:** A minimal executable consumer of the library.
 

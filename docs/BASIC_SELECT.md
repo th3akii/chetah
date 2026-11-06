@@ -16,10 +16,10 @@ A SELECT moves through four layers, two compilations, and one side effect:
 describe → compile → execute → per-row map
 ```
 
-1. **Describe** (MyOrm.Core) — you build an inert query object.
-2. **Compile** (MyOrm.Postgres) — that object becomes a `CompiledQuery`: SQL
+1. **Describe** (Chetah.Core) — you build an inert query object.
+2. **Compile** (Chetah.Postgres) — that object becomes a `CompiledQuery`: SQL
    text plus an ordered parameter list. User values never appear in the SQL.
-3. **Execute** (MyOrm.Postgres) — the SQL is sent through Npgsql with its
+3. **Execute** (Chetah.Postgres) — the SQL is sent through Npgsql with its
    parameters bound by position.
 4. **Map** (your code, or generated) — each result row becomes a C# object.
 
@@ -29,7 +29,7 @@ database anything at construction time, and there is no SQL before you compile.
 ```mermaid
 sequenceDiagram
     participant U as caller
-    participant Core as MyOrm.Core
+    participant Core as Chetah.Core
     participant C as PostgresCompiler
     participant Db as PostgresDb
     participant PG as PostgreSQL
@@ -48,14 +48,14 @@ sequenceDiagram
 ## Step 1 — describe
 
 ```csharp
-using MyOrm;
+using Chetah;
 
 var users = new Table("users", "id", "name", "age");
 var query = users.SelectAll();
 ```
 
 ```csharp
-// src/MyOrm.Core/Table.cs
+// src/Chetah.Core/Table.cs
 public Table(string name, params string[] columnNames)
 {
     // guarded: table name and every column name must be non-empty
@@ -83,13 +83,13 @@ fluent layer produces those clauses is covered in
 
 At this point the query is plain data. That is the "SQL generation separate
 from execution" split: Core holds queries and provider-neutral expression
-nodes (`SqlExpression`, `MyOrm.Core`) without knowing what a database is, and
-nothing in `MyOrm.Core` references Npgsql.
+nodes (`SqlExpression`, `Chetah.Core`) without knowing what a database is, and
+nothing in `Chetah.Core` references Npgsql.
 
 ## Step 2 — compile
 
 ```csharp
-using MyOrm.Postgres;
+using Chetah.Postgres;
 
 var compiled = PostgresCompiler.Compile(query);
 // compiled.Sql:      SELECT "t0"."id", "t0"."name", "t0"."age" FROM "users" AS "t0"
@@ -133,7 +133,7 @@ parameter values without a database.
 ## Step 3 — execute
 
 ```csharp
-// src/MyOrm.Postgres/PostgresDb.cs
+// src/Chetah.Postgres/PostgresDb.cs
 public async Task<IReadOnlyList<T>> QueryAsync<T>(
     SelectQuery query,
     Func<NpgsqlDataReader, T> map,
@@ -152,9 +152,9 @@ public async Task<IReadOnlyList<T>> QueryAsync<T>(
    disposing command and reader;
 4. calls `map(reader)` once per row — see step 4.
 
-All awaiting/IO lives in `PostgresDb`; `MyOrm.Core` stays synchronous and
+All awaiting/IO lives in `PostgresDb`; `Chetah.Core` stays synchronous and
 provider-free, so a second dialect (e.g. SQL Server) would add a new
-`MyOrm.MsSql` project with its own compiler/executor, and none of the query
+`Chetah.MsSql` project with its own compiler/executor, and none of the query
 objects or table definitions change.
 
 Typed `db.Select<T>()…ToListAsync()` runs through the same `ExecuteAsync`
@@ -189,36 +189,36 @@ var rows = await db.QueryAsync(query, r => new User(
 
 The delegate remains the explicit mapping contract — there is no automatic name
 matching or reflection at runtime. Since milestone 002 the delegate itself is
-**generated** from `myorm-schema.json` instead of written by hand; see
+**generated** from `chetah-schema.json` instead of written by hand; see
 [`TYPED_MODELS.md`](TYPED_MODELS.md). The hand-written form still works and
 remains the escape hatch for ad-hoc queries.
 
 ## Test anchoring
 
 The same flow decomposes into the four places tests live
-(`tests/MyOrm.Core.Tests`, `tests/MyOrm.Postgres.Tests`,
-`tests/MyOrm.CodeGen.Tests`):
+(`tests/Chetah.Core.Tests`, `tests/Chetah.Postgres.Tests`,
+`tests/Chetah.CodeGen.Tests`):
 
 - **Describe** — `TableTests`, `SelectQueryTests`: metadata shape, immutable
   snapshot semantics, guards on empty names.
 - **Compile** — `PostgresCompilerTests`: exact SQL text, identifier escaping,
   parameter order/values.
 - **Execute + map** — `PostgresRoundTripTests`: runs against a live PostgreSQL
-  when the `MYORM_CONNECTION_STRING` environment variable is set (the same
+  when the `CHETAH_CONNECTION_STRING` environment variable is set (the same
   variable `BasicExample` uses), creates/drops only a dedicated
-  `myorm_test_users` table, seeds two rows, and asserts the mapped records.
-- **Typed pipeline** (milestone 002 + Stage 2) — `MyOrm.CodeGen.Tests`: schema
+  `chetah_test_users` table, seeds two rows, and asserts the mapped records.
+- **Typed pipeline** (milestone 002 + Stage 2) — `Chetah.CodeGen.Tests`: schema
   parsing/validation, generated-consumer behavior (property-name resolution,
   `MapAt` values), `TypedSelectRoundTripTests` over a dedicated `test_widgets`
   table, plus `Stage2QueryTests` (offline compile boundaries: snapshots,
   null-lift semantics, membership/`IN`/`LIKE` handling, joins, grouping and
   rejection surfaces) and `Stage2LiveTests` (five explicit-skipped live facts
-  against a disposable `myorm_stage2_<guid>` schema).
+  against a disposable `chetah_stage2_<guid>` schema).
 
 ## Running the generator
 
 ```sh
-dotnet run --project src/MyOrm.CodeGen -- --schema examples/BasicExample/myorm-schema.json --out examples/BasicExample/Generated
+dotnet run --project src/Chetah.CodeGen -- --schema examples/BasicExample/chetah-schema.json --out examples/BasicExample/Generated
 ```
 
 See [`TYPED_MODELS.md`](TYPED_MODELS.md) for options, naming rules, and what is
@@ -230,7 +230,7 @@ See [`examples/BasicExample/README.md`](../examples/BasicExample/README.md) —
 short version:
 
 ```sh
-export MYORM_CONNECTION_STRING="Host=localhost;Username=postgres;Password=<secret>;Database=myorm"
+export CHETAH_CONNECTION_STRING="Host=localhost;Username=postgres;Password=<secret>;Database=chetah"
 dotnet run --project examples/BasicExample
 ```
 

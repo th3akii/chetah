@@ -1,15 +1,15 @@
-﻿using MyOrm.Generated;
-using MyOrm.Postgres;
+﻿using Chetah.Generated;
+using Chetah.Postgres;
 
-var connectionString = Environment.GetEnvironmentVariable("MYORM_CONNECTION_STRING");
+var connectionString = Environment.GetEnvironmentVariable("CHETAH_CONNECTION_STRING");
 if (connectionString is null)
 {
-    Console.WriteLine("Set MYORM_CONNECTION_STRING to run against PostgreSQL, e.g.:");
-    Console.WriteLine("  Host=localhost;Username=postgres;Password=myorm;Database=myorm");
+    Console.WriteLine("Set CHETAH_CONNECTION_STRING to run against PostgreSQL, e.g.:");
+    Console.WriteLine("  Host=localhost;Username=postgres;Password=chetah;Database=chetah");
     return;
 }
 
-var db = new PostgresDb(connectionString, MyOrmSchema.Bindings);
+var db = new PostgresDb(connectionString, ChetahSchema.Bindings);
 if (args.Contains("--stage2-demo", StringComparer.Ordinal))
 {
     Console.WriteLine("Filtered users");

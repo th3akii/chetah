@@ -11,7 +11,7 @@ drive `Where`/`Select`/join/group chains (see the "Typed queries" step and
 [`DECISIONS.md`](DECISIONS.md) D004).
 
 ```
-myorm-schema.json → MyOrm.CodeGen → MyOrm.Schema.g.cs → db.Select<T>()… → List<User>
+chetah-schema.json → Chetah.CodeGen → Chetah.Schema.g.cs → db.Select<T>()… → List<User>
 ```
 
 See [`BASIC_SELECT.md`](BASIC_SELECT.md) for the underlying describe → compile →
@@ -21,7 +21,7 @@ execute → map layering; nothing below changes those boundaries.
 
 The schema is JSONC ("JSON with comments"), parsed with `System.Text.Json`
 (no custom parser). Example
-([`examples/BasicExample/myorm-schema.json`](../examples/BasicExample/myorm-schema.json)):
+([`examples/BasicExample/chetah-schema.json`](../examples/BasicExample/chetah-schema.json)):
 
 ```json
 {
@@ -67,11 +67,11 @@ Rules:
 ## Step 2 — run the generator
 
 ```sh
-dotnet run --project src/MyOrm.CodeGen -- --schema <schema.json> [--out <dir>] [--namespace <ns>]
+dotnet run --project src/Chetah.CodeGen -- --schema <schema.json> [--out <dir>] [--namespace <ns>]
 ```
 
-- `--out` (default `.`): directory that receives **`MyOrm.Schema.g.cs`**.
-- `--namespace` (default `MyOrm.Generated`): namespace of generated code.
+- `--out` (default `.`): directory that receives **`Chetah.Schema.g.cs`**.
+- `--namespace` (default `Chetah.Generated`): namespace of generated code.
 
 Guarantees:
 
@@ -82,17 +82,17 @@ Guarantees:
 ## Step 3 — what gets generated
 
 One accessor class and one record per table
-([full example](../examples/BasicExample/Generated/MyOrm.Schema.g.cs)):
+([full example](../examples/BasicExample/Generated/Chetah.Schema.g.cs)):
 
 ```csharp
 public static class UsersTable
 {
     // Typed column metadata.
-    public static readonly MyOrm.Column<int> Id = new("id");
-    public static readonly MyOrm.Column<int?> Age = new("age");
+    public static readonly Chetah.Column<int> Id = new("id");
+    public static readonly Chetah.Column<int?> Age = new("age");
 
     // Table metadata handed to the query objects (schema order = output order).
-    public static readonly MyOrm.Table Table = new("users", Id.Name, Name.Name, Age.Name);
+    public static readonly Chetah.Table Table = new("users", Id.Name, Name.Name, Age.Name);
 
     // Explicit property-name → raw column-name snapshot, Ordinal comparison.
     public static readonly IReadOnlyDictionary<string, string> PropertyColumns =
@@ -110,7 +110,7 @@ public static class UsersTable
 
 public sealed record User(int Id, string Name, int? Age);
 
-public static class MyOrmSchema
+public static class ChetahSchema
 {
     public static readonly TableBinding<User> UserBinding =
         new(UsersTable.Table, UsersTable.Map, UsersTable.MapAt, UsersTable.PropertyColumns);
@@ -139,7 +139,7 @@ database-centric API from [`DECISIONS.md`](DECISIONS.md) D001 resolves `T`
 through the generated registry:
 
 ```csharp
-var db = new PostgresDb(connectionString, MyOrmSchema.Bindings);
+var db = new PostgresDb(connectionString, ChetahSchema.Bindings);
 var users = await db.Select<User>().ToListAsync();
 foreach (var user in users)
     Console.WriteLine($"{user.Id} {user.Name} ({user.Age})"); // IntelliSense on all three
@@ -216,7 +216,7 @@ var users = await db.QueryAsync(UsersTable.Table.SelectAll(), UsersTable.Map);
 
 ## Tests
 
-`tests/MyOrm.CodeGen.Tests`:
+`tests/Chetah.CodeGen.Tests`:
 
 - **Schema parsing/validation** — valid parse, defaults, unsupported types,
   duplicate/invalid names, empty tables/columns.
@@ -225,26 +225,26 @@ var users = await db.QueryAsync(UsersTable.Table.SelectAll(), UsersTable.Map);
   is the consumer the Stage 2 chains compile against (no emitted-text
   snapshots).
 - **Type mapping** — every PostgreSQL type name → CLR type.
-- **Typed SELECT** — live-database round trip (same `MYORM_CONNECTION_STRING`
+- **Typed SELECT** — live-database round trip (same `CHETAH_CONNECTION_STRING`
   variable) creating/dropping only `test_widgets`, asserting typed records and
   `NULL` mapping.
 - **Stage 2 chain behavior** — `Stage2QueryTests` (offline: value/collection
   snapshots, null-lift comparisons and negation, membership/`IN`/`LIKE`
   boundaries, numeric cast handling, join qualification and rejection rules,
   grouping/`HAVING`/aggregate boundaries) and `Stage2LiveTests` (five
-  explicit-skipped facts against a disposable `myorm_stage2_<guid>` schema:
+  explicit-skipped facts against a disposable `chetah_stage2_<guid>` schema:
   pagination/projection/DISTINCT, null-literality, joins, grouping, generated
   `MapAt` against a live reader).
 
 Backward compatibility of milestone 001 is covered by the unchanged
-`tests/MyOrm.Core.Tests` and `tests/MyOrm.Postgres.Tests`.
+`tests/Chetah.Core.Tests` and `tests/Chetah.Postgres.Tests`.
 
 ## Deliberate limits
 
 Not implemented, not hidden: writes (`INSERT`/`UPDATE`/`DELETE`), SQL Server,
 Roslyn source generators, automatic relationship management,
 RIGHT/FULL/CROSS joins. Schema-to-database tooling and catalog introspection
-live in `src/MyOrm.Db` instead — see [`SCHEMA_TOOLING.md`](SCHEMA_TOOLING.md).
+live in `src/Chetah.Db` instead — see [`SCHEMA_TOOLING.md`](SCHEMA_TOOLING.md).
 Query lambdas outside the
 frozen translator surface fail explicitly (no evaluation fallback). The
 `timestamp with time zone` type and other PostgreSQL types are not in

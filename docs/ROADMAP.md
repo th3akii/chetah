@@ -1,4 +1,4 @@
-# MyOrm — Development Roadmap
+# Chetah — Development Roadmap
 
 > **Status:** Initial draft
 > **Companion document:** [`SPEC.md`](SPEC.md)
@@ -76,8 +76,8 @@ Roughly: single-row and multi-row inserts, updates and deletes with mandatory sc
 **Goal:** Describe tables and columns once, and derive both query metadata and strongly typed models from it.
 
 This stage's open questions from the original draft were answered in Milestone 002:
-the format is JSON, the mechanism is the `MyOrm.CodeGen` CLI, and the sync
-discipline is "regenerate the single `MyOrm.Schema.g.cs`" (rationale in
+the format is JSON, the mechanism is the `Chetah.CodeGen` CLI, and the sync
+discipline is "regenerate the single `Chetah.Schema.g.cs`" (rationale in
 [`DECISIONS.md`](DECISIONS.md) D002). What remains open: whether the generated
 shape still fits once `Where`/`Insert` chains consume the typed columns.
 
@@ -100,7 +100,7 @@ resolution hold up as the query chain grows?
 
 ### Stage 7 — Schema Tooling and Migrations
 
-**Status:** Delivered 2026-11-05 — `src/MyOrm.Db` (`myorm-db`) implements the approved diff/push tool: catalog introspection, plain-SQL journal with snapshots, `myorm_migrations` applied-state, and a destructive confirmation gate. See [`SCHEMA_TOOLING.md`](SCHEMA_TOOLING.md) and [`DECISIONS.md`](DECISIONS.md) D005.
+**Status:** Delivered 2026-11-05 — `src/Chetah.Db` (`chetah-db`) implements the approved diff/push tool: catalog introspection, plain-SQL journal with snapshots, `myorm_migrations` applied-state, and a destructive confirmation gate. See [`SCHEMA_TOOLING.md`](SCHEMA_TOOLING.md) and [`DECISIONS.md`](DECISIONS.md) D005.
 **Goal:** Optional tooling for applying schema changes.
 
 The original conditional is resolved: manual schema management is now real friction (Stage 2 live fixtures seed databases by hand), so the tool is approved, with exactly the author-noted must-have below in scope.

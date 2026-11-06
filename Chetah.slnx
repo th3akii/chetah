@@ -1,0 +1,17 @@
+<Solution>
+  <Folder Name="/examples/">
+    <Project Path="examples/BasicExample/BasicExample.csproj" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/Chetah.Core/Chetah.Core.csproj" />
+    <Project Path="src/Chetah.Postgres/Chetah.Postgres.csproj" />
+    <Project Path="src/Chetah.CodeGen/Chetah.CodeGen.csproj" />
+    <Project Path="src/Chetah.Db/Chetah.Db.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Chetah.Core.Tests/Chetah.Core.Tests.csproj" />
+    <Project Path="tests/Chetah.Postgres.Tests/Chetah.Postgres.Tests.csproj" />
+    <Project Path="tests/Chetah.CodeGen.Tests/Chetah.CodeGen.Tests.csproj" />
+    <Project Path="tests/Chetah.Db.Tests/Chetah.Db.Tests.csproj" />
+  </Folder>
+</Solution>

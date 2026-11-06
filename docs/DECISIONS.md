@@ -32,8 +32,8 @@ basic-SELECT milestone only.
 
 > **Delivered 2026-11-05** — the typed-model prerequisites exist:
 > `db.Select<T>().ToListAsync()` resolves T through the generated
-> `MyOrmSchema.Bindings` registry (`TableBinding<T>` in `MyOrm.Postgres`);
-> consumers construct `new PostgresDb(connectionString, MyOrmSchema.Bindings)`.
+> `ChetahSchema.Bindings` registry (`TableBinding<T>` in `Chetah.Postgres`);
+> consumers construct `new PostgresDb(connectionString, ChetahSchema.Bindings)`.
 > With Stage 2 the chain goes further: `Where`, `Select` projections, ordering,
 > pagination, `Distinct`, explicit joins and `GroupBy`/`Having` all compose
 > over this resolution (see D003 for the query snapshot contract).
@@ -52,8 +52,8 @@ basic-SELECT milestone only.
 **Date:** 2026-11-05 (milestone 002, schema-first typed models)
 
 **Decision:** The schema source of truth is a small JSON file
-(`myorm-schema.json`), models are produced by a plain CLI tool
-(`src/MyOrm.CodeGen`, `dotnet run`), and row mapping stays an explicit
+(`chetah-schema.json`), models are produced by a plain CLI tool
+(`src/Chetah.CodeGen`, `dotnet run`), and row mapping stays an explicit
 `Func<NpgsqlDataReader, T>` — now generated per table instead of hand-written.
 
 **Rationale:**
@@ -73,17 +73,17 @@ basic-SELECT milestone only.
   table name (`User` set explicitly in the example). Generated names are
   validated globally unique because future `db.Select<User>()` (D001) needs an
   unambiguous `T`→table resolution.
-- Output is one deterministic `MyOrm.Schema.g.cs` in a configurable directory
+- Output is one deterministic `Chetah.Schema.g.cs` in a configurable directory
   and namespace; only that file is ever written.
 
 **Consequences:**
 
-- `Column` in `MyOrm.Core` is no longer sealed and gained `Column<T>` — typed
+- `Column` in `Chetah.Core` is no longer sealed and gained `Column<T>` — typed
   column metadata; with Stage 2 the generated `Table`/`PropertyColumns`
   metadata itself feeds the fluent chains, so `Where(...)` now consumes it
   directly.
-- `examples`, `tests`, and generated files: `examples/BasicExample/{myorm-schema.json,Generated/MyOrm.Schema.g.cs}`;
-  `tests/MyOrm.CodeGen.Tests/{schema.json,Generated/MyOrm.Schema.g.cs}`.
+- `examples`, `tests`, and generated files: `examples/BasicExample/{chetah-schema.json,Generated/Chetah.Schema.g.cs}`;
+  `tests/Chetah.CodeGen.Tests/{schema.json,Generated/Chetah.Schema.g.cs}`.
 - Revisit trigger: if hand-maintained alternatives or richer type needs appear
   (timestamptz, arrays), expect the type map and possibly the format to grow.
 
@@ -157,16 +157,16 @@ fallback, no arbitrary getter invocation, no dynamic SQL.
 **Date:** 2026-11-05 (Stage 7)
 
 **Decision:** Schema changes are applied by a separate CLI project,
-`src/MyOrm.Db` (`myorm-db`), which never diffs file-to-file: it introspects the
-live PostgreSQL catalog and compares that against `myorm-schema.json`. Each
+`src/Chetah.Db` (`chetah-db`), which never diffs file-to-file: it introspects the
+live PostgreSQL catalog and compares that against `chetah-schema.json`. Each
 applied change is also written to disk as plain SQL with journal metadata, so
 the statements that hit the database are always reviewable.
 
 **Details** (locked with the author before implementation; full plan in
 [`SCHEMA_TOOLING.md`](SCHEMA_TOOLING.md)):
 
-- The generator stays single-purpose (D002): `MyOrm.CodeGen` owns the schema
-  parser and typed-model output, `MyOrm.Db` owns catalog work. The two commands
+- The generator stays single-purpose (D002): `Chetah.CodeGen` owns the schema
+  parser and typed-model output, `Chetah.Db` owns catalog work. The two commands
   are `diff` (print, write nothing) and `apply`.
 - One apply path for fresh and existing databases. No `create` command. On an
   empty database the first entry is the full CREATE script; on an existing
@@ -201,7 +201,7 @@ the statements that hit the database are always reviewable.
 
 **Consequences:**
 
-- MyOrm gains a deployment tool, not a runtime feature: `MyOrm.Postgres` is
+- Chetah gains a deployment tool, not a runtime feature: `Chetah.Postgres` is
   unchanged and takes no dependency on it.
 - The schema file is now the source of truth for three things — generated
   models, query metadata, and the database itself. Drift is detected by `diff`

@@ -8,11 +8,11 @@
 
 ## Why
 
-`myorm-schema.json` describes columns only. Nothing declares which column
+`chetah-schema.json` describes columns only. Nothing declares which column
 identifies a row, and nothing declares that `orders.user_id` points at
 `users.id`. Two consequences, both already visible:
 
-- `myorm-db apply` creates tables with **no constraints at all** — no primary
+- `chetah-db apply` creates tables with **no constraints at all** — no primary
   key, no foreign key, no unique, no check. Integrity is whatever the caller
   happens to do.
 - The migration tool refuses to drop any column or table that carries a
@@ -82,12 +82,12 @@ and column:
 Each table accessor gains a key/constraint record, emitted only when declared:
 
 ```csharp
-public static readonly MyOrm.Key PrimaryKey = new("users_pkey", Id.Name);
-public static readonly MyOrm.ForeignKey OrdersUserFk = new(
+public static readonly Chetah.Key PrimaryKey = new("users_pkey", Id.Name);
+public static readonly Chetah.ForeignKey OrdersUserFk = new(
     "orders_user_id_fkey", "users", "id", "user_id");
 ```
 
-`MyOrm.Table` and `Column<T>` stay unchanged in these phases: no runtime
+`Chetah.Table` and `Column<T>` stay unchanged in these phases: no runtime
 feature consumes keys yet, and D001's registry contract should not grow ahead
 of `Insert`. Wiring `Table`/`Insert` to the key happens in Stage 3, when a
 caller actually needs it. (Deliberate non-goal here: relationship navigation,
@@ -163,7 +163,7 @@ object is reported as drift and refused, never renamed automatically.
 ## Open questions (decide per phase, not now)
 
 - Whether the generated `Key`/`ForeignKey` records migrate into
-  `MyOrm.Table` once `Insert` lands, or stay a separate registry.
+  `Chetah.Table` once `Insert` lands, or stay a separate registry.
 - Whether the snapshot format should record constraints (it currently records
   columns only) — auditability argues yes, but nothing reads it.
 - Whether an FK may point at a table outside the schema file once Stage 6

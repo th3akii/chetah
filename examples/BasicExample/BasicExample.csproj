@@ -1,7 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\MyOrm.Postgres\MyOrm.Postgres.csproj" />
+    <ProjectReference Include="..\..\src\Chetah.Postgres\Chetah.Postgres.csproj" />
   </ItemGroup>
 
   <PropertyGroup>

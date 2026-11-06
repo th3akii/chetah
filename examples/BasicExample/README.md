@@ -1,16 +1,16 @@
 # BasicExample
 
-Selects all rows from a `users` table via MyOrm and prints them as strongly
-typed `User` records — generated from [`myorm-schema.json`](myorm-schema.json).
+Selects all rows from a `users` table via Chetah and prints them as strongly
+typed `User` records — generated from [`chetah-schema.json`](chetah-schema.json).
 
 ## Generating the model
 
-The generated file [`Generated/MyOrm.Schema.g.cs`](Generated/MyOrm.Schema.g.cs)
+The generated file [`Generated/Chetah.Schema.g.cs`](Generated/Chetah.Schema.g.cs)
 is committed; regenerate after changing the schema (overwrites only that file).
 Run from this directory (`examples/BasicExample/`):
 
 ```sh
-dotnet run --project ../../src/MyOrm.CodeGen -- --schema myorm-schema.json --out Generated --namespace MyOrm.Generated
+dotnet run --project ../../src/Chetah.CodeGen -- --schema chetah-schema.json --out Generated --namespace Chetah.Generated
 ```
 
 ## Database setup
@@ -31,9 +31,9 @@ CREATE TABLE orders (id integer PRIMARY KEY, user_id integer NOT NULL, amount in
 Connection details come from the environment — never committed to source control:
 
 ```sh
-export MYORM_CONNECTION_STRING="Host=localhost;Username=postgres;Password=<secret>;Database=myorm"
+export CHETAH_CONNECTION_STRING="Host=localhost;Username=postgres;Password=<secret>;Database=chetah"
 dotnet run --project examples/BasicExample
 ```
 
-Without `MYORM_CONNECTION_STRING` the example prints setup help, then exits.
+Without `CHETAH_CONNECTION_STRING` the example prints setup help, then exits.
 How the pieces fit together: [`docs/TYPED_MODELS.md`](../../docs/TYPED_MODELS.md).

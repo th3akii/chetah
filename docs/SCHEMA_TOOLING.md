@@ -1,13 +1,13 @@
 # Schema tooling and migrations (Stage 7)
 
-> **Status:** Implemented 2026-11-05 in `src/MyOrm.Db` (`myorm-db`) and verified
+> **Status:** Implemented 2026-11-05 in `src/Chetah.Db` (`chetah-db`) and verified
 > against live PostgreSQL. The decisions below are recorded in
 > [`DECISIONS.md`](DECISIONS.md) D005. Companion documents:
 > [`ROADMAP.md`](ROADMAP.md) (Stage 7), [`SPEC.md`](SPEC.md).
 
 ## Why
 
-`myorm-schema.json` is the source of truth for generated code, but nothing uses
+`chetah-schema.json` is the source of truth for generated code, but nothing uses
 it for the database itself: the live schema is created/evolved by hand. Stage
 2's live fixtures already seed PostgreSQL with raw SQL scripts.
 
@@ -21,15 +21,15 @@ A diff/push tool in the drizzle-kit mental model, with cheap inspection added:
 
 - It never diffs file-to-file. `apply` decides by introspecting the live
   PostgreSQL catalog (`pg_class`, `pg_attribute`, `pg_type`, …) and comparing
-  against `myorm-schema.json`.
+  against `chetah-schema.json`.
 - Every executed migration is also recorded to disk as plain SQL, with journal
   metadata, so the bare statements that hit the database are always visible and
   reviewable.
 
 ## Decisions (locked with the author, 2026-11-05)
 
-1. **Own CLI project:** `src/MyOrm.Db` (`myorm-db`), reusing the schema
-   parser/types from `MyOrm.CodeGen`. The generator stays single-purpose (D002).
+1. **Own CLI project:** `src/Chetah.Db` (`chetah-db`), reusing the schema
+   parser/types from `Chetah.CodeGen`. The generator stays single-purpose (D002).
 2. **One apply path:** fresh and existing databases go through the same
    diff→journal→execute flow. No dedicated `create` command. First entry on an
    empty database is the full CREATE script; first entry on an existing database
@@ -76,8 +76,8 @@ A diff/push tool in the drizzle-kit mental model, with cheap inspection added:
 ## Commands
 
 ```sh
-dotnet run --project src/MyOrm.Db -- diff  --schema <schema.json> [--connection <conn>] [--migrations <dir>]
-dotnet run --project src/MyOrm.Db -- apply --schema <schema.json> [--connection <conn>] [--migrations <dir>]
+dotnet run --project src/Chetah.Db -- diff  --schema <schema.json> [--connection <conn>] [--migrations <dir>]
+dotnet run --project src/Chetah.Db -- apply --schema <schema.json> [--connection <conn>] [--migrations <dir>]
 ```
 
 - `diff` — prints the DDL the catalog comparison produces, flags destructive
@@ -86,13 +86,13 @@ dotnet run --project src/MyOrm.Db -- apply --schema <schema.json> [--connection 
   executes the migration in one transaction, records it in
   `myorm_migrations`.
 
-The connection string defaults to `MYORM_CONNECTION_STRING`; migrations default
+The connection string defaults to `CHETAH_CONNECTION_STRING`; migrations default
 to `migrations/` beside the schema file. Both commands resolve the managed
 schema with `current_schema()` (the connection's search path) and fail loudly
 when the search path names no existing schema.
 
-Day-to-day flow: edit `myorm-schema.json` → regenerate code (existing flow when
-typed models change) → `myorm-db diff` to review → `myorm-db apply` to adopt.
+Day-to-day flow: edit `chetah-schema.json` → regenerate code (existing flow when
+typed models change) → `chetah-db diff` to review → `chetah-db apply` to adopt.
 
 ## Scope details
 
@@ -141,9 +141,9 @@ Implementation notes as built:
 
 Disposable PostgreSQL fixtures, the same pattern as Stage 2 acceptance: unique
 schema per run, never touching shared tables, configured runs (a set
-`MYORM_CONNECTION_STRING`) distinguished from skipped ones.
+`CHETAH_CONNECTION_STRING`) distinguished from skipped ones.
 
-`tests/MyOrm.Db.Tests` covers:
+`tests/Chetah.Db.Tests` covers:
 
 - **Offline diff** — fresh-create column order, add/drop column, drop table,
   rename as gated drop+add, widening free / narrowing gated, `SET NOT NULL`
