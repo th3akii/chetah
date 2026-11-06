@@ -79,7 +79,7 @@ Since Stage 2, `SelectQuery` is a sealed record snapshot: it can also carry
 snapshots, so deriving a query with `with` can never mutate one you already
 returned (no filter/order/paging leakage between branches). How the typed
 fluent layer produces those clauses is covered in
-[`TYPED_MODELS.md`](TYPED_MODELS.md); the boundary itself is unchanged.
+[`typed-models.md`](typed-models.md); the boundary itself is unchanged.
 
 At this point the query is plain data. That is the "SQL generation separate
 from execution" split: Core holds queries and provider-neutral expression
@@ -190,7 +190,7 @@ var rows = await db.QueryAsync(query, r => new User(
 The delegate remains the explicit mapping contract — there is no automatic name
 matching or reflection at runtime. Since milestone 002 the delegate itself is
 **generated** from `chetah-schema.json` instead of written by hand; see
-[`TYPED_MODELS.md`](TYPED_MODELS.md). The hand-written form still works and
+[`typed-models.md`](typed-models.md). The hand-written form still works and
 remains the escape hatch for ad-hoc queries.
 
 ## Test anchoring
@@ -221,12 +221,12 @@ The same flow decomposes into the four places tests live
 dotnet run --project src/Chetah.CodeGen -- --schema examples/BasicExample/chetah-schema.json --out examples/BasicExample/Generated
 ```
 
-See [`TYPED_MODELS.md`](TYPED_MODELS.md) for options, naming rules, and what is
+See [`typed-models.md`](typed-models.md) for options, naming rules, and what is
 emitted.
 
 ## Running the example
 
-See [`examples/BasicExample/README.md`](../examples/BasicExample/README.md) —
+See [`examples/BasicExample/README.md`](../../examples/BasicExample/README.md) —
 short version:
 
 ```sh

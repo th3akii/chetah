@@ -3,25 +3,27 @@
 > Status: updated for Stage 2 · applies to Milestone 002 (schema-first typed
 > models) plus the query-refinement chains built on it
 
+How to write that file: [`writing-a-schema.md`](../guide/writing-a-schema.md).
+
 This document explains the milestone-002 flow: one JSON schema file is
 the single source of truth that produces C# models **and** table metadata, a CLI
 generator emits one deterministic source file, and the Postgres
 executor returns strongly typed records. Since Stage 2 those typed models also
 drive `Where`/`Select`/join/group chains (see the "Typed queries" step and
-[`DECISIONS.md`](DECISIONS.md) D004).
+[`decisions.md`](../project/decisions.md) D004).
 
 ```
 chetah-schema.json → Chetah.CodeGen → Chetah.Schema.g.cs → db.Select<T>()… → List<User>
 ```
 
-See [`BASIC_SELECT.md`](BASIC_SELECT.md) for the underlying describe → compile →
+See [`basic-select.md`](basic-select.md) for the underlying describe → compile →
 execute → map layering; nothing below changes those boundaries.
 
 ## Step 1 — the schema file
 
 The schema is JSONC ("JSON with comments"), parsed with `System.Text.Json`
 (no custom parser). Example
-([`examples/BasicExample/chetah-schema.json`](../examples/BasicExample/chetah-schema.json)):
+([`examples/BasicExample/chetah-schema.json`](../../examples/BasicExample/chetah-schema.json)):
 
 ```json
 {
@@ -55,12 +57,12 @@ Rules:
   default. `"nullable": false` marks a NOT NULL column.
 - `$id` — maintained by `chetah-db`, not by hand: the tool writes a persistent
   identity onto every table and column and uses it to tell a rename from a drop
-  plus an add ([`SCHEMA_TOOLING.md`](SCHEMA_TOOLING.md), D006).
+  plus an add ([`schema-tooling.md`](schema-tooling.md), D006).
 - Properties only the migration tool reads — `primaryKey`, `unique` (also
   composite), `indexes`, `foreignKeys`, per-column `unique`, `references`,
   `default`, `identity` — are accepted and ignored by the generator, which maps
   columns to CLR types regardless. Vocabulary and semantics:
-  [`SCHEMA_TOOLING.md`](SCHEMA_TOOLING.md).
+  [`schema-tooling.md`](schema-tooling.md).
 - `type` accepts a PostgreSQL modifier where one exists: `varchar(100)` maps to
   `string` like `text`, `timestamp(3)` to `DateTime`. The modifier is part of the
   migrated type.
@@ -93,7 +95,7 @@ Guarantees:
 ## Step 3 — what gets generated
 
 One accessor class and one record per table
-([full example](../examples/BasicExample/Generated/Chetah.Schema.g.cs)):
+([full example](../../examples/BasicExample/Generated/Chetah.Schema.g.cs)):
 
 ```csharp
 public static class UsersTable
@@ -146,7 +148,7 @@ there is no runtime name inference anywhere.
 ## Step 4 — typed queries
 
 The generated metadata feeds the compile→execute pipeline. The
-database-centric API from [`DECISIONS.md`](DECISIONS.md) D001 resolves `T`
+database-centric API from [`decisions.md`](../project/decisions.md) D001 resolves `T`
 through the generated registry:
 
 ```csharp
@@ -255,7 +257,7 @@ Backward compatibility of milestone 001 is covered by the unchanged
 Not implemented, not hidden: writes (`INSERT`/`UPDATE`/`DELETE`), SQL Server,
 Roslyn source generators, automatic relationship management,
 RIGHT/FULL/CROSS joins. Schema-to-database tooling and catalog introspection
-live in `src/Chetah.Db` instead — see [`SCHEMA_TOOLING.md`](SCHEMA_TOOLING.md).
+live in `src/Chetah.Db` instead — see [`schema-tooling.md`](schema-tooling.md).
 Query lambdas outside the
 frozen translator surface fail explicitly (no evaluation fallback). The
 `timestamp with time zone` type and other PostgreSQL types are not in

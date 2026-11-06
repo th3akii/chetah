@@ -4,10 +4,12 @@
 > against live PostgreSQL; extended 2026-11-06 with persistent object identities,
 > constraint/default/identity/index diffing, the `chetah` internal schema and
 > run serialisation. The decisions below are recorded in
-> [`DECISIONS.md`](DECISIONS.md) D005 and D006. Companion documents:
-> [`ROADMAP.md`](ROADMAP.md) (Stage 7), [`SPEC.md`](SPEC.md).
+> [`decisions.md`](../project/decisions.md) D005 and D006. Companion documents:
+> [`roadmap.md`](../project/roadmap.md) (Stage 7), [`spec.md`](../project/spec.md).
+> How to write the schema file itself:
+> [`writing-a-schema.md`](../guide/writing-a-schema.md).
 > Known gaps with reproductions and suggested fixes:
-> [`MIGRATION_LIMITATIONS.md`](MIGRATION_LIMITATIONS.md).
+> [`migration-limitations.md`](../notes/migration-limitations.md).
 
 ## Why
 
@@ -229,7 +231,7 @@ column therefore carries a persistent `"$id"` in `chetah-schema.json`:
   a statement that would remove one is refused. So is a foreign key from another
   schema that points at a managed table. An index differing only by `COLLATE`,
   `NULLS NOT DISTINCT` or a storage option is not distinguished — see
-  [`MIGRATION_LIMITATIONS.md`](MIGRATION_LIMITATIONS.md).
+  [`migration-limitations.md`](../notes/migration-limitations.md).
 
 ## Scope details
 
@@ -372,4 +374,4 @@ replacement refusal, `--drop-add` resolving it, and constraint creation.
 
 ## Decisions log handoff
 
-Transferred to [`DECISIONS.md`](DECISIONS.md) D005 when the code landed.
+Transferred to [`decisions.md`](../project/decisions.md) D005 when the code landed.

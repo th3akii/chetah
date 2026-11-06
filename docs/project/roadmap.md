@@ -1,7 +1,7 @@
 # Chetah — Development Roadmap
 
 > **Status:** Initial draft
-> **Companion document:** [`SPEC.md`](SPEC.md)
+> **Companion document:** [`spec.md`](spec.md)
 
 ## 1. Purpose and How to Read This
 
@@ -11,7 +11,7 @@ This roadmap sketches a direction, not a commitment. It exists to keep the next 
 - Only **Milestone 1 (MVP)** is currently in scope. Everything after it is an unapproved candidate and must not be treated as a plan.
 - Ordering after the MVP is a default suggestion. Real usage of the MVP decides what comes next.
 - Each milestone is only "done" when it works end to end and is covered by the verification approach described in the specification.
-- Implementation shape — APIs, schema syntax, project layout, tooling — is deliberately left open. Choosing it belongs to the milestone that needs it, and significant choices should be recorded in [`DECISIONS.md`](DECISIONS.md).
+- Implementation shape — APIs, schema syntax, project layout, tooling — is deliberately left open. Choosing it belongs to the milestone that needs it, and significant choices should be recorded in [`decisions.md`](decisions.md).
 
 ## 2. Status Legend
 
@@ -37,7 +37,7 @@ This roadmap sketches a direction, not a commitment. It exists to keep the next 
 - Unit coverage for SQL generation plus at least one integration test against a real database.
 - Credentials supplied by configuration or environment, never committed.
 
-**Exit criteria:** the acceptance criteria in [`SPEC.md` §5](SPEC.md#5-initial-milestone--basic-select) all hold, and the query API has been exercised by the example rather than only by tests.
+**Exit criteria:** the acceptance criteria in [`spec.md` §5](spec.md#5-initial-milestone--basic-select) all hold, and the query API has been exercised by the example rather than only by tests.
 
 **Explicit non-goals:** filtering, joins, ordering, pagination, aggregation, writes, code generation, migrations, SQL Server, stable public API, packaging.
 
@@ -53,7 +53,7 @@ be described as shipped.
 
 ### Stage 2 — Query Refinement
 
-**Status:** Delivered 2026-11-05 (lambda `Where`, column projection, ordering, pagination, `DISTINCT`, explicit INNER/LEFT joins with correct outer-row nulls, `GROUP BY`/`HAVING` and aggregate functions; see [`BASIC_SELECT.md`](BASIC_SELECT.md), [`TYPED_MODELS.md`](TYPED_MODELS.md), [`DECISIONS.md`](DECISIONS.md))
+**Status:** Delivered 2026-11-05 (lambda `Where`, column projection, ordering, pagination, `DISTINCT`, explicit INNER/LEFT joins with correct outer-row nulls, `GROUP BY`/`HAVING` and aggregate functions; see [`basic-select.md`](../reference/basic-select.md), [`typed-models.md`](../reference/typed-models.md), [`decisions.md`](decisions.md))
 
 **Goal:** Make reads useful for realistic queries.
 
@@ -72,13 +72,13 @@ Roughly: single-row and multi-row inserts, updates and deletes with mandatory sc
 
 ### Stage 4 — Schema Source of Truth and Typing
 
-**Status:** Delivered for reads (Milestones 002–003: JSON schema → CLI generator → typed models → `db.Select<T>()`; see [`TYPED_MODELS.md`](TYPED_MODELS.md), [`DECISIONS.md`](DECISIONS.md) D002)
+**Status:** Delivered for reads (Milestones 002–003: JSON schema → CLI generator → typed models → `db.Select<T>()`; see [`typed-models.md`](../reference/typed-models.md), [`decisions.md`](decisions.md) D002)
 **Goal:** Describe tables and columns once, and derive both query metadata and strongly typed models from it.
 
 This stage's open questions from the original draft were answered in Milestone 002:
 the format is JSON, the mechanism is the `Chetah.CodeGen` CLI, and the sync
 discipline is "regenerate the single `Chetah.Schema.g.cs`" (rationale in
-[`DECISIONS.md`](DECISIONS.md) D002). What remains open: whether the generated
+[`decisions.md`](decisions.md) D002). What remains open: whether the generated
 shape still fits once `Where`/`Insert` chains consume the typed columns.
 
 **Gating question:** consumed for D001 — does `T` → generated table metadata
@@ -100,25 +100,25 @@ resolution hold up as the query chain grows?
 
 ### Stage 7 — Schema Tooling and Migrations
 
-**Status:** Delivered 2026-11-05 — `src/Chetah.Db` (`chetah-db`) implements the approved diff/push tool: catalog introspection, plain-SQL journal with snapshots, `"chetah"."migrations"` applied-state, and a destructive confirmation gate. Extended 2026-11-06 with persistent object identities (`"$id"`, so renames are paired instead of drop+add), primary keys, foreign keys, unique constraints, indexes, defaults and identity columns, plus a session lock that serialises concurrent runs. Stabilised 2026-11-06: read-only `diff --check` for CI, identity resolution before any write, defaults compared against what was applied, type modifiers, composite keys and referential actions, and refusals instead of silent handling for expression/partial indexes and cross-schema foreign keys. See [`SCHEMA_TOOLING.md`](SCHEMA_TOOLING.md) and [`DECISIONS.md`](DECISIONS.md) D005–D007.
+**Status:** Delivered 2026-11-05 — `src/Chetah.Db` (`chetah-db`) implements the approved diff/push tool: catalog introspection, plain-SQL journal with snapshots, `"chetah"."migrations"` applied-state, and a destructive confirmation gate. Extended 2026-11-06 with persistent object identities (`"$id"`, so renames are paired instead of drop+add), primary keys, foreign keys, unique constraints, indexes, defaults and identity columns, plus a session lock that serialises concurrent runs. Stabilised 2026-11-06: read-only `diff --check` for CI, identity resolution before any write, defaults compared against what was applied, type modifiers, composite keys and referential actions, and refusals instead of silent handling for expression/partial indexes and cross-schema foreign keys. See [`schema-tooling.md`](../reference/schema-tooling.md) and [`decisions.md`](decisions.md) D005–D007.
 **Goal:** Optional tooling for applying schema changes.
 
 The original conditional is resolved: manual schema management is now real friction (Stage 2 live fixtures seed databases by hand), so the tool is approved, with exactly the author-noted must-have below in scope.
 
 Author-noted must-have, delivered as the mandatory `diff` command: **drift detection** — the schema file is the source of truth for generated code, but nothing notices when the database has drifted (a renamed column like `adress` → `address` turns into a runtime `42703` error only when a query runs). `diff` flags the mismatch before execution, and `apply` establishes it.
 
-Still open after this stage: check/exclusion constraints, rollback, non-interactive applies, and schema-JSON ergonomics (7.6). Renames are paired and indexes/constraints are expressible as of the 2026-11-06 extension. The remaining issues, with reproductions and suggested fixes, are tracked in [`MIGRATION_LIMITATIONS.md`](MIGRATION_LIMITATIONS.md).
+Still open after this stage: check/exclusion constraints, rollback, non-interactive applies, and schema-JSON ergonomics (7.6). Renames are paired and indexes/constraints are expressible as of the 2026-11-06 extension. The remaining issues, with reproductions and suggested fixes, are tracked in [`migration-limitations.md`](../notes/migration-limitations.md).
 
 ### Stage 7.5 — Constraint Metadata
 
-**Status:** Planned 2026-11-05, not started — approved direction is "start small and work towards full", in four phases (primary keys → foreign keys → unique/check → indexes and FK actions). Plan: [`CONSTRAINT_METADATA.md`](CONSTRAINT_METADATA.md). The migration-tool half is delivered (2026-11-06): primary keys, foreign keys, unique constraints and indexes are declared in the schema file and diffed; what remains here is the generated runtime metadata and the check-constraint phase.
+**Status:** Planned 2026-11-05, not started — approved direction is "start small and work towards full", in four phases (primary keys → foreign keys → unique/check → indexes and FK actions). Plan: [`constraint-metadata.md`](../notes/constraint-metadata.md). The migration-tool half is delivered (2026-11-06): primary keys, foreign keys, unique constraints and indexes are declared in the schema file and diffed; what remains here is the generated runtime metadata and the check-constraint phase.
 **Goal:** Carry keys and constraints — primary keys, foreign keys, unique, and other column constraints — in the schema so generated metadata can express them (needed before `Where`/`Insert` can reason about keys).
 
 The gating question is answered by the plan: primary keys and foreign keys first, everything else only when a consumer needs it. Runtime query behaviour does not change in these phases; the wins are database integrity and closing the "a hand-added key makes a column permanently undroppable" hole in the migration tool.
 
 ### Stage 7.6 — Schema Format Ergonomics (delivered as a refactor)
 
-**Status:** Delivered 2026-11-06 — tables and columns are now keyed objects instead of arrays of `{ "name": … }` entries, and the file accepts JSONC comments. Column entries stay objects (no string shorthand): [`TYPED_MODELS.md`](TYPED_MODELS.md) documents the current format.
+**Status:** Delivered 2026-11-06 — tables and columns are now keyed objects instead of arrays of `{ "name": … }` entries, and the file accepts JSONC comments. Column entries stay objects (no string shorthand): [`typed-models.md`](../reference/typed-models.md) documents the current format.
 **Goal:** Reduce the verbosity of the JSON schema (repeated `"name": …` keys per column).
 
 The gating question answered itself once real schemas existed: keying by name
@@ -147,5 +147,5 @@ Revisit a parked item only when a concrete requirement or observed problem justi
 - One vertical slice at a time: working, tested, demonstrated end to end before broadening.
 - Prefer deleting an experiment over keeping an abstraction that has one caller.
 - Breaking changes are acceptable while the project is experimental; keep them documented.
-- Record significant decisions with their rationale in [`DECISIONS.md`](DECISIONS.md) when they are made — not in advance.
+- Record significant decisions with their rationale in [`decisions.md`](decisions.md) when they are made — not in advance.
 - Re-read this roadmap after each milestone and rewrite the next section rather than defending it.

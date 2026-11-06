@@ -1,7 +1,7 @@
 # Decision Log
 
 Decisions arising during development, with rationale. Deliberately unresolved
-topics stay in `docs/SPEC.md` §7; an entry here is a directional commitment that
+topics stay in `docs/project/spec.md` §7; an entry here is a directional commitment that
 may be revisited — entries carry their date so later reversals stay honest.
 
 ## D001 — Database-centric query API `db.Select<T>()`
@@ -59,7 +59,7 @@ basic-SELECT milestone only.
 **Rationale:**
 
 - JSON parses with `System.Text.Json`; a custom parser/DSL was rejected as
-  unclear value for the current stage (`SPEC.md` explicitly warns against one).
+  unclear value for the current stage (`spec.md` explicitly warns against one).
 - A CLI generator (not a Roslyn source generator) keeps generation debuggable
   and gradually adoptable; a source generator remains the likely later upgrade
   once the generated shape stabilises.
@@ -163,7 +163,7 @@ applied change is also written to disk as plain SQL with journal metadata, so
 the statements that hit the database are always reviewable.
 
 **Details** (locked with the author before implementation; full plan in
-[`SCHEMA_TOOLING.md`](SCHEMA_TOOLING.md)):
+[`schema-tooling.md`](../reference/schema-tooling.md)):
 
 - The generator stays single-purpose (D002): `Chetah.CodeGen` owns the schema
   parser and typed-model output, `Chetah.Db` owns catalog work. The two commands

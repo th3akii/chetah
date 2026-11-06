@@ -8,9 +8,9 @@
 > diffed, and expressible constraints no longer make a column permanently
 > undroppable. What remains here is the generated runtime metadata (phases that
 > feed `Where`/`Insert`) and check constraints.
-> Companion documents: [`ROADMAP.md`](ROADMAP.md) (Stage 7.5),
-> [`SCHEMA_TOOLING.md`](SCHEMA_TOOLING.md), [`TYPED_MODELS.md`](TYPED_MODELS.md),
-> [`DECISIONS.md`](DECISIONS.md).
+> Companion documents: [`roadmap.md`](../project/roadmap.md) (Stage 7.5),
+> [`schema-tooling.md`](../reference/schema-tooling.md), [`typed-models.md`](../reference/typed-models.md),
+> [`decisions.md`](../project/decisions.md).
 
 ## Why
 
@@ -126,8 +126,8 @@ lazy loading, `Include`.)
 ## Phases
 
 Every phase is a vertical slice: schema grammar → generation → migration DDL →
-live verification → doc update (`SCHEMA_TOOLING.md`, `TYPED_MODELS.md`,
-`DECISIONS.md` entry with the phase's decisions).
+live verification → doc update (`schema-tooling.md`, `typed-models.md`,
+`decisions.md` entry with the phase's decisions).
 
 1. **7.5a — Primary keys.** `primaryKey` in the schema; generated `Key`;
    `CREATE TABLE` + `ADD/DROP CONSTRAINT … PRIMARY KEY`; dependency-rule

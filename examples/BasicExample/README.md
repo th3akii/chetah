@@ -36,4 +36,5 @@ dotnet run --project examples/BasicExample
 ```
 
 Without `CHETAH_CONNECTION_STRING` the example prints setup help, then exits.
-How the pieces fit together: [`docs/TYPED_MODELS.md`](../../docs/TYPED_MODELS.md).
+How the pieces fit together: [`docs/guide/writing-a-schema.md`](../../docs/guide/writing-a-schema.md)
+and [`docs/reference/typed-models.md`](../../docs/reference/typed-models.md).

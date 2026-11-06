@@ -5,8 +5,8 @@ Everything listed here was reproduced, not inferred. Behaviour that is
 deliberate (out of scope by task) is marked **by design**; the rest is work that
 still needs doing.
 
-Companion documents: [`SCHEMA_TOOLING.md`](SCHEMA_TOOLING.md) (how it works),
-[`DECISIONS.md`](DECISIONS.md) D005–D007 (why), [`ROADMAP.md`](ROADMAP.md).
+Companion documents: [`schema-tooling.md`](../reference/schema-tooling.md) (how it works),
+[`decisions.md`](../project/decisions.md) D005–D007 (why), [`roadmap.md`](../project/roadmap.md).
 
 ## What is already fixed
 
