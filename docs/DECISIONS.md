@@ -305,6 +305,10 @@ what was applied can, for any expression.
 - One extra column pair in the internal registry, written inside the migration
   transaction from the catalog as it is after the DDL, so it cannot describe a
   migration that rolled back.
+- The normalized form exists **only** for comparison. DDL emits the declaration
+  verbatim, because normalization strips casts and collapses whitespace outside
+  literals — `'a  b'` and `'2020-01-01 10:00'::date` must reach the database
+  unchanged.
 - A default edited by hand in the database is still detected (the stored value
   drifts from the record), and so is an edited declaration.
 - A registry written before this decision is read without the new columns; the

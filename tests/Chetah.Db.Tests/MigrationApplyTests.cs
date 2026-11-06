@@ -488,6 +488,32 @@ public class MigrationApplyTests
     }
 
     [PostgresFact]
+    public async Task DeclaredDefault_IsAppliedVerbatim()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        const string schema = """
+            { "tables": { "t": { "columns": {
+              "id": { "type": "integer", "nullable": false },
+              "note": { "type": "text", "default": "'a  b'" },
+              "at": { "type": "timestamp", "default": "'2020-01-01 10:00'::date" } } } } }
+            """;
+
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(schema)));
+        await fixture.ExecuteAsync("INSERT INTO t (id) VALUES (1)");
+
+        // Two spaces inside a literal are content. Emitting the comparison form would have stored
+        // one space and dropped the cast, which changes the value to 10:00.
+        Assert.Equal("a  b", (string?)await fixture.ScalarAsync("SELECT note FROM t WHERE id = 1"));
+        Assert.Equal(new DateTime(2020, 1, 1, 0, 0, 0), Assert.IsType<DateTime>(
+            await fixture.ScalarAsync("SELECT at FROM t WHERE id = 1")));
+
+        // And the same declaration is still a no-op afterwards.
+        var settled = new StringWriter();
+        Assert.Equal(0, await fixture.Runner(settled).ApplyAsync(fixture.CurrentSchema()));
+        Assert.Contains("in sync", settled.ToString(), StringComparison.Ordinal);
+    }
+
+    [PostgresFact]
     public async Task CompositeKeysAndReferentialActions_AreApplied()
     {
         await using var fixture = await Fixture.CreateAsync();

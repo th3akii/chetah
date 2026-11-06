@@ -13,8 +13,14 @@ internal sealed record ColumnState(
     string Type,
     bool NotNull,
     string? Default = null,
-    bool Identity = false)
+    bool Identity = false,
+    string? RawDefault = null)
 {
+    /// <summary>The default as written, for DDL. <see cref="Default"/> is a comparison form — casts
+    /// stripped, whitespace collapsed — and emitting it would change what the database stores.</summary>
+    [JsonIgnore]
+    public string? EmittingDefault => RawDefault ?? Default;
+
     /// <summary>DDL spelling of <see cref="Type"/> ("int4" → "integer"). Comparison always uses
     /// the raw type name introspection returns, so widenings are recognizable.</summary>
     [JsonIgnore]
@@ -134,14 +140,16 @@ internal static class SchemaCatalog
         return new CatalogState(tables, null, constraints, indexes);
     }
 
-    /// <summary>An identity column is NOT NULL in PostgreSQL whether or not the file says so.</summary>
+    /// <summary>An identity column is NOT NULL in PostgreSQL whether or not the file says so.
+    /// <paramref name="column"/>'s default is kept verbatim for DDL and normalized for comparison.</summary>
     private static ColumnState ToState(ColumnSchema column) =>
         new(
             column.Name,
             PgType(column),
             column.Identity || !column.Nullable,
             Defaults.Normalize(column.Default),
-            column.Identity);
+            column.Identity,
+            column.Default);
 
     /// <summary><c>table.column</c> stays unqualified; <c>schema.table.column</c> keeps its schema.</summary>
     private static (string Table, string Column) SplitReference(string reference)
@@ -171,6 +179,15 @@ internal static class Defaults
         for (var i = 0; i < expression.Length; i++)
         {
             var character = expression[i];
+
+            // A doubled quote is an escaped quote inside a literal, not the end of it.
+            if (character == '\'' && quoted && i + 1 < expression.Length && expression[i + 1] == '\'')
+            {
+                stripped.Append("''");
+                i++;
+                continue;
+            }
+
             if (character == '\'')
             {
                 quoted = !quoted;
@@ -183,6 +200,15 @@ internal static class Defaults
                 i += 2;
                 while (i < expression.Length && (char.IsLetterOrDigit(expression[i]) || expression[i] is '_' or ' '))
                     i++;
+
+                // varchar(100) carries its modifier in parentheses.
+                if (i < expression.Length && expression[i] == '(')
+                {
+                    var close = expression.IndexOf(')', i);
+                    if (close > 0)
+                        i = close + 1;
+                }
+
                 i--;
                 continue;
             }
@@ -190,10 +216,29 @@ internal static class Defaults
             stripped.Append(character);
         }
 
+        // Collapse whitespace outside literals and quoted identifiers only: 'a  b' and 'a b' are
+        // different defaults, and "a  b" is a different identifier. This is the comparison form; the
+        // declaration itself is emitted verbatim.
         var collapsed = new StringBuilder(stripped.Length);
+        var inLiteral = false;
+        var inIdentifier = false;
         foreach (var character in stripped.ToString())
         {
-            if (!char.IsWhiteSpace(character))
+            if (character == '\'')
+            {
+                inLiteral = !inLiteral;
+                collapsed.Append(character);
+                continue;
+            }
+
+            if (!inLiteral && character == '"')
+            {
+                inIdentifier = !inIdentifier;
+                collapsed.Append(character);
+                continue;
+            }
+
+            if (inLiteral || inIdentifier || !char.IsWhiteSpace(character))
             {
                 collapsed.Append(character);
                 continue;
@@ -454,12 +499,14 @@ internal static class PostgresCatalog
                 currentTable = table;
             }
 
+            var rawDefault = reader.IsDBNull(5) ? null : reader.GetString(5);
             columns.Add(new ColumnState(
                 reader.GetString(1),
                 TypeName(reader.GetString(2), reader.GetInt32(3)),
                 reader.GetBoolean(4),
-                reader.IsDBNull(5) ? null : Defaults.Normalize(reader.GetString(5)),
-                reader.GetString(6).Length > 0));
+                Defaults.Normalize(rawDefault),
+                reader.GetString(6).Length > 0,
+                rawDefault));
         }
 
         if (currentTable is not null)

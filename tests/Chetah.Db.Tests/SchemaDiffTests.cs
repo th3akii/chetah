@@ -304,6 +304,47 @@ public class SchemaDiffTests
             (await SchemaDiff.ComputeAsync(precision, timestamp, NoNulls)).Operations.Single().Statement);
     }
 
+    [Theory]
+    [InlineData("'a  b'", "'a  b'")]                       // white space inside a literal is content
+    [InlineData("'a  b'::text", "'a  b'")]                 // a cast is not part of the comparison
+    [InlineData("'it''s  here'", "'it''s  here'")]         // an escaped quote does not end the literal
+    [InlineData("  now( )  ", "now( )")]                   // outside literals, runs collapse
+    [InlineData("'x'::varchar(100)", "'x'")]               // a cast modifier is stripped too
+    [InlineData("\"a  b\"", "\"a  b\"")]                   // a quoted identifier keeps its spaces
+    [InlineData("1  +  1", "1 + 1")]
+    public void NormalizationKeepsContentButCollapsesLayout(string expression, string expected)
+    {
+        Assert.Equal(expected, Defaults.Normalize(expression));
+    }
+
+    [Fact]
+    public async Task EmittedDefault_IsTheDeclarationVerbatim()
+    {
+        var desired = Desired("""
+            { "tables": { "t": { "columns": {
+              "note": { "type": "text", "default": "'a  b'" },
+              "at": { "type": "timestamp", "default": "'2020-01-01 10:00'::date" } } } } }
+            """);
+
+        var plan = await SchemaDiff.ComputeAsync(desired, new CatalogState([]), NoNulls);
+        var create = Assert.Single(plan.Operations).Statement;
+
+        // The comparison form would have merged the spaces and dropped the cast; DDL must not.
+        Assert.Contains("DEFAULT 'a  b'", create, StringComparison.Ordinal);
+        Assert.Contains("DEFAULT '2020-01-01 10:00'::date", create, StringComparison.Ordinal);
+
+        var live = Live(Table("t", ("note", "text", false), ("at", "timestamp", false)));
+        var altered = Desired("""
+            { "tables": { "t": { "columns": {
+              "note": { "type": "text", "default": "'a  b'" },
+              "at": { "type": "timestamp", "nullable": false } } } } }
+            """);
+        var statements = (await SchemaDiff.ComputeAsync(altered, live, NoNulls)).Operations
+            .Select(operation => operation.Statement)
+            .ToArray();
+        Assert.Contains("ALTER TABLE \"t\" ALTER COLUMN \"note\" SET DEFAULT 'a  b'", statements);
+    }
+
     [Fact]
     public async Task RecordedDefault_IsNotRegeneratedWhenPostgresRewritesIt()
     {
