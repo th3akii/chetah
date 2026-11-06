@@ -420,6 +420,81 @@ public class MigrationApplyTests
     }
 
     [PostgresFact]
+    public async Task RenameOfATableWithConstraints_AppliesAsOneStatement()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        const string schema = """
+            { "tables": {
+              "tenants": {
+                "primaryKey": ["id"],
+                "columns": { "id": { "type": "integer", "nullable": false } } },
+              "users": {
+                "primaryKey": ["id"],
+                "indexes": { "users_code_idx": { "columns": ["code"] } },
+                "columns": {
+                  "id": { "type": "integer", "nullable": false },
+                  "tenant_id": { "type": "integer", "nullable": false, "references": "tenants.id" },
+                  "code": { "type": "text", "nullable": false, "unique": true } } } } }
+            """;
+
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(schema)));
+        await fixture.ExecuteAsync("INSERT INTO tenants VALUES (1)");
+        await fixture.ExecuteAsync("INSERT INTO users VALUES (10, 1, 'a')");
+
+        // A rename keeps the "$id": rename the key in the written file, not the declaration.
+        var written = File.ReadAllText(fixture.SchemaPath);
+        var renamedJson = written.Replace("\"users\": {", "\"accounts\": {", StringComparison.Ordinal);
+        Assert.NotEqual(written, renamedJson);
+
+        var output = new StringWriter();
+        Assert.Equal(0, await fixture.Runner(output).ApplyAsync(fixture.Parse(renamedJson)));
+        Assert.Contains("1 statement(s)", output.ToString(), StringComparison.Ordinal);
+
+        // The primary key, unique constraint, foreign key and index travelled with the table.
+        Assert.Equal("a", (string?)await fixture.ScalarAsync("SELECT code FROM accounts WHERE id = 10"));
+        Assert.Equal(3, await fixture.CountAsync(
+            "SELECT count(*) FROM pg_constraint WHERE conrelid = 'public.accounts'::regclass AND contype IN ('p', 'u', 'f')"));
+        Assert.Equal(1, await fixture.CountAsync(
+            "SELECT count(*) FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'users_code_idx'"));
+
+        var settled = new StringWriter();
+        Assert.Equal(0, await fixture.Runner(settled).ApplyAsync(fixture.CurrentSchema()));
+        Assert.Contains("in sync", settled.ToString(), StringComparison.Ordinal);
+    }
+
+    [PostgresFact]
+    public async Task Baseline_DoesNotClaimUnappliedDeclarations()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        await fixture.ExecuteAsync("""
+            CREATE TABLE t (n integer, x text);
+            ALTER TABLE t ADD CONSTRAINT x_check CHECK (x <> '');
+            """);
+
+        // Adopting the table while the plan is refused: the baseline is recorded, nothing runs.
+        const string blocked = """
+            { "tables": { "t": { "columns": { "n": { "type": "integer", "default": "5" } } } } }
+            """;
+        Assert.Equal(1, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(blocked)));
+        Assert.Equal(0, await fixture.CountAsync(
+            "SELECT count(*) FROM chetah.objects WHERE kind = 'column' AND name = 'n' AND declared_default IS NOT NULL"));
+
+        // The default was never applied, so it must still be applied on the next run.
+        const string keepingX = """
+            { "tables": { "t": { "columns": {
+              "n": { "type": "integer", "default": "5" },
+              "x": { "type": "text" } } } } }
+            """;
+        var output = new StringWriter();
+        Assert.Equal(0, await fixture.Runner(output).ApplyAsync(fixture.Parse(keepingX)));
+        Assert.Contains("SET DEFAULT 5", new MigrationStore(fixture.MigrationsDirectory)
+            .ReadSql(new MigrationStore(fixture.MigrationsDirectory).ReadJournal().Entries.Last().Id), StringComparison.Ordinal);
+
+        Assert.Equal("5", (string?)await fixture.ScalarAsync(
+            "SELECT column_default FROM information_schema.columns WHERE table_name = 't' AND column_name = 'n'"));
+    }
+
+    [PostgresFact]
     public async Task ExpressionAndPartialIndexes_AreNeverTouched()
     {
         await using var fixture = await Fixture.CreateAsync();

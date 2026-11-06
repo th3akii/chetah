@@ -409,6 +409,11 @@ internal static class PostgresCatalog
           AND i.indpred IS NULL
           AND am.amname = 'btree'
           AND cardinality(i.indkey::int2[]) = i.indnkeyatts
+          AND NOT EXISTS (SELECT 1 FROM unnest(i.indclass::oid[]) AS operator_class(opcoid)
+                          JOIN pg_opclass opc ON opc.oid = operator_class.opcoid
+                          WHERE NOT opc.opcdefault)
+          AND NOT EXISTS (SELECT 1 FROM unnest(i.indoption::int2[]) AS option(value)
+                          WHERE option.value <> 0)
           AND NOT EXISTS (SELECT 1 FROM pg_constraint con WHERE con.conindid = i.indexrelid)
         ORDER BY c.relname, ic.relname
         """;
@@ -429,7 +434,12 @@ internal static class PostgresCatalog
           AND (i.indexprs IS NOT NULL
                OR i.indpred IS NOT NULL
                OR am.amname <> 'btree'
-               OR cardinality(i.indkey::int2[]) <> i.indnkeyatts)
+               OR cardinality(i.indkey::int2[]) <> i.indnkeyatts
+               OR EXISTS (SELECT 1 FROM unnest(i.indclass::oid[]) AS operator_class(opcoid)
+                          JOIN pg_opclass opc ON opc.oid = operator_class.opcoid
+                          WHERE NOT opc.opcdefault)
+               OR EXISTS (SELECT 1 FROM unnest(i.indoption::int2[]) AS option(value)
+                          WHERE option.value <> 0))
           AND NOT EXISTS (SELECT 1 FROM pg_constraint con WHERE con.conindid = i.indexrelid)
         ORDER BY c.relname, ic.relname
         """;

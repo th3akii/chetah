@@ -108,6 +108,10 @@ internal sealed record IdentityRegistry(IReadOnlyList<IdentityRow> Rows)
     /// differently.</param>
     /// <param name="registry">The registry as it was read at the start of the run, used to keep an
     /// id that is declared but not yet created (a pending later migration) out of the tombstones.</param>
+    /// <param name="recordDeclarations">False when the state being recorded is an adoption rather
+    /// than an application: a baseline must not claim the file's declarations were applied. For a
+    /// declared default that already matches what the database holds, the declaration is recorded
+    /// anyway, so the next run does not re-emit an unchanged default.</param>
     public static async Task SynchronizeAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -115,7 +119,8 @@ internal sealed record IdentityRegistry(IReadOnlyList<IdentityRow> Rows)
         SchemaIds ids,
         IReadOnlyDictionary<(string Table, string Column), string?> applied,
         IdentityRegistry registry,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool recordDeclarations = true)
     {
         var kinds = new List<string>();
         var tableIds = new List<long?>();
@@ -150,14 +155,19 @@ internal sealed record IdentityRegistry(IReadOnlyList<IdentityRow> Rows)
                 if (!existing[table.Name].Contains(column.Name))
                     continue;
 
+                var appliedDefault = applied.TryGetValue((table.Name, column.Name), out var value) ? value : null;
+                // A declaration is recorded as applied only when it is applied: on adoption the
+                // database may still be missing it, and recording it would suppress the change.
+                var declaredDefault = recordDeclarations || appliedDefault == column.Default
+                    ? column.RawDefault ?? column.Default
+                    : null;
+
                 kinds.Add("column");
                 tableIds.Add(ids.Tables[table.Name]);
                 objectIds.Add(ids.Columns[(table.Name, column.Name)]);
                 names.Add(column.Name);
-                declaredDefaults.Add(column.RawDefault ?? column.Default);
-                appliedDefaults.Add(applied.TryGetValue((table.Name, column.Name), out var appliedDefault)
-                    ? appliedDefault
-                    : null);
+                declaredDefaults.Add(declaredDefault);
+                appliedDefaults.Add(appliedDefault);
             }
         }
 

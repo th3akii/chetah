@@ -278,6 +278,71 @@ public class SchemaDiffTests
     }
 
     [Fact]
+    public async Task RenameOfATableWithConstraints_IsJustTheRename()
+    {
+        var desired = Desired("""
+            { "tables": { "accounts": {
+              "primaryKey": ["id"],
+              "indexes": { "users_code_idx": { "columns": ["code"] } },
+              "columns": {
+                "id": { "type": "integer", "nullable": false },
+                "code": { "type": "text", "nullable": false, "unique": true } } } } }
+            """);
+        var live = Live(Table("users", ("id", "int4", true), ("code", "text", true))) with
+        {
+            Constraints =
+            [
+                new ConstraintState("users_pkey", "p", "users", ["id"]),
+                new ConstraintState("users_code_key", "u", "users", ["code"]),
+            ],
+            Indexes = [new IndexState("users_code_idx", "users", ["code"], false)],
+        };
+        var identities = new ResolvedIdentities(
+            new Dictionary<string, ResolvedTable> { ["accounts"] = new("accounts", 1, "users") },
+            new Dictionary<(string Table, string Column), ResolvedColumn>
+            {
+                [("accounts", "id")] = new("accounts", 1, "id", 2, "id"),
+                [("accounts", "code")] = new("accounts", 1, "code", 3, "code"),
+            },
+            []);
+
+        var plan = await SchemaDiff.ComputeAsync(desired, live, NoNulls, identities);
+
+        // The objects moved with the table: re-adding them would fail as a duplicate.
+        Assert.Equal(
+            "ALTER TABLE \"users\" RENAME TO \"accounts\"",
+            Assert.Single(plan.Operations).Statement);
+    }
+
+    [Fact]
+    public async Task RenameOfAColumnInsideAConstraint_IsJustTheRename()
+    {
+        var desired = Desired("""
+            { "tables": { "t": { "columns": {
+              "id": { "type": "integer", "nullable": false },
+              "code": { "type": "text", "nullable": false, "unique": true } } } } }
+            """);
+        var live = Live(Table("t", ("id", "int4", true), ("code_old", "text", true))) with
+        {
+            Constraints = [new ConstraintState("t_code_old_key", "u", "t", ["code_old"])],
+        };
+        var identities = new ResolvedIdentities(
+            new Dictionary<string, ResolvedTable> { ["t"] = new("t", 1, "t") },
+            new Dictionary<(string Table, string Column), ResolvedColumn>
+            {
+                [("t", "id")] = new("t", 1, "id", 2, "id"),
+                [("t", "code")] = new("t", 1, "code", 3, "code_old"),
+            },
+            []);
+
+        var plan = await SchemaDiff.ComputeAsync(desired, live, NoNulls, identities);
+
+        Assert.Equal(
+            "ALTER TABLE \"t\" RENAME COLUMN \"code_old\" TO \"code\"",
+            Assert.Single(plan.Operations).Statement);
+    }
+
+    [Fact]
     public async Task TypeModifiers_AreComparedAndWideningIsFree()
     {
         var live = Live(Table("t", ("c", "varchar(100)", false)));

@@ -254,7 +254,8 @@ internal sealed class MigrationRunner
                 ids,
                 PostgresCatalog.DefaultsOf(live),
                 registry,
-                cancellationToken);
+                cancellationToken,
+                recordDeclarations: false);
             await transaction.CommitAsync(cancellationToken);
             _output.WriteLine($"Recorded baseline {baseline.Id} (no DDL executed).");
         }

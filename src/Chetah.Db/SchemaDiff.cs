@@ -464,7 +464,46 @@ internal static class SchemaDiff
             })
             .ToArray();
 
-        return new CatalogState(tables, foreign);
+        // Constraints and indexes come along, with their table and column references renamed:
+        // dropping them here made a rename look like a table with no objects, and keeping their old
+        // names made every declared constraint look missing.
+        var constraints = live.ScopedConstraints
+            .Select(constraint =>
+            {
+                var sourceTable = constraint.Table;
+                return constraint with
+                {
+                    Table = tableRenames.GetValueOrDefault(sourceTable, sourceTable),
+                    Columns = constraint.Columns
+                        .Select(column => columnRenames.TryGetValue((sourceTable, column), out var renamed) ? renamed : column)
+                        .ToArray(),
+                    RefTable = constraint.RefTable is { } refTable
+                        ? tableRenames.GetValueOrDefault(refTable, refTable)
+                        : null,
+                    RefColumns = constraint.RefColumns is { } refColumns && constraint.RefTable is { } referencedTable
+                        ? refColumns
+                            .Select(column => columnRenames.TryGetValue((referencedTable, column), out var renamed) ? renamed : column)
+                            .ToArray()
+                        : constraint.RefColumns,
+                };
+            })
+            .ToArray();
+
+        var indexes = live.ScopedIndexes
+            .Select(index =>
+            {
+                var sourceTable = index.Table;
+                return index with
+                {
+                    Table = tableRenames.GetValueOrDefault(sourceTable, sourceTable),
+                    Columns = index.Columns
+                        .Select(column => columnRenames.TryGetValue((sourceTable, column), out var renamed) ? renamed : column)
+                        .ToArray(),
+                };
+            })
+            .ToArray();
+
+        return new CatalogState(tables, foreign, constraints, indexes);
     }
 
     /// <summary>Foreign objects the statement would take down with it. PostgreSQL removes attached
