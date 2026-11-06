@@ -342,6 +342,129 @@ public class SchemaDiffTests
             Assert.Single(plan.Operations).Statement);
     }
 
+    [Theory]
+    [InlineData("a_parent", "z_child")]
+    [InlineData("z_parent", "a_child")]
+    public async Task DependentConstraintDrops_PutTheForeignKeyFirst(string parent, string child)
+    {
+        // Both the parent key and the child's foreign key change, so both are dropped and re-added.
+        // The order must come from the dependency, not from the alphabet.
+        var desired = Desired($$"""
+            { "tables": {
+              "{{parent}}": { "primaryKey": ["b"], "columns": {
+                "a": { "type": "integer", "nullable": false },
+                "b": { "type": "integer", "nullable": false } } },
+              "{{child}}": {
+                "columns": {
+                  "a": { "type": "integer", "nullable": false },
+                  "b": { "type": "integer", "nullable": false } },
+                "foreignKeys": { "{{child}}_fkey": {
+                  "columns": ["b"], "references": "{{parent}}", "referenceColumns": ["b"] } } } } }
+            """);
+        var live = Live(
+            Table(parent, ("a", "int4", true), ("b", "int4", true)),
+            Table(child, ("a", "int4", true), ("b", "int4", true))) with
+        {
+            Constraints =
+            [
+                new ConstraintState($"{parent}_pkey", "p", parent, ["a"]),
+                new ConstraintState($"{child}_fkey", "f", child, ["a"], parent, ["a"]),
+            ],
+        };
+
+        var plan = await SchemaDiff.ComputeAsync(desired, live, NoNulls);
+
+        Assert.Equal(
+            new[]
+            {
+                $"ALTER TABLE \"{child}\" DROP CONSTRAINT \"{child}_fkey\"",
+                $"ALTER TABLE \"{parent}\" DROP CONSTRAINT \"{parent}_pkey\"",
+            },
+            plan.Operations
+                .Where(operation => operation.Target!.Kind == OperationKinds.DropConstraint)
+                .Select(operation => operation.Statement));
+    }
+
+    [Theory]
+    [InlineData("a_parent", "z_child")]
+    [InlineData("z_parent", "a_child")]
+    public async Task DependentTableDrops_PutTheReferencingTableFirst(string parent, string child)
+    {
+        var desired = Desired("""{ "tables": { "keep": { "columns": { "id": { "type": "integer", "nullable": false } } } } }""");
+        var live = Live(
+            Table(parent, ("id", "int4", true)),
+            Table(child, ("id", "int4", true)),
+            Table("keep", ("id", "int4", true))) with
+        {
+            Constraints = [new ConstraintState($"{child}_fkey", "f", child, ["id"], parent, ["id"])],
+        };
+
+        var plan = await SchemaDiff.ComputeAsync(desired, live, NoNulls);
+
+        // No cycle, so the foreign key is not dropped separately: the table that owns it goes first.
+        Assert.DoesNotContain(plan.Operations, operation => operation.Target!.Kind == OperationKinds.DropConstraint);
+        Assert.Equal(
+            new[] { $"DROP TABLE \"{child}\"", $"DROP TABLE \"{parent}\"" },
+            plan.Operations
+                .Where(operation => operation.Target!.Kind == OperationKinds.DropTable)
+                .Select(operation => operation.Statement));
+    }
+
+    [Fact]
+    public async Task MutualForeignKeys_AreDroppedBeforeTheTables()
+    {
+        var desired = Desired("""{ "tables": { "keep": { "columns": { "id": { "type": "integer", "nullable": false } } } } }""");
+        var live = Live(
+            Table("p", ("id", "int4", true)),
+            Table("c", ("id", "int4", true)),
+            Table("keep", ("id", "int4", true))) with
+        {
+            Constraints =
+            [
+                new ConstraintState("p_fkey", "f", "p", ["id"], "c", ["id"]),
+                new ConstraintState("c_fkey", "f", "c", ["id"], "p", ["id"]),
+            ],
+        };
+
+        var plan = await SchemaDiff.ComputeAsync(desired, live, NoNulls);
+
+        // No table order can satisfy both references, so the constraints are dropped explicitly —
+        // the same objects the table drop would remove, and never by CASCADE.
+        Assert.Equal(
+            new[]
+            {
+                OperationKinds.DropConstraint,
+                OperationKinds.DropConstraint,
+                OperationKinds.DropTable,
+                OperationKinds.DropTable,
+            },
+            plan.Operations.Select(operation => operation.Target!.Kind));
+    }
+
+    [Fact]
+    public async Task DeclaredForeignKeyOntoADroppedTable_IsRefused()
+    {
+        var desired = Desired("""
+            { "tables": { "child": {
+              "columns": { "parent_id": { "type": "integer", "nullable": false } },
+              "foreignKeys": { "child_fkey": {
+                "columns": ["parent_id"], "references": "parent", "referenceColumns": ["id"] } } } } }
+            """);
+        var live = Live(
+            Table("parent", ("id", "int4", true)),
+            Table("child", ("parent_id", "int4", true))) with
+        {
+            Constraints = [new ConstraintState("child_fkey", "f", "child", ["parent_id"], "parent", ["id"])],
+        };
+
+        var plan = await SchemaDiff.ComputeAsync(desired, live, NoNulls);
+
+        var drop = Assert.Single(plan.Operations, operation => operation.Target!.Kind == OperationKinds.DropTable);
+        Assert.True(drop.Blocked);
+        Assert.Contains(drop.Dependents!, dependent =>
+            dependent.Contains("declared foreign key", StringComparison.Ordinal));
+    }
+
     [Fact]
     public async Task TypeModifiers_AreComparedAndWideningIsFree()
     {

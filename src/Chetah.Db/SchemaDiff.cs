@@ -110,12 +110,20 @@ internal static class SchemaDiff
                     && index.Columns.SequenceEqual(constraint.Columns, StringComparer.Ordinal)))
             .ToArray();
 
-        foreach (var constraint in live.ScopedConstraints
-                     .Where(constraint => !dropped.Contains(constraint.Table) && !coveredUnique.Contains(constraint)))
-        {
-            if (!desired.ScopedConstraints.Any(desiredConstraint => SameDefinition(desiredConstraint, constraint)))
-                operations.Add(DropConstraint(constraint));
-        }
+        var constraintDrops = live.ScopedConstraints
+            .Where(constraint => !dropped.Contains(constraint.Table) && !coveredUnique.Contains(constraint))
+            .Where(constraint => !desired.ScopedConstraints.Any(desiredConstraint => SameDefinition(desiredConstraint, constraint)))
+            .ToArray();
+
+        // A foreign key must go before the key it references: PostgreSQL refuses to drop a key that
+        // another table's constraint depends on, and the catalog order is alphabetical, not
+        // dependency order. Ties keep catalog order, which only affects readability.
+        var orderedConstraintDrops = DropOrder(
+            constraintDrops,
+            (candidate, other) => ReferencesKey(other, candidate)) ?? constraintDrops;
+
+        foreach (var constraint in orderedConstraintDrops)
+            operations.Add(DropConstraint(constraint));
 
         foreach (var table in desired.Tables)
         {
@@ -211,17 +219,46 @@ internal static class SchemaDiff
                     $"ALTER TABLE {Quote(table.Name)} DROP COLUMN {Quote(column.Name)}",
                     $"drop_{table.Name}_{column.Name}",
                     "removes the column and its values",
-                    Dependents(live, table.Name, column.Name),
+                    Dependents(live, table.Name, column.Name, desired),
                     new OperationTarget(OperationKinds.DropColumn, table.Name, column.Name)));
         }
 
-        foreach (var table in live.Tables.Where(table => desired.Table(table.Name) is null))
-            operations.Add(new Operation(
-                $"DROP TABLE {Quote(table.Name)}",
-                $"drop_{table.Name}",
-                "removes the table and its rows",
-                Dependents(live, table.Name, null),
-                new OperationTarget(OperationKinds.DropTable, table.Name, null)));
+        var tableDrops = live.Tables.Where(table => desired.Table(table.Name) is null).ToArray();
+        if (tableDrops.Length > 0)
+        {
+            // Dropping a table that another table's foreign key points at fails, so referencing
+            // tables go first. Mutual references cannot be ordered that way: their foreign keys are
+            // dropped explicitly instead, which removes exactly the objects the table drop would
+            // have removed — never CASCADE.
+            var foreignKeysBetweenDrops = live.ScopedConstraints
+                .Where(constraint => constraint.Kind == "f"
+                    && dropped.Contains(constraint.Table)
+                    && constraint.RefTable is { } target
+                    && dropped.Contains(target))
+                .ToArray();
+
+            var ordered = DropOrder(
+                tableDrops,
+                (candidate, other) => foreignKeysBetweenDrops.Any(foreignKey =>
+                    foreignKey.Table == other.Name && foreignKey.RefTable == candidate.Name));
+
+            if (ordered is null)
+            {
+                foreach (var foreignKey in foreignKeysBetweenDrops)
+                    operations.Add(DropConstraint(foreignKey));
+                ordered = tableDrops;
+            }
+
+            foreach (var table in ordered)
+            {
+                operations.Add(new Operation(
+                    $"DROP TABLE {Quote(table.Name)}",
+                    $"drop_{table.Name}",
+                    "removes the table and its rows",
+                    Dependents(live, table.Name, null, desired),
+                    new OperationTarget(OperationKinds.DropTable, table.Name, null)));
+            }
+        }
 
         // New tables carry their primary key and unique constraints inline; foreign keys come last
         // because they may point at a table that only now exists.
@@ -506,15 +543,29 @@ internal static class SchemaDiff
         return new CatalogState(tables, foreign, constraints, indexes);
     }
 
-    /// <summary>Foreign objects the statement would take down with it. PostgreSQL removes attached
-    /// constraints and indexes silently, so any dependency blocks the drop instead of riding along.
-    /// Only objects the schema file cannot express are blocking: an expressible constraint or index
-    /// that the file no longer declares is dropped first, by its own statement.</summary>
-    internal static IReadOnlyList<string>? Dependents(CatalogState live, string table, string? column) =>
+    /// <summary>Foreign objects the statement would take down with it, plus declared references that
+    /// would survive it. PostgreSQL removes attached constraints and indexes silently, so any
+    /// dependency blocks the drop instead of riding along. A foreign key the schema file still
+    /// declares onto the object being dropped cannot be resolved by this plan at all — the file
+    /// contradicts itself — so it is reported as a dependent and the operation is refused.
+    /// Only objects the schema file cannot express are blocking among the live ones: an expressible
+    /// constraint or index that the file no longer declares is dropped first, by its own statement.</summary>
+    internal static IReadOnlyList<string>? Dependents(
+        CatalogState live,
+        string table,
+        string? column,
+        CatalogState? desired = null) =>
         Names(live.Foreign
             .Where(foreign => foreign.Table == table
                 && (column is null || foreign.Column is null || foreign.Column == column))
-            .Select(foreign => $"{foreign.Kind} {Quote(foreign.Name)}"));
+            .Select(foreign => $"{foreign.Kind} {Quote(foreign.Name)}")
+            .Concat((desired?.ScopedConstraints ?? [])
+                .Where(constraint => constraint.Kind == "f"
+                    && constraint.RefTable == table
+                    && (column is null
+                        || (constraint.RefColumns ?? []).Contains(column, StringComparer.Ordinal)))
+                .Select(constraint =>
+                    $"declared foreign key {Quote(constraint.Name)} on {Quote(constraint.Table)}")));
 
     /// <summary>The same check for a migration recorded earlier and replayed now: at that point every
     /// attached object is foreign, because the schema file that recorded the drop is not the state
@@ -531,6 +582,48 @@ internal static class SchemaDiff
             .Concat(live.ScopedIndexes
                 .Where(index => index.Table == table && (column is null || index.Columns.Contains(column)))
                 .Select(index => $"index {Quote(index.Name)}")));
+
+    /// <summary>Orders objects so that each is emitted only after everything it must follow.
+    /// <paramref name="mustFollow"/> reads "the candidate has to be dropped after the other one".
+    /// Ties keep the catalog order, which only affects readability — never correctness. Returns
+    /// <c>null</c> when the dependencies form a cycle.</summary>
+    private static IReadOnlyList<T>? DropOrder<T>(IReadOnlyList<T> items, Func<T, T, bool> mustFollow)
+    {
+        var pending = items.ToList();
+        var ordered = new List<T>(items.Count);
+
+        while (pending.Count > 0)
+        {
+            var next = -1;
+            for (var candidateIndex = 0; candidateIndex < pending.Count && next < 0; candidateIndex++)
+            {
+                var blocked = false;
+                for (var otherIndex = 0; otherIndex < pending.Count && !blocked; otherIndex++)
+                {
+                    if (otherIndex != candidateIndex && mustFollow(pending[candidateIndex], pending[otherIndex]))
+                        blocked = true;
+                }
+
+                if (!blocked)
+                    next = candidateIndex;
+            }
+
+            if (next < 0)
+                return null;
+
+            ordered.Add(pending[next]);
+            pending.RemoveAt(next);
+        }
+
+        return ordered;
+    }
+
+    /// <summary>A foreign key cannot outlive the key it references, so it must be dropped first.</summary>
+    private static bool ReferencesKey(ConstraintState dependent, ConstraintState prerequisite) =>
+        dependent.Kind == "f"
+        && prerequisite.Kind is "p" or "u"
+        && dependent.RefTable == prerequisite.Table
+        && (dependent.RefColumns ?? []).SequenceEqual(prerequisite.Columns, StringComparer.Ordinal);
 
     private static IReadOnlyList<string>? Names(IEnumerable<string> names)
     {

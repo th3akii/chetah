@@ -463,6 +463,117 @@ public class MigrationApplyTests
     }
 
     [PostgresFact]
+    public async Task ChangingAReferencedKeyAndItsForeignKey_AppliesInOneMigration()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        const string before = """
+            { "tables": {
+              "a_parent": { "primaryKey": ["a", "b"], "columns": {
+                "a": { "type": "integer", "nullable": false },
+                "b": { "type": "integer", "nullable": false } } },
+              "z_child": {
+                "columns": {
+                  "a": { "type": "integer", "nullable": false },
+                  "b": { "type": "integer", "nullable": false } },
+                "foreignKeys": { "z_child_fkey": {
+                  "columns": ["a", "b"], "references": "a_parent", "referenceColumns": ["a", "b"] } } } } }
+            """;
+        const string after = """
+            { "tables": {
+              "a_parent": { "primaryKey": ["a"], "columns": {
+                "a": { "type": "integer", "nullable": false },
+                "b": { "type": "integer", "nullable": false } } },
+              "z_child": {
+                "columns": {
+                  "a": { "type": "integer", "nullable": false },
+                  "b": { "type": "integer", "nullable": false } },
+                "foreignKeys": { "z_child_fkey": {
+                  "columns": ["a"], "references": "a_parent", "referenceColumns": ["a"] } } } } }
+            """;
+
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(before)));
+        await fixture.ExecuteAsync("INSERT INTO a_parent VALUES (1, 2)");
+        await fixture.ExecuteAsync("INSERT INTO z_child VALUES (1, 2)");
+
+        // Was a rollback before the ordering fix: the parent key used to be dropped first.
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(after)));
+
+        Assert.Equal(1, await fixture.CountAsync("SELECT count(*) FROM a_parent"));
+        Assert.Equal(1, await fixture.CountAsync("SELECT count(*) FROM z_child"));
+        Assert.Equal(1, await fixture.CountAsync(
+            "SELECT count(*) FROM pg_constraint WHERE conrelid = 'public.a_parent'::regclass "
+            + "AND contype = 'p' AND array_length(conkey, 1) = 1"));
+        Assert.Equal(1, await fixture.CountAsync(
+            "SELECT count(*) FROM pg_constraint WHERE conname = 'z_child_fkey' AND array_length(conkey, 1) = 1"));
+
+        var settled = new StringWriter();
+        Assert.Equal(0, await fixture.Runner(settled).ApplyAsync(fixture.CurrentSchema()));
+        Assert.Contains("in sync", settled.ToString(), StringComparison.Ordinal);
+    }
+
+    [PostgresFact]
+    public async Task DroppingRelatedTables_AppliesInOneMigration()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        const string before = """
+            { "tables": {
+              "a_parent": { "primaryKey": ["id"], "columns": { "id": { "type": "integer", "nullable": false } } },
+              "z_child": {
+                "columns": { "parent_id": { "type": "integer", "nullable": false } },
+                "foreignKeys": { "z_child_fkey": {
+                  "columns": ["parent_id"], "references": "a_parent", "referenceColumns": ["id"] } } },
+              "keep": { "columns": { "id": { "type": "integer", "nullable": false } } } } }
+            """;
+        const string after = """
+            { "tables": { "keep": { "columns": { "id": { "type": "integer", "nullable": false } } } } }
+            """;
+
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(before)));
+        await fixture.ExecuteAsync("INSERT INTO a_parent VALUES (1)");
+        await fixture.ExecuteAsync("INSERT INTO z_child VALUES (1)");
+
+        // Was a rollback before the ordering fix: the parent table used to be dropped first.
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(after)));
+
+        Assert.Equal(0, await fixture.CountAsync(TableExists("a_parent")));
+        Assert.Equal(0, await fixture.CountAsync(TableExists("z_child")));
+        Assert.Equal(1, await fixture.CountAsync(TableExists("keep")));
+    }
+
+    [PostgresFact]
+    public async Task MutualForeignKeys_CanBeDroppedTogether()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        const string before = """
+            { "tables": {
+              "p": {
+                "primaryKey": ["id"],
+                "columns": { "id": { "type": "integer", "nullable": false } },
+                "foreignKeys": { "p_c_fkey": {
+                  "columns": ["id"], "references": "c", "referenceColumns": ["id"] } } },
+              "c": {
+                "primaryKey": ["id"],
+                "columns": { "id": { "type": "integer", "nullable": false } },
+                "foreignKeys": { "c_p_fkey": {
+                  "columns": ["id"], "references": "p", "referenceColumns": ["id"] } } },
+              "keep": { "columns": { "id": { "type": "integer", "nullable": false } } } } }
+            """;
+        const string after = """
+            { "tables": { "keep": { "columns": { "id": { "type": "integer", "nullable": false } } } } }
+            """;
+
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(before)));
+
+        // Neither table can go first while both foreign keys exist; the constraints are dropped
+        // explicitly first instead of falling back to CASCADE.
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(after)));
+
+        Assert.Equal(0, await fixture.CountAsync(TableExists("p")));
+        Assert.Equal(0, await fixture.CountAsync(TableExists("c")));
+        Assert.Equal(1, await fixture.CountAsync(TableExists("keep")));
+    }
+
+    [PostgresFact]
     public async Task Baseline_DoesNotClaimUnappliedDeclarations()
     {
         await using var fixture = await Fixture.CreateAsync();
