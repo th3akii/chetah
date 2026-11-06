@@ -119,8 +119,11 @@ internal static class SchemaDiff
             .Where(constraint => !coveredUnique.Contains(constraint))
             .Where(constraint => dropped.Contains(constraint.Table)
                 // Kept only to unblock what the drop removes anyway: a foreign key on a table that is
-                // going away, pointing at a table that is not.
-                ? constraint.Kind == "f" && constraint.RefTable is { } target && !dropped.Contains(target)
+                // going away, pointing at a table that stays under this tool's control.
+                ? constraint.Kind == "f"
+                    && constraint.RefTable is { } target
+                    && !dropped.Contains(target)
+                    && desired.Table(target) is not null
                 : !desired.ScopedConstraints.Any(desiredConstraint => SameDefinition(desiredConstraint, constraint)))
             .ToArray();
 
@@ -132,7 +135,26 @@ internal static class SchemaDiff
             (candidate, other) => ReferencesKey(other, candidate)) ?? constraintDrops;
 
         foreach (var constraint in orderedConstraintDrops)
-            operations.Add(DropConstraint(constraint));
+        {
+            // A key that a declared foreign key still relies on cannot stop being unique: the file
+            // contradicts itself, and PostgreSQL would refuse the drop anyway.
+            var survivingReference = constraint.Kind is "p" or "u"
+                ? desired.ScopedConstraints.FirstOrDefault(reference =>
+                    reference.Kind == "f"
+                    && ReferencesKey(reference, constraint)
+                    && !constraintDrops.Any(drop => SameDefinition(reference, drop)))
+                : null;
+
+            operations.Add(survivingReference is null
+                ? DropConstraint(constraint)
+                : DropConstraint(constraint) with
+                {
+                    Dependents =
+                    [
+                        $"declared foreign key {Quote(survivingReference.Name)} on {Quote(survivingReference.Table)}",
+                    ],
+                });
+        }
 
         foreach (var index in live.ScopedIndexes.Where(index => !dropped.Contains(index.Table)))
         {
@@ -140,12 +162,21 @@ internal static class SchemaDiff
                 continue;
 
             // A unique index can be the uniqueness a declared foreign key relies on; removing it
-            // would leave that declaration unsatisfiable, so the drop is refused with its name.
-            var dependent = desired.ScopedConstraints.FirstOrDefault(constraint =>
-                index.Unique
-                && constraint.Kind == "f"
-                && constraint.RefTable == index.Table
-                && SameColumns(constraint.RefColumns ?? [], index.Columns));
+            // would leave that declaration unsatisfiable, so the drop is refused with its name. A
+            // surviving unique or primary key over the same columns already provides it, and then the
+            // index is redundant and safe to drop.
+            var covered = live.ScopedConstraints.Any(constraint =>
+                constraint.Kind is "p" or "u"
+                && constraint.Table == index.Table
+                && SameColumns(constraint.Columns, index.Columns));
+
+            var dependent = covered
+                ? null
+                : desired.ScopedConstraints.FirstOrDefault(constraint =>
+                    index.Unique
+                    && constraint.Kind == "f"
+                    && constraint.RefTable == index.Table
+                    && SameColumns(constraint.RefColumns ?? [], index.Columns));
 
             var operation = dependent is null
                 ? DropIndex(index)
@@ -163,6 +194,12 @@ internal static class SchemaDiff
             else
                 operations.Add(operation);
         }
+
+        // Emitted here, before any column or table is dropped: an index whose column disappears would
+        // be removed implicitly, and the recorded DROP INDEX would then fail. The constraint that
+        // takes the name is added later.
+        foreach (var operation in earlyIndexDrops)
+            operations.Add(operation);
 
         foreach (var table in desired.Tables)
         {
@@ -306,8 +343,6 @@ internal static class SchemaDiff
         // New tables carry their primary key and unique constraints inline. Keys and indexes are
         // added before foreign keys: PostgreSQL requires the referenced columns to be unique by
         // constraint or index at the moment the foreign key is created.
-        foreach (var operation in earlyIndexDrops)
-            operations.Add(operation);
 
         foreach (var constraint in missingConstraints.Where(constraint => constraint.Kind is "p" or "u"))
             operations.Add(AddConstraint(constraint));

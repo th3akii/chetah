@@ -442,6 +442,114 @@ public class SchemaDiffTests
     }
 
     [Fact]
+    public async Task IndexDropBeforeANameCollision_StillPrecedesTheColumnDrop()
+    {
+        // The live index is named like the constraint the file adds, and its column is dropped in the
+        // same plan. The explicit DROP INDEX must run before the column takes the index with it.
+        var desired = Desired("""
+            { "tables": { "t": {
+              "unique": ["a"],
+              "columns": {
+                "a": { "type": "integer", "nullable": false } } } } }
+            """);
+        var live = Live(Table("t", ("a", "int4", true), ("b", "int4", true))) with
+        {
+            Indexes = [new IndexState("t_a_key", "t", ["b"], true)],
+        };
+
+        var plan = await SchemaDiff.ComputeAsync(desired, live, NoNulls);
+
+        var kinds = plan.Operations.Select(operation => operation.Target!.Kind).ToArray();
+        Assert.True(
+            Array.IndexOf(kinds, OperationKinds.DropIndex) < Array.IndexOf(kinds, OperationKinds.DropColumn),
+            string.Join(", ", kinds));
+    }
+
+    [Fact]
+    public async Task DeclaredForeignKeyOntoAChangedKey_IsRefused()
+    {
+        var desired = Desired("""
+            { "tables": {
+              "parent": { "primaryKey": ["name"], "columns": {
+                "id": { "type": "integer", "nullable": false },
+                "name": { "type": "text", "nullable": false } } },
+              "child": {
+                "columns": { "parent_id": { "type": "integer", "nullable": false } },
+                "foreignKeys": { "child_fkey": {
+                  "columns": ["parent_id"], "references": "parent", "referenceColumns": ["id"] } } } } }
+            """);
+        var live = Live(
+            Table("parent", ("id", "int4", true), ("name", "text", true)),
+            Table("child", ("parent_id", "int4", true))) with
+        {
+            Constraints =
+            [
+                new ConstraintState("parent_pkey", "p", "parent", ["id"]),
+                new ConstraintState("child_fkey", "f", "child", ["parent_id"], "parent", ["id"]),
+            ],
+        };
+
+        var plan = await SchemaDiff.ComputeAsync(desired, live, NoNulls);
+
+        // The file keeps a foreign key onto a column that would stop being unique: nothing can be
+        // applied, so the key drop is refused with the constraint named.
+        var keyDrop = plan.Operations.Single(operation =>
+            operation.Target!.Kind == OperationKinds.DropConstraint);
+        Assert.True(keyDrop.Blocked);
+        Assert.Contains(keyDrop.Dependents!, dependent =>
+            dependent.Contains("child_fkey", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task RedundantUniqueIndexBehindADeclaredKey_IsDroppable()
+    {
+        var desired = Desired("""
+            { "tables": {
+              "parent": { "unique": ["a"], "columns": { "a": { "type": "integer", "nullable": false } } },
+              "child": {
+                "columns": { "a": { "type": "integer", "nullable": false } },
+                "foreignKeys": { "child_fkey": {
+                  "columns": ["a"], "references": "parent", "referenceColumns": ["a"] } } } } }
+            """);
+        var live = Live(
+            Table("parent", ("a", "int4", true)),
+            Table("child", ("a", "int4", true))) with
+        {
+            Constraints =
+            [
+                new ConstraintState("parent_a_key", "u", "parent", ["a"]),
+                new ConstraintState("child_fkey", "f", "child", ["a"], "parent", ["a"]),
+            ],
+            Indexes = [new IndexState("parent_a_idx", "parent", ["a"], true)],
+        };
+
+        var plan = await SchemaDiff.ComputeAsync(desired, live, NoNulls);
+
+        // The unique constraint still backs the foreign key, so the duplicate index is safe to drop.
+        var indexDrop = Assert.Single(plan.Operations, operation => operation.Target!.Kind == OperationKinds.DropIndex);
+        Assert.False(indexDrop.Blocked);
+    }
+
+    [Fact]
+    public async Task ForeignKeyToAnotherSchemaOnADroppedTable_IsNotDroppedExplicitly()
+    {
+        var desired = Desired("""{ "tables": { "keep": { "columns": { "id": { "type": "integer", "nullable": false } } } } }""");
+        var live = Live(
+            Table("t", ("id", "int4", true)),
+            Table("keep", ("id", "int4", true))) with
+        {
+            Constraints = [new ConstraintState("t_other_fkey", "f", "t", ["id"], "other.x", ["id"])],
+        };
+
+        var plan = await SchemaDiff.ComputeAsync(desired, live, NoNulls);
+
+        // The target is outside this schema and is not being dropped: the table drop removes the
+        // constraint with it, so no extra statement is needed.
+        Assert.DoesNotContain(plan.Operations, operation => operation.Target!.Kind == OperationKinds.DropConstraint);
+        Assert.Single(plan.Operations, operation => operation.Target!.Kind == OperationKinds.DropTable);
+    }
+
+    [Fact]
     public async Task ReplacingAUniqueIndexWithAConstraint_DropsTheIndexFirst()
     {
         // Constraint and index names share the namespace: the constraint cannot take a name the

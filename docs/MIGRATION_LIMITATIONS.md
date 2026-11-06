@@ -31,8 +31,10 @@ Also fixed by the ordering pass:
   any order), a referencing table before the table it references, and mutual
   references resolved by dropping the foreign keys explicitly — never `CASCADE`.
   A foreign key that lives on a table being dropped is dropped before the
-  surviving table's key or column changes; a declared foreign key onto a dropped
-  object is refused with that constraint named.
+  surviving table's key or column changes. A key that a declared foreign key
+  still relies on cannot be dropped (the file would contradict itself), so that
+  drop is refused with the constraint named — as is a declared foreign key onto
+  a table being dropped.
 - constraints are dropped before indexes, and indexes are created before foreign
   keys: a unique index can be what a foreign key relies on, so it must outlive
   the drop and exist before the add. An index that a foreign key references is
