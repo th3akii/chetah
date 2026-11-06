@@ -120,11 +120,14 @@ public static class Program
     {
         Console.Error.WriteLine("""
             Usage:
-              chetah-db diff  --schema <schema.json> [--connection <conn>] [--migrations <dir>]
-              chetah-db apply --schema <schema.json> [--connection <conn>] [--migrations <dir>]
+              chetah-db diff  --schema <schema.json> [--connection <conn>] [--migrations <dir>] [--drop-add <object> ...]
+              chetah-db apply --schema <schema.json> [--connection <conn>] [--migrations <dir>] [--drop-add <object> ...]
 
             The connection string defaults to CHETAH_CONNECTION_STRING. Migrations are written to
             <dir> (default: "migrations" beside the schema file).
+
+            --drop-add marks an object as new when another one disappeared from the same table, e.g.
+            --drop-add users.address or --drop-add widgets. A rename needs no flag: keep its "$id".
             """);
         return 2;
     }
