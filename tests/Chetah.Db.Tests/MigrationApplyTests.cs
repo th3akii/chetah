@@ -463,6 +463,206 @@ public class MigrationApplyTests
     }
 
     [PostgresFact]
+    public async Task CompositeUniqueAndForeignKey_AreRemoved()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        const string before = """
+            { "tables": {
+              "parent": { "primaryKey": ["a", "b"], "columns": {
+                "a": { "type": "integer", "nullable": false },
+                "b": { "type": "integer", "nullable": false } } },
+              "child": {
+                "unique": [["pa", "pb"]],
+                "columns": {
+                  "pa": { "type": "integer", "nullable": false },
+                  "pb": { "type": "integer", "nullable": false } },
+                "foreignKeys": { "child_fkey": {
+                  "columns": ["pa", "pb"], "references": "parent", "referenceColumns": ["a", "b"] } } } } }
+            """;
+        const string after = """
+            { "tables": {
+              "parent": { "primaryKey": ["a", "b"], "columns": {
+                "a": { "type": "integer", "nullable": false },
+                "b": { "type": "integer", "nullable": false } } },
+              "child": {
+                "columns": {
+                  "pa": { "type": "integer", "nullable": false },
+                  "pb": { "type": "integer", "nullable": false } } } } }
+            """;
+
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(before)));
+        Assert.Equal(1, await fixture.CountAsync(
+            "SELECT count(*) FROM pg_constraint WHERE conrelid = 'public.child'::regclass "
+            + "AND contype = 'u' AND array_length(conkey, 1) = 2"));
+
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(after)));
+
+        // Both composite constraints are gone, and nothing else was touched.
+        Assert.Equal(0, await fixture.CountAsync(
+            "SELECT count(*) FROM pg_constraint WHERE conrelid = 'public.child'::regclass AND contype IN ('u', 'f')"));
+        Assert.Equal(1, await fixture.CountAsync(
+            "SELECT count(*) FROM pg_constraint WHERE conrelid = 'public.parent'::regclass AND contype = 'p'"));
+
+        var settled = new StringWriter();
+        Assert.Equal(0, await fixture.Runner(settled).ApplyAsync(fixture.CurrentSchema()));
+        Assert.Contains("in sync", settled.ToString(), StringComparison.Ordinal);
+    }
+
+    [PostgresFact]
+    public async Task ReferentialActions_SetNullAndSetDefault_AreApplied()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        const string schema = """
+            { "tables": {
+              "parent": { "primaryKey": ["id"], "columns": { "id": { "type": "integer", "nullable": false } } },
+              "child": {
+                "columns": {
+                  "on_delete_set_null": { "type": "integer" },
+                  "on_delete_set_default": { "type": "integer", "default": "0" },
+                  "on_update_set_null": { "type": "integer" },
+                  "on_update_set_default": { "type": "integer", "default": "0" } },
+                "foreignKeys": {
+                  "fk_delete_null": {
+                    "columns": ["on_delete_set_null"], "references": "parent", "referenceColumns": ["id"],
+                    "onDelete": "set null" },
+                  "fk_delete_default": {
+                    "columns": ["on_delete_set_default"], "references": "parent", "referenceColumns": ["id"],
+                    "onDelete": "set default" },
+                  "fk_update_null": {
+                    "columns": ["on_update_set_null"], "references": "parent", "referenceColumns": ["id"],
+                    "onUpdate": "set null" },
+                  "fk_update_default": {
+                    "columns": ["on_update_set_default"], "references": "parent", "referenceColumns": ["id"],
+                    "onUpdate": "set default" } } } } }
+            """;
+
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(schema)));
+
+        Assert.Equal(1, await fixture.CountAsync(
+            "SELECT count(*) FROM pg_constraint WHERE conname = 'fk_delete_null' AND confdeltype = 'n'"));
+        Assert.Equal(1, await fixture.CountAsync(
+            "SELECT count(*) FROM pg_constraint WHERE conname = 'fk_delete_default' AND confdeltype = 'd'"));
+        Assert.Equal(1, await fixture.CountAsync(
+            "SELECT count(*) FROM pg_constraint WHERE conname = 'fk_update_null' AND confupdtype = 'n'"));
+        Assert.Equal(1, await fixture.CountAsync(
+            "SELECT count(*) FROM pg_constraint WHERE conname = 'fk_update_default' AND confupdtype = 'd'"));
+
+        // Actions round-trip through the catalog, so the same declaration is a no-op.
+        var settled = new StringWriter();
+        Assert.Equal(0, await fixture.Runner(settled).ApplyAsync(fixture.CurrentSchema()));
+        Assert.Contains("in sync", settled.ToString(), StringComparison.Ordinal);
+    }
+
+    [PostgresFact]
+    public async Task CompositeForeignKey_AcrossARenamedTable_IsNotRebuilt()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        const string schema = """
+            { "tables": {
+              "a_parent": { "primaryKey": ["a", "b"], "columns": {
+                "a": { "type": "integer", "nullable": false },
+                "b": { "type": "integer", "nullable": false } } },
+              "z_child": {
+                "columns": {
+                  "pa": { "type": "integer", "nullable": false },
+                  "pb": { "type": "integer", "nullable": false } },
+                "foreignKeys": { "z_child_fkey": {
+                  "columns": ["pa", "pb"], "references": "a_parent", "referenceColumns": ["a", "b"] } } } } }
+            """;
+
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(schema)));
+
+        var written = File.ReadAllText(fixture.SchemaPath);
+        // A table rename has to update the name where a foreign key references it.
+        var renamed = written.Replace("\"a_parent\"", "\"b_parent\"", StringComparison.Ordinal);
+        Assert.NotEqual(written, renamed);
+
+        var output = new StringWriter();
+        Assert.Equal(0, await fixture.Runner(output).ApplyAsync(fixture.Parse(renamed)));
+        Assert.Contains("1 statement(s)", output.ToString(), StringComparison.Ordinal);
+
+        // The constraint followed the table: it is still the same composite reference, not re-added.
+        Assert.Equal(1, await fixture.CountAsync(
+            "SELECT count(*) FROM pg_constraint WHERE conname = 'z_child_fkey' AND array_length(conkey, 1) = 2 "
+            + "AND confrelid = 'public.b_parent'::regclass"));
+        Assert.Equal(1, await fixture.CountAsync(TableExists("b_parent")));
+        Assert.Equal(0, await fixture.CountAsync(TableExists("a_parent")));
+    }
+
+    [PostgresFact]
+    public async Task CompositeForeignKey_OnARenamedColumn_IsNotRebuilt()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        const string before = """
+            { "tables": {
+              "p": { "primaryKey": ["a", "b"], "columns": {
+                "a": { "type": "integer", "nullable": false },
+                "b": { "type": "integer", "nullable": false } } },
+              "c": {
+                "columns": {
+                  "pa": { "type": "integer", "nullable": false },
+                  "pb": { "type": "integer", "nullable": false } },
+                "foreignKeys": { "c_fkey": {
+                  "columns": ["pa", "pb"], "references": "p", "referenceColumns": ["a", "b"] } } } } }
+            """;
+
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(before)));
+
+        // Renaming the local column that the composite key uses keeps the constraint, renamed with it.
+        var written = File.ReadAllText(fixture.SchemaPath);
+        var renamed = written.Replace("\"pa\"", "\"code\"", StringComparison.Ordinal);
+        Assert.NotEqual(written, renamed);
+
+        var output = new StringWriter();
+        Assert.Equal(0, await fixture.Runner(output).ApplyAsync(fixture.Parse(renamed)));
+        Assert.Contains("1 statement(s)", output.ToString(), StringComparison.Ordinal);
+
+        var definition = (string?)await fixture.ScalarAsync(
+            "SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = 'c_fkey'");
+        Assert.Contains("(code, pb)", definition ?? "", StringComparison.Ordinal);
+        Assert.Contains("REFERENCES p(a, b)", definition ?? "", StringComparison.Ordinal);
+    }
+
+    [PostgresFact]
+    public async Task MultipleRelatedConstraintChanges_ApplyInOneMigration()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        const string before = """
+            { "tables": {
+              "parent": { "primaryKey": ["id"], "columns": { "id": { "type": "integer", "nullable": false } } },
+              "child": {
+                "unique": [["pa", "pb"]],
+                "columns": {
+                  "pa": { "type": "integer", "nullable": false },
+                  "pb": { "type": "integer", "nullable": false },
+                  "parent_id": { "type": "integer" } },
+                "foreignKeys": { "child_fkey": {
+                  "columns": ["parent_id"], "references": "parent", "referenceColumns": ["id"],
+                  "onDelete": "cascade" } } } } }
+            """;
+        const string after = """
+            { "tables": {
+              "parent": { "primaryKey": ["id"], "columns": { "id": { "type": "integer", "nullable": false } } },
+              "child": {
+                "columns": {
+                  "pa": { "type": "integer", "nullable": false },
+                  "pb": { "type": "integer", "nullable": false },
+                  "parent_id": { "type": "integer" } },
+                "foreignKeys": { "child_fkey": {
+                  "columns": ["parent_id"], "references": "parent", "referenceColumns": ["id"],
+                  "onDelete": "restrict" } } } } }
+            """;
+
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(before)));
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(after)));
+
+        Assert.Equal(0, await fixture.CountAsync(
+            "SELECT count(*) FROM pg_constraint WHERE conrelid = 'public.child'::regclass AND contype = 'u'"));
+        Assert.Equal(1, await fixture.CountAsync(
+            "SELECT count(*) FROM pg_constraint WHERE conname = 'child_fkey' AND confdeltype = 'r'"));
+    }
+
+    [PostgresFact]
     public async Task ChangingAReferencedKeyAndItsForeignKey_AppliesInOneMigration()
     {
         await using var fixture = await Fixture.CreateAsync();
@@ -1342,7 +1542,9 @@ public class MigrationApplyTests
         internal Schema Parse(string json)
         {
             File.WriteAllText(SchemaPath, json);
-            return SchemaParser.Parse(json).Schema!;
+            var parsed = SchemaParser.Parse(json);
+            Assert.Null(parsed.Error);
+            return parsed.Schema!;
         }
 
         internal static async Task<Fixture> CreateAsync()
