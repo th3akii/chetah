@@ -615,6 +615,37 @@ public class MigrationApplyTests
     }
 
     [PostgresFact]
+    public async Task FailedMigration_RepairRecoversFromAnInterruptedReplacement()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        Assert.Equal(1, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(BrokenDefaultSchema)));
+
+        var store = new MigrationStore(fixture.MigrationsDirectory);
+        var failed = Assert.Single(store.ReadJournal().Entries);
+
+        // A repair interrupted after writing the SQL but before the journal leaves the file and the
+        // recorded hash disagreeing. Apply refuses that; repair archives it and plans again.
+        File.WriteAllText(store.SqlPath(failed.Id), "CREATE TABLE \"probe\" (id integer NOT NULL)\n");
+        Assert.NotEqual(failed.Hash, MigrationStore.Hash(store.ReadSql(failed.Id)));
+
+        var refused = new StringWriter();
+        Assert.Equal(1, await fixture.Runner(refused, recover: (_, _) => PendingMigrationAction.Retry)
+            .ApplyAsync(fixture.Parse(FixedDefaultSchema)));
+        Assert.Contains("no longer matches the hash", refused.ToString(), StringComparison.Ordinal);
+
+        var repairedOutput = new StringWriter();
+        Assert.Equal(0, await fixture.Runner(repairedOutput, confirmRepair: _ => true)
+            .RepairAsync(fixture.Parse(FixedDefaultSchema)));
+
+        Assert.Equal(1, await fixture.CountAsync(TableExists("probe")));
+        var repaired = Assert.Single(store.ReadJournal().Entries);
+        Assert.Equal(repaired.Hash, MigrationStore.Hash(store.ReadSql(failed.Id)));
+        Assert.True(File.Exists(Path.Combine(
+            store.MigrationDirectory(failed.Id), "meta", $"{failed.Id}_attempt_1.sql")));
+        Assert.Null(store.ReadFailure(failed.Id));
+    }
+
+    [PostgresFact]
     public async Task Repair_WithNothingPendingChangesNothing()
     {
         await using var fixture = await Fixture.CreateAsync();
