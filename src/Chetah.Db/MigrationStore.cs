@@ -18,6 +18,17 @@ internal sealed record JournalEntry(
 
 internal sealed record Journal(IReadOnlyList<JournalEntry> Entries);
 
+/// <summary>Why the last attempt at a recorded migration rolled back. Kept beside the SQL so a
+/// later run can tell a migration that was attempted and failed from one this checkout never ran.</summary>
+internal sealed record MigrationFailure(string Hash, string Error, DateTimeOffset FailedAt);
+
+/// <summary>One superseded attempt, archived before a repair overwrites the migration. The SQL and
+/// the failure are what make the original problem understandable after the files are replaced.</summary>
+internal sealed record MigrationAttempt(
+    JournalEntry Entry,
+    MigrationFailure? Failure,
+    DateTimeOffset ArchivedAt);
+
 /// <summary>Owns the record on disk: the applied SQL, the schema snapshots, and the ordered
 /// journal. The journal owns "what has been generated"; the database owns "what has been applied".</summary>
 internal sealed class MigrationStore
@@ -53,6 +64,14 @@ internal sealed class MigrationStore
 
     public string SnapshotPath(string id) => Path.Combine(MigrationDirectory(id), "meta", id + "_snapshot.json");
 
+    public CatalogState? ReadSnapshot(string id)
+    {
+        var path = SnapshotPath(id);
+        return File.Exists(path)
+            ? JsonSerializer.Deserialize<CatalogState>(File.ReadAllText(path), Json)
+            : null;
+    }
+
     public string ReadSql(string id) => File.ReadAllText(SqlPath(id));
 
     public static string Hash(string sql) => Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(sql)));
@@ -63,12 +82,93 @@ internal sealed class MigrationStore
     {
         var journal = ReadJournal();
         var id = UniqueId(journal, stamp, slug);
-        var sql = (operations.Count == 0
-            ? BaselineSql
-            : string.Join($"\n\n{StatementBreakpoint}\n\n", operations.Select(operation => operation.Statement))) + "\n";
+        var sql = SqlFor(operations);
+        var recorded = RecordOperations(operations);
 
         Directory.CreateDirectory(Path.Combine(MigrationDirectory(id), "meta"));
 
+        var entry = new JournalEntry(id, slug, Hash(sql), operations.Count, recorded);
+        WriteFileAtomic(SqlPath(id), sql);
+        WriteFileAtomic(SnapshotPath(id), JsonSerializer.Serialize(snapshot, Json) + "\n");
+        WriteFileAtomic(JournalPath, JsonSerializer.Serialize(new Journal([.. journal.Entries, entry]), Json) + "\n");
+        return entry;
+    }
+
+    /// <summary>Replaces a pending migration in place, keeping its id and position so history order
+    /// is unchanged. The superseded SQL and failure are archived under <c>meta/</c> first; the
+    /// journal is written last, so an interrupted repair leaves a detectable file/hash mismatch
+    /// rather than a journal entry that silently claims SQL no file contains.</summary>
+    public JournalEntry Replace(JournalEntry entry, IReadOnlyList<Operation> operations, CatalogState snapshot)
+    {
+        var journal = ReadJournal();
+        var index = journal.Entries.ToList().FindIndex(candidate => candidate.Id == entry.Id);
+        if (index < 0)
+            throw new InvalidOperationException($"{entry.Id} is not in {JournalPath}.");
+
+        ArchiveAttempt(entry);
+
+        var sql = SqlFor(operations);
+        var repaired = new JournalEntry(entry.Id, entry.Slug, Hash(sql), operations.Count, RecordOperations(operations));
+
+        WriteFileAtomic(SqlPath(entry.Id), sql);
+        WriteFileAtomic(SnapshotPath(entry.Id), JsonSerializer.Serialize(snapshot, Json) + "\n");
+        var updated = journal.Entries.ToArray();
+        updated[index] = repaired;
+        WriteFileAtomic(JournalPath, JsonSerializer.Serialize(new Journal(updated), Json) + "\n");
+        return repaired;
+    }
+
+    public string FailurePath(string id) => Path.Combine(MigrationDirectory(id), "meta", id + "_failed.json");
+
+    public MigrationFailure? ReadFailure(string id)
+    {
+        var path = FailurePath(id);
+        if (!File.Exists(path))
+            return null;
+
+        return JsonSerializer.Deserialize<MigrationFailure>(File.ReadAllText(path), Json);
+    }
+
+    public void MarkFailed(JournalEntry entry, string error)
+    {
+        var failure = new MigrationFailure(entry.Hash, error, DateTimeOffset.UtcNow);
+        WriteFileAtomic(FailurePath(entry.Id), JsonSerializer.Serialize(failure, Json) + "\n");
+    }
+
+    public void ClearFailure(string id)
+    {
+        var path = FailurePath(id);
+        if (File.Exists(path))
+            File.Delete(path);
+    }
+
+    /// <summary>Copies the current SQL, journal metadata and failure into the next numbered attempt
+    /// slot. Nothing is deleted: the original failure stays readable after the repair.</summary>
+    private void ArchiveAttempt(JournalEntry entry)
+    {
+        var meta = Path.Combine(MigrationDirectory(entry.Id), "meta");
+        var attempt = 1;
+        while (File.Exists(Path.Combine(meta, $"{entry.Id}_attempt_{attempt}.sql"))
+            || File.Exists(Path.Combine(meta, $"{entry.Id}_attempt_{attempt}.json")))
+            attempt++;
+
+        var sqlPath = SqlPath(entry.Id);
+        if (File.Exists(sqlPath))
+            WriteFileAtomic(Path.Combine(meta, $"{entry.Id}_attempt_{attempt}.sql"), File.ReadAllText(sqlPath));
+
+        var archived = new MigrationAttempt(entry, ReadFailure(entry.Id), DateTimeOffset.UtcNow);
+        WriteFileAtomic(
+            Path.Combine(meta, $"{entry.Id}_attempt_{attempt}.json"),
+            JsonSerializer.Serialize(archived, Json) + "\n");
+    }
+
+    private static string SqlFor(IReadOnlyList<Operation> operations) =>
+        (operations.Count == 0
+            ? BaselineSql
+            : string.Join($"\n\n{StatementBreakpoint}\n\n", operations.Select(operation => operation.Statement))) + "\n";
+
+    private static JournalOperation[]? RecordOperations(IReadOnlyList<Operation> operations)
+    {
         var recorded = operations
             .Select(operation => new JournalOperation(
                 operation.Target?.Kind ?? "statement",
@@ -78,11 +178,15 @@ internal sealed class MigrationStore
                 operation.Statement))
             .ToArray();
 
-        var entry = new JournalEntry(id, slug, Hash(sql), operations.Count, recorded.Length == 0 ? null : recorded);
-        File.WriteAllText(SqlPath(id), sql);
-        File.WriteAllText(SnapshotPath(id), JsonSerializer.Serialize(snapshot, Json) + "\n");
-        File.WriteAllText(JournalPath, JsonSerializer.Serialize(new Journal([.. journal.Entries, entry]), Json) + "\n");
-        return entry;
+        return recorded.Length == 0 ? null : recorded;
+    }
+
+    private static void WriteFileAtomic(string path, string contents)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        File.WriteAllText(temporary, contents);
+        File.Move(temporary, path, overwrite: true);
     }
 
     private string JournalPath => Path.Combine(MigrationsDirectory, "_journal.json");

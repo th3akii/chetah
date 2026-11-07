@@ -4,11 +4,12 @@ using Npgsql;
 namespace Chetah.Db;
 
 /// <summary>
-/// Schema diff/push CLI.
+/// Schema diff/push/repair CLI.
 ///
 /// Usage:
-///   chetah-db diff  --schema &lt;schema.json&gt; [--connection &lt;conn&gt;] [--migrations &lt;dir&gt;]
-///   chetah-db apply --schema &lt;schema.json&gt; [--connection &lt;conn&gt;] [--migrations &lt;dir&gt;]
+///   chetah-db diff   --schema &lt;schema.json&gt; [--connection &lt;conn&gt;] [--migrations &lt;dir&gt;]
+///   chetah-db apply  --schema &lt;schema.json&gt; [--connection &lt;conn&gt;] [--migrations &lt;dir&gt;]
+///   chetah-db repair --schema &lt;schema.json&gt; [--connection &lt;conn&gt;] [--migrations &lt;dir&gt;]
 /// </summary>
 public static class Program
 {
@@ -18,7 +19,7 @@ public static class Program
             return Usage();
 
         var command = args[0];
-        if (command is not ("diff" or "apply"))
+        if (command is not ("diff" or "apply" or "repair"))
             return Usage();
 
         string? schemaPath = null;
@@ -74,7 +75,7 @@ public static class Program
 
         if (check && command != "diff")
         {
-            Console.Error.WriteLine("--check is only valid with diff; apply writes migrations by definition.");
+            Console.Error.WriteLine("--check is only valid with diff; apply and repair write migrations by definition.");
             return Usage();
         }
 
@@ -86,13 +87,18 @@ public static class Program
             Console.Out,
             ConfirmDestructive,
             dropAdd,
-            check);
+            check,
+            ChooseRecovery,
+            ConfirmRepair);
 
         try
         {
-            return command == "diff"
-                ? await runner.DiffAsync(parsed.Schema!)
-                : await runner.ApplyAsync(parsed.Schema!);
+            return command switch
+            {
+                "diff" => await runner.DiffAsync(parsed.Schema!),
+                "repair" => await runner.RepairAsync(parsed.Schema!),
+                _ => await runner.ApplyAsync(parsed.Schema!),
+            };
         }
         catch (NpgsqlException exception)
         {
@@ -127,19 +133,78 @@ public static class Program
         return string.Equals(Console.ReadLine()?.Trim(), "yes", StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>Apply already knows a migration failed because the runner recorded it. The choice is
+    /// only meaningful on a terminal: redirected input returns null, and apply refuses instead of
+    /// blocking on a prompt nobody can answer.</summary>
+    private static PendingMigrationAction? ChooseRecovery(JournalEntry entry, MigrationFailure failure)
+    {
+        if (Console.IsInputRedirected)
+            return null;
+
+        Console.WriteLine();
+        Console.WriteLine("A previously failed migration was found:");
+        Console.WriteLine();
+        Console.WriteLine($"  {entry.Id}");
+        Console.WriteLine();
+        Console.WriteLine("The migration was rolled back and has not been applied.");
+        Console.WriteLine($"  {failure.Error}");
+        Console.WriteLine();
+        Console.WriteLine("How would you like to proceed?");
+        Console.WriteLine();
+        Console.WriteLine("  [1] Retry the original migration");
+        Console.WriteLine("  [2] Repair using the current schema");
+        Console.WriteLine("  [3] Cancel");
+        Console.WriteLine();
+
+        while (true)
+        {
+            Console.Write("Choice: ");
+            switch (Console.ReadLine()?.Trim())
+            {
+                case "1":
+                    return PendingMigrationAction.Retry;
+                case "2":
+                    return PendingMigrationAction.Repair;
+                case "3":
+                case null:
+                    return PendingMigrationAction.Cancel;
+                default:
+                    Console.WriteLine("Enter 1, 2, or 3.");
+                    break;
+            }
+        }
+    }
+
+    private static bool ConfirmRepair(JournalEntry entry)
+    {
+        if (Console.IsInputRedirected)
+        {
+            Console.WriteLine("Refusing to repair without an interactive terminal.");
+            return false;
+        }
+
+        Console.Write($"Replace {entry.Id} with these statements and apply it? Type 'yes' to continue: ");
+        return string.Equals(Console.ReadLine()?.Trim(), "yes", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static int Usage()
     {
         Console.Error.WriteLine("""
             Usage:
-              chetah-db diff  --schema <schema.json> [--connection <conn>] [--migrations <dir>] [--drop-add <object> ...] [--check]
-              chetah-db apply --schema <schema.json> [--connection <conn>] [--migrations <dir>] [--drop-add <object> ...]
+              chetah-db diff   --schema <schema.json> [--connection <conn>] [--migrations <dir>] [--drop-add <object> ...] [--check]
+              chetah-db apply  --schema <schema.json> [--connection <conn>] [--migrations <dir>] [--drop-add <object> ...]
+              chetah-db repair --schema <schema.json> [--connection <conn>] [--migrations <dir>] [--drop-add <object> ...]
 
             The connection string defaults to CHETAH_CONNECTION_STRING. Migrations are written to
             <dir> (default: "migrations" beside the schema file).
 
-            diff  prints the DDL and records missing "$id" members in the schema file.
+            diff   prints the DDL and records missing "$id" members in the schema file.
             diff --check is read-only: no file, no DDL, no lock. It exits 1 when a migration is
             pending, so a CI job can gate on it, and 0 when the database matches the schema.
+            apply  replays pending migrations, then generates and applies new ones. A migration
+            that was attempted and rolled back is offered as Retry, Repair, or Cancel.
+            repair replaces the single pending migration with a fresh plan from the current
+            schema, archives the failed attempt, and applies the replacement.
 
             --drop-add marks an object as new when another one disappeared from the same table, e.g.
             --drop-add users.address or --drop-add widgets. A rename needs no flag: keep its "$id".

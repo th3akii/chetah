@@ -306,13 +306,330 @@ public class MigrationApplyTests
         Assert.Equal(0, await fixture.CountAsync("SELECT count(*) FROM chetah.migrations"));
         Assert.Single(new MigrationStore(fixture.MigrationsDirectory).ReadJournal().Entries);
 
+        var store = new MigrationStore(fixture.MigrationsDirectory);
+        Assert.NotNull(store.ReadFailure(id));
+
+        // Without a terminal there is no one to choose Retry or Repair: apply refuses rather than
+        // replaying a migration it knows failed.
+        var blocked = new StringWriter();
+        Assert.Equal(1, await fixture.Runner(blocked).ApplyAsync(fixture.Parse(schema)));
+        Assert.Contains("previously failed", blocked.ToString(), StringComparison.Ordinal);
+        Assert.Contains("repair --schema", blocked.ToString(), StringComparison.Ordinal);
+        Assert.Equal(0, await fixture.CountAsync(TableExists("rollback_probe")));
+        Assert.Equal(0, await fixture.CountAsync("SELECT count(*) FROM chetah.migrations"));
+
         // The recorded-but-unapplied migration is retried once the SQL is fixed. Nothing destructive
-        // is recorded, so the confirmation gate must not be consulted.
+        // is recorded, so the destructive confirmation gate must not be consulted.
         fixture.WriteEntry(id, "broken", "CREATE TABLE \"rollback_probe\" (id integer NOT NULL)\n",
             new JournalOperation(OperationKinds.CreateTable, "rollback_probe", null, false, "CREATE TABLE \"rollback_probe\" (id integer NOT NULL)"));
 
-        Assert.Equal(0, await fixture.Runner(new StringWriter(), _ => throw new InvalidOperationException("no confirmation expected")).ApplyAsync(fixture.Parse(schema)));
+        var retried = new StringWriter();
+        Assert.Equal(0, await fixture.Runner(
+                retried,
+                _ => throw new InvalidOperationException("no confirmation expected"),
+                recover: (_, _) => PendingMigrationAction.Retry)
+            .ApplyAsync(fixture.Parse(schema)));
         Assert.Equal(1, await fixture.CountAsync(TableExists("rollback_probe")));
+        Assert.Equal(1, await fixture.CountAsync("SELECT count(*) FROM chetah.migrations"));
+        Assert.Null(store.ReadFailure(id));
+        Assert.Contains("Applied", retried.ToString(), StringComparison.Ordinal);
+    }
+
+    [PostgresFact]
+    public async Task FailedMigration_RetryRunsTheOriginalSqlUnchanged()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        const string schema = """
+            { "tables": { "retry_probe": { "columns": { "id": { "type": "integer", "nullable": false } } } } }
+            """;
+        const string id = "20260101000000_retry_probe";
+        const string sql = "CREATE TABLE \"retry_probe\" (id integer NOT NULL)\n";
+
+        // The object exists before the migration runs, so the first attempt fails and rolls back.
+        await fixture.ExecuteAsync("CREATE TABLE retry_probe (id integer)");
+        fixture.WriteEntry(id, "retry_probe", sql,
+            new JournalOperation(OperationKinds.CreateTable, "retry_probe", null, false, "CREATE TABLE \"retry_probe\" (id integer NOT NULL)"));
+
+        Assert.Equal(1, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(schema)));
+
+        var store = new MigrationStore(fixture.MigrationsDirectory);
+        var failed = Assert.Single(store.ReadJournal().Entries);
+        Assert.Equal(MigrationStore.Hash(sql), failed.Hash);
+        Assert.NotNull(store.ReadFailure(id));
+
+        // Retry executes the same recorded bytes; only the conflicting object is removed.
+        await fixture.ExecuteAsync("DROP TABLE retry_probe");
+        var output = new StringWriter();
+        Assert.Equal(0, await fixture.Runner(output, recover: (_, _) => PendingMigrationAction.Retry).ApplyAsync(fixture.Parse(schema)));
+
+        Assert.Contains("Applied", output.ToString(), StringComparison.Ordinal);
+        Assert.Equal(MigrationStore.Hash(sql), Assert.Single(store.ReadJournal().Entries).Hash);
+        Assert.Equal(MigrationStore.Hash(sql), (string?)await fixture.ScalarAsync("SELECT hash FROM chetah.migrations WHERE name = '" + id + "'"));
+        Assert.Null(store.ReadFailure(id));
+    }
+
+    private const string BrokenDefaultSchema = """
+        { "tables": { "probe": { "columns": {
+          "id": { "type": "integer", "nullable": false },
+          "flag": { "type": "integer", "nullable": false, "default": "0; SELECT 1" } } } } }
+        """;
+
+    private const string FixedDefaultSchema = """
+        { "tables": { "probe": { "columns": {
+          "id": { "type": "integer", "nullable": false },
+          "flag": { "type": "integer", "nullable": false, "default": "0" } } } } }
+        """;
+
+    [PostgresFact]
+    public async Task FailedMigration_RepairRegeneratesFromTheCurrentSchema()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        Assert.Equal(1, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(BrokenDefaultSchema)));
+
+        var store = new MigrationStore(fixture.MigrationsDirectory);
+        var failed = Assert.Single(store.ReadJournal().Entries);
+        Assert.NotNull(store.ReadFailure(failed.Id));
+        Assert.Equal(0, await fixture.CountAsync(TableExists("probe")));
+
+        var output = new StringWriter();
+        Assert.Equal(0, await fixture.Runner(
+                output,
+                confirmRepair: _ => true)
+            .RepairAsync(fixture.Parse(FixedDefaultSchema)));
+
+        Assert.Contains("Replacement for", output.ToString(), StringComparison.Ordinal);
+        Assert.Contains("Repaired", output.ToString(), StringComparison.Ordinal);
+        Assert.Equal(1, await fixture.CountAsync(TableExists("probe")));
+        Assert.Equal(1, await fixture.CountAsync("SELECT count(*) FROM chetah.migrations"));
+        Assert.Null(store.ReadFailure(failed.Id));
+
+        var repaired = Assert.Single(store.ReadJournal().Entries);
+        Assert.Equal(failed.Id, repaired.Id);
+        Assert.Equal(MigrationStore.Hash(store.ReadSql(failed.Id)), repaired.Hash);
+        Assert.Contains("DEFAULT 0", store.ReadSql(failed.Id), StringComparison.Ordinal);
+        Assert.DoesNotContain("SELECT 1", store.ReadSql(failed.Id), StringComparison.Ordinal);
+
+        // The failed attempt is still readable, including the server's error.
+        var meta = Path.Combine(store.MigrationDirectory(failed.Id), "meta");
+        var archivedSql = File.ReadAllText(Path.Combine(meta, $"{failed.Id}_attempt_1.sql"));
+        Assert.Contains("SELECT 1", archivedSql, StringComparison.Ordinal);
+        var archived = File.ReadAllText(Path.Combine(meta, $"{failed.Id}_attempt_1.json"));
+        Assert.Contains("\"error\"", archived, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("syntax error", archived, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [PostgresFact]
+    public async Task Apply_OffersRepairForAFailedMigration()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        Assert.Equal(1, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(BrokenDefaultSchema)));
+
+        var store = new MigrationStore(fixture.MigrationsDirectory);
+        var failed = Assert.Single(store.ReadJournal().Entries);
+
+        var output = new StringWriter();
+        Assert.Equal(0, await fixture.Runner(
+                output,
+                recover: (_, _) => PendingMigrationAction.Repair,
+                confirmRepair: _ => true)
+            .ApplyAsync(fixture.Parse(FixedDefaultSchema)));
+
+        Assert.Contains("Replacement for", output.ToString(), StringComparison.Ordinal);
+        Assert.Contains("Applied repaired migration", output.ToString(), StringComparison.Ordinal);
+        Assert.Equal(1, await fixture.CountAsync(TableExists("probe")));
+        Assert.Equal(1, await fixture.CountAsync("SELECT count(*) FROM chetah.migrations"));
+        Assert.Null(store.ReadFailure(failed.Id));
+        Assert.Equal(failed.Id, Assert.Single(store.ReadJournal().Entries).Id);
+    }
+
+    [PostgresFact]
+    public async Task FailedMigration_RepairCancelLeavesEverythingUntouched()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        Assert.Equal(1, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(BrokenDefaultSchema)));
+
+        var store = new MigrationStore(fixture.MigrationsDirectory);
+        var before = Assert.Single(store.ReadJournal().Entries);
+        var sqlBefore = store.ReadSql(before.Id);
+        var journalBefore = File.ReadAllText(Path.Combine(fixture.MigrationsDirectory, "_journal.json"));
+
+        var output = new StringWriter();
+        Assert.Equal(1, await fixture.Runner(output, recover: (_, _) => PendingMigrationAction.Cancel)
+            .ApplyAsync(fixture.Parse(FixedDefaultSchema)));
+
+        Assert.Contains("Canceled", output.ToString(), StringComparison.Ordinal);
+        Assert.Equal(journalBefore, File.ReadAllText(Path.Combine(fixture.MigrationsDirectory, "_journal.json")));
+        Assert.Equal(sqlBefore, store.ReadSql(before.Id));
+        Assert.NotNull(store.ReadFailure(before.Id));
+        Assert.Equal(0, await fixture.CountAsync(TableExists("probe")));
+        Assert.Equal(0, await fixture.CountAsync("SELECT count(*) FROM chetah.migrations"));
+    }
+
+    [PostgresFact]
+    public async Task FailedMigration_RepairRefusesUnexpectedDrift()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        const string before = """
+            { "tables": { "probe": { "columns": { "id": { "type": "integer", "nullable": false } } } } }
+            """;
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(before)));
+        await fixture.ExecuteAsync("INSERT INTO probe (id) VALUES (1)");
+
+        // NOT NULL without a default on a populated table fails inside the transaction.
+        const string broken = """
+            { "tables": { "probe": { "columns": {
+              "id": { "type": "integer", "nullable": false },
+              "flag": { "type": "integer", "nullable": false } } } } }
+            """;
+        Assert.Equal(1, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(broken)));
+
+        var store = new MigrationStore(fixture.MigrationsDirectory);
+        var failed = store.ReadJournal().Entries.Last();
+        var journalBefore = File.ReadAllText(Path.Combine(fixture.MigrationsDirectory, "_journal.json"));
+
+        // Someone changed the database after the rollback: the repair cannot prove the starting state.
+        await fixture.ExecuteAsync("ALTER TABLE probe ADD COLUMN stray text");
+
+        var output = new StringWriter();
+        Assert.Equal(1, await fixture.Runner(output, confirmRepair: _ => true)
+            .RepairAsync(fixture.Parse(FixedDefaultSchema)));
+
+        Assert.Contains("no longer matches the state before it", output.ToString(), StringComparison.Ordinal);
+        Assert.Contains("stray", output.ToString(), StringComparison.Ordinal);
+        Assert.Equal(journalBefore, File.ReadAllText(Path.Combine(fixture.MigrationsDirectory, "_journal.json")));
+        Assert.NotNull(store.ReadFailure(failed.Id));
+        Assert.Equal(0, await fixture.CountAsync(ColumnExists("probe", "flag")));
+        Assert.Equal(1, await fixture.CountAsync(ColumnExists("probe", "stray")));
+    }
+
+    [PostgresFact]
+    public async Task FailedMigration_RepairRequiresDestructiveConfirmation()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        const string before = """
+            { "tables": { "probe": { "columns": {
+              "id": { "type": "integer", "nullable": false },
+              "name": { "type": "text" } } } } }
+            """;
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(before)));
+        await fixture.ExecuteAsync("INSERT INTO probe (id, name) VALUES (1, 'kept')");
+
+        // NOT NULL without a default on a populated table fails inside the transaction.
+        const string broken = """
+            { "tables": { "probe": { "columns": {
+              "id": { "type": "integer", "nullable": false },
+              "name": { "type": "text" },
+              "flag": { "type": "integer", "nullable": false } } } } }
+            """;
+        Assert.Equal(1, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(broken)));
+
+        var store = new MigrationStore(fixture.MigrationsDirectory);
+        var failed = store.ReadJournal().Entries.Last();
+        var sqlBefore = store.ReadSql(failed.Id);
+
+        // The corrected schema removes a column, so the replacement is destructive.
+        const string dropping = """
+            { "tables": { "probe": { "columns": {
+              "id": { "type": "integer", "nullable": false } } } } }
+            """;
+
+        var denied = new StringWriter();
+        Assert.Equal(1, await fixture.Runner(denied, _ => false, confirmRepair: _ => true)
+            .RepairAsync(fixture.Parse(dropping)));
+        Assert.Contains("destructive changes were not confirmed", denied.ToString(), StringComparison.Ordinal);
+        Assert.Equal(sqlBefore, store.ReadSql(failed.Id));
+        Assert.Equal(1, await fixture.CountAsync(ColumnExists("probe", "name")));
+
+        var confirmed = new StringWriter();
+        Assert.Equal(0, await fixture.Runner(confirmed, _ => true, confirmRepair: _ => true)
+            .RepairAsync(fixture.Parse(dropping)));
+        Assert.Equal(0, await fixture.CountAsync(ColumnExists("probe", "name")));
+        Assert.Equal(2, await fixture.CountAsync("SELECT count(*) FROM chetah.migrations"));
+    }
+
+    [PostgresFact]
+    public async Task FailedMigration_RepairRefusesMultiplePendingEntries()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(UsersSchema)));
+
+        fixture.WriteEntry(
+            "20260101000000_first",
+            "first",
+            "ALTER TABLE \"users\" ADD COLUMN \"first\" text\n",
+            new JournalOperation(OperationKinds.AddColumn, "users", "first", false, "ALTER TABLE \"users\" ADD COLUMN \"first\" text"));
+        fixture.WriteEntry(
+            "20260101000001_second",
+            "second",
+            "ALTER TABLE \"users\" ADD COLUMN \"second\" text\n",
+            new JournalOperation(OperationKinds.AddColumn, "users", "second", false, "ALTER TABLE \"users\" ADD COLUMN \"second\" text"));
+
+        var store = new MigrationStore(fixture.MigrationsDirectory);
+        var before = File.ReadAllText(Path.Combine(fixture.MigrationsDirectory, "_journal.json"));
+
+        var output = new StringWriter();
+        Assert.Equal(1, await fixture.Runner(output, confirmRepair: _ => true)
+            .RepairAsync(fixture.Parse(UsersSchema)));
+
+        Assert.Contains("2 migrations are pending", output.ToString(), StringComparison.Ordinal);
+        Assert.Contains("only safe when exactly one", output.ToString(), StringComparison.Ordinal);
+        Assert.Equal(before, File.ReadAllText(Path.Combine(fixture.MigrationsDirectory, "_journal.json")));
+        Assert.Equal(0, await fixture.CountAsync(ColumnExists("users", "first")));
+        Assert.Equal(0, await fixture.CountAsync(ColumnExists("users", "second")));
+        Assert.Equal(3, store.ReadJournal().Entries.Count);
+    }
+
+    [PostgresFact]
+    public async Task FailedMigration_RepeatedRepairKeepsEveryAttempt()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        Assert.Equal(1, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(BrokenDefaultSchema)));
+
+        var store = new MigrationStore(fixture.MigrationsDirectory);
+        var failed = Assert.Single(store.ReadJournal().Entries);
+
+        // Still invalid: the repaired SQL fails too and the entry stays recoverable.
+        const string stillBroken = """
+            { "tables": { "probe": { "columns": {
+              "id": { "type": "integer", "nullable": false },
+              "flag": { "type": "integer", "nullable": false, "default": "1; SELECT 2" } } } } }
+            """;
+        var firstAttempt = new StringWriter();
+        Assert.Equal(1, await fixture.Runner(firstAttempt, confirmRepair: _ => true)
+            .RepairAsync(fixture.Parse(stillBroken)));
+        Assert.Contains("remains pending", firstAttempt.ToString(), StringComparison.Ordinal);
+        Assert.NotNull(store.ReadFailure(failed.Id));
+        Assert.Equal(0, await fixture.CountAsync(TableExists("probe")));
+
+        // A second repair archives the first repaired attempt as well.
+        Assert.Equal(0, await fixture.Runner(new StringWriter(), confirmRepair: _ => true)
+            .RepairAsync(fixture.Parse(FixedDefaultSchema)));
+        Assert.Equal(1, await fixture.CountAsync(TableExists("probe")));
+
+        var meta = Path.Combine(store.MigrationDirectory(failed.Id), "meta");
+        Assert.True(File.Exists(Path.Combine(meta, $"{failed.Id}_attempt_1.sql")));
+        Assert.True(File.Exists(Path.Combine(meta, $"{failed.Id}_attempt_2.sql")));
+        Assert.Contains("SELECT 1", File.ReadAllText(Path.Combine(meta, $"{failed.Id}_attempt_1.sql")), StringComparison.Ordinal);
+        Assert.Contains("SELECT 2", File.ReadAllText(Path.Combine(meta, $"{failed.Id}_attempt_2.sql")), StringComparison.Ordinal);
+        Assert.Null(store.ReadFailure(failed.Id));
+    }
+
+    [PostgresFact]
+    public async Task Repair_WithNothingPendingChangesNothing()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(UsersSchema)));
+
+        var store = new MigrationStore(fixture.MigrationsDirectory);
+        var entry = Assert.Single(store.ReadJournal().Entries);
+        var journal = File.ReadAllText(Path.Combine(fixture.MigrationsDirectory, "_journal.json"));
+
+        var output = new StringWriter();
+        Assert.Equal(0, await fixture.Runner(output, confirmRepair: _ => true).RepairAsync(fixture.Parse(UsersSchema)));
+
+        Assert.Contains("No failed or pending migration", output.ToString(), StringComparison.Ordinal);
+        Assert.Equal(journal, File.ReadAllText(Path.Combine(fixture.MigrationsDirectory, "_journal.json")));
+        Assert.Equal(entry.Hash, Assert.Single(store.ReadJournal().Entries).Hash);
         Assert.Equal(1, await fixture.CountAsync("SELECT count(*) FROM chetah.migrations"));
     }
 
@@ -1967,6 +2284,8 @@ public class MigrationApplyTests
             StringWriter output,
             Func<IReadOnlyList<Operation>, bool>? confirm = null,
             bool check = false,
+            Func<JournalEntry, MigrationFailure, PendingMigrationAction?>? recover = null,
+            Func<JournalEntry, bool>? confirmRepair = null,
             params string[] dropAdd) =>
             new(
                 ConnectionString,
@@ -1975,7 +2294,9 @@ public class MigrationApplyTests
                 output,
                 confirm ?? (_ => true),
                 new HashSet<string>(dropAdd, StringComparer.Ordinal),
-                check);
+                check,
+                recover,
+                confirmRepair);
 
         /// <summary>A second working copy on the same database, standing in for another process.</summary>
         internal Checkout NewCheckout(string json)

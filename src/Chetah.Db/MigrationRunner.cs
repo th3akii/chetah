@@ -4,8 +4,17 @@ using Npgsql;
 
 namespace Chetah.Db;
 
-/// <summary>Runs the two commands: <c>diff</c> prints the catalog comparison, <c>apply</c> records
-/// and executes it in one transaction.</summary>
+/// <summary>What to do with a migration that was attempted and rolled back. <see langword="null"/>
+/// from the chooser means there is no interactive terminal, so recovery must be explicit.</summary>
+internal enum PendingMigrationAction
+{
+    Retry,
+    Repair,
+    Cancel,
+}
+
+/// <summary>Runs the three commands: <c>diff</c> prints the catalog comparison, <c>apply</c> records
+/// and executes it in one transaction, and <c>repair</c> replaces a migration that failed.</summary>
 internal sealed class MigrationRunner
 {
     private const string CreateStateTable = """
@@ -60,6 +69,8 @@ internal sealed class MigrationRunner
     private readonly MigrationStore _store;
     private readonly TextWriter _output;
     private readonly Func<IReadOnlyList<Operation>, bool> _confirm;
+    private readonly Func<JournalEntry, MigrationFailure, PendingMigrationAction?>? _recover;
+    private readonly Func<JournalEntry, bool>? _confirmRepair;
     private readonly bool _check;
     private string _schema = "";
 
@@ -71,6 +82,10 @@ internal sealed class MigrationRunner
     /// which resolves "one object gone, one new" into a drop plus an add instead of a rename.</param>
     /// <param name="check">Read-only inspection: no file is written, no DDL runs, no lock is taken and
     /// no internal table is created. Suitable for CI.</param>
+    /// <param name="recover">Interactive choice for a migration with a recorded failure. Null, or a
+    /// null result, means no confirmation is available: apply refuses instead of waiting for input.</param>
+    /// <param name="confirmRepair">Explicit confirmation after the replacement SQL has been printed.
+    /// Null means repair is unavailable.</param>
     public MigrationRunner(
         string connectionString,
         string schemaPath,
@@ -78,7 +93,9 @@ internal sealed class MigrationRunner
         TextWriter output,
         Func<IReadOnlyList<Operation>, bool> confirm,
         IReadOnlySet<string>? dropAdd = null,
-        bool check = false)
+        bool check = false,
+        Func<JournalEntry, MigrationFailure, PendingMigrationAction?>? recover = null,
+        Func<JournalEntry, bool>? confirmRepair = null)
     {
         _connectionString = connectionString;
         _schemaPath = schemaPath;
@@ -87,6 +104,8 @@ internal sealed class MigrationRunner
         _output = output;
         _confirm = confirm;
         _check = check;
+        _recover = recover;
+        _confirmRepair = confirmRepair;
     }
 
     /// <summary>Runs a command, holding the migration lock unless the run is read-only. Acquisition
@@ -153,6 +172,12 @@ internal sealed class MigrationRunner
     /// Every migration runs in one transaction together with its applied-state row.</summary>
     public Task<int> ApplyAsync(Schema schema, CancellationToken cancellationToken = default) =>
         WithLockAsync((connection, token) => ApplyCoreAsync(connection, schema, token), cancellationToken);
+
+    /// <summary>Replaces the single pending migration with a fresh plan from the current schema,
+    /// then executes it. Refuses when more than one migration is pending, because a replanned
+    /// migration would otherwise absorb the later entries.</summary>
+    public Task<int> RepairAsync(Schema schema, CancellationToken cancellationToken = default) =>
+        WithLockAsync((connection, token) => RepairCoreAsync(connection, schema, token), cancellationToken);
 
     private async Task<int> DiffCoreAsync(
         NpgsqlConnection connection,
@@ -258,10 +283,61 @@ internal sealed class MigrationRunner
         else
             await PersistIdentitiesAsync(schema, ids, cancellationToken);
 
-        foreach (var entry in journal.Entries)
+        var pending = journal.Entries.Where(entry => !applied.ContainsKey(entry.Id)).ToArray();
+
+        foreach (var entry in pending)
         {
-            if (applied.ContainsKey(entry.Id))
-                continue;
+            var failure = _store.ReadFailure(entry.Id);
+            if (failure is not null)
+            {
+                var action = _recover?.Invoke(entry, failure);
+                if (action is null)
+                {
+                    _output.WriteLine($"Migration {entry.Id} previously failed and was rolled back:");
+                    _output.WriteLine($"  {failure.Error}");
+                    _output.WriteLine("Nothing was executed. Recover explicitly with:");
+                    _output.WriteLine($"  chetah-db repair --schema {_schemaPath} --migrations {_store.MigrationsDirectory}");
+                    return 1;
+                }
+
+                if (action == PendingMigrationAction.Cancel)
+                {
+                    _output.WriteLine($"Canceled: {entry.Id} was not executed and no migration was modified.");
+                    return 1;
+                }
+
+                if (action == PendingMigrationAction.Repair)
+                {
+                    if (pending.Length > 1)
+                    {
+                        _output.WriteLine(
+                            $"Refusing to repair {entry.Id}: {pending.Length} migrations are pending "
+                            + $"({string.Join(", ", pending.Select(candidate => candidate.Id))}).");
+                        _output.WriteLine(
+                            "Repair is only safe when exactly one migration is pending; a replanned migration "
+                            + "would otherwise absorb the later entries. No migration file was modified.");
+                        return 1;
+                    }
+
+                    if (!await VerifyPendingRolledBackAsync(connection, journal, entry, cancellationToken))
+                        return 1;
+
+                    var repairPlan = await ComputePlanAsync(connection, desired, identities, cancellationToken);
+                    var repaired = await RepairPendingAsync(
+                        connection,
+                        entry,
+                        repairPlan,
+                        desired,
+                        ids,
+                        registry,
+                        cancellationToken);
+                    if (repaired is null)
+                        return 1;
+
+                    applied[repaired.Id] = repaired.Hash;
+                    continue;
+                }
+            }
 
             var sql = _store.ReadSql(entry.Id);
             if (MigrationStore.Hash(sql) != entry.Hash)
@@ -277,10 +353,11 @@ internal sealed class MigrationRunner
 
             if (!await ApplyMigrationAsync(connection, desired, entry, sql, ids, registry, cancellationToken))
             {
-                _output.WriteLine($"Migration {entry.Id} was rolled back. It stays in the journal and is retried by the next apply.");
+                _output.WriteLine($"Migration {entry.Id} was rolled back. It stays in the journal; the next apply will offer to retry or repair it.");
                 return 1;
             }
 
+            _store.ClearFailure(entry.Id);
             _output.WriteLine($"Applied {entry.Id}.");
             applied[entry.Id] = entry.Hash;
         }
@@ -307,11 +384,7 @@ internal sealed class MigrationRunner
             _output.WriteLine($"Recorded baseline {baseline.Id} (no DDL executed).");
         }
 
-        var plan = await SchemaDiff.ComputeAsync(
-            desired,
-            live,
-            (table, column) => HasNullsAsync(connection, _schema, table, column, cancellationToken),
-            identities);
+        var plan = await ComputePlanAsync(connection, desired, identities, cancellationToken);
 
         if (plan.IsEmpty)
         {
@@ -366,12 +439,225 @@ internal sealed class MigrationRunner
                 registry,
                 cancellationToken))
         {
-            _output.WriteLine($"Migration {migration.Id} was rolled back. It stays in the journal and is retried by the next apply.");
+            _output.WriteLine($"Migration {migration.Id} was rolled back. It stays in the journal; the next apply will offer to retry or repair it.");
             return 1;
         }
 
         _output.WriteLine($"Applied {migration.Id}: {plan.Operations.Count} statement(s) written to {_store.SqlPath(migration.Id)}.");
         return 0;
+    }
+
+    private async Task<int> RepairCoreAsync(
+        NpgsqlConnection connection,
+        Schema schema,
+        CancellationToken cancellationToken)
+    {
+        await EnsureInternalSchemaAsync(connection, cancellationToken);
+        await ExecuteAsync(connection, null, CreateStateTable, cancellationToken);
+
+        var journal = _store.ReadJournal();
+        var applied = await ReadAppliedAsync(connection, cancellationToken);
+
+        var history = History(journal, applied);
+        if (history.Conflicts.Count > 0)
+        {
+            _output.WriteLine("Refusing to repair: migration history is inconsistent, so nothing was modified.");
+            foreach (var problem in history.Conflicts)
+                _output.WriteLine($"  - {problem}");
+            _output.WriteLine(
+                "Restore the files this database ran, fetch the migrations it already has, or apply from the "
+                + "checkout that owns them. History is never rewritten or merged automatically.");
+            return 1;
+        }
+
+        var pending = journal.Entries.Where(entry => !applied.ContainsKey(entry.Id)).ToArray();
+        if (pending.Length == 0)
+        {
+            _output.WriteLine("No failed or pending migration to repair.");
+            return 0;
+        }
+
+        if (pending.Length > 1)
+        {
+            _output.WriteLine(
+                $"Refusing to repair: {pending.Length} migrations are pending "
+                + $"({string.Join(", ", pending.Select(entry => entry.Id))}).");
+            _output.WriteLine(
+                "Repair is only safe when exactly one migration is pending; a replanned migration would "
+                + "otherwise absorb the later entries. No migration file was modified.");
+            return 1;
+        }
+
+        var entry = pending[0];
+        if (_store.ReadFailure(entry.Id) is { } failure)
+        {
+            _output.WriteLine($"Previous failure for {entry.Id}:");
+            _output.WriteLine($"  {failure.Error}");
+            _output.WriteLine();
+        }
+
+        var desired = SchemaCatalog.FromSchema(schema);
+        var (ids, identities, registry) = await ResolveIdentitiesAsync(connection, schema, cancellationToken);
+        if (!identities.CanApply)
+            return RefuseIdentity(identities);
+
+        // Checked before the schema file is touched: a drift refusal must leave the checkout alone.
+        if (!await VerifyPendingRolledBackAsync(connection, journal, entry, cancellationToken))
+            return 1;
+
+        await PersistIdentitiesAsync(schema, ids, cancellationToken);
+
+        var plan = await ComputePlanAsync(connection, desired, identities, cancellationToken);
+        return await RepairPendingAsync(
+            connection,
+            entry,
+            plan,
+            desired,
+            ids,
+            registry,
+            cancellationToken) is null
+            ? 1
+            : 0;
+    }
+
+    private async Task<MigrationPlan> ComputePlanAsync(
+        NpgsqlConnection connection,
+        CatalogState desired,
+        ResolvedIdentities identities,
+        CancellationToken cancellationToken) =>
+        await SchemaDiff.ComputeAsync(
+            desired,
+            await PostgresCatalog.ReadAsync(connection, _schema, cancellationToken),
+            (table, column) => HasNullsAsync(connection, _schema, table, column, cancellationToken),
+            identities);
+
+    /// <summary>Prints what differs between the previous migration's snapshot and the live catalog.
+    /// A failed migration's transaction rolled back, so the database must still look exactly like the
+    /// state the previous migration left. Anything else is drift the repair must not plan over.</summary>
+    private async Task<bool> VerifyPendingRolledBackAsync(
+        NpgsqlConnection connection,
+        Journal journal,
+        JournalEntry entry,
+        CancellationToken cancellationToken)
+    {
+        var index = journal.Entries.ToList().FindIndex(candidate => candidate.Id == entry.Id);
+        if (index < 0)
+        {
+            _output.WriteLine($"Refusing to repair {entry.Id}: it is not in the journal.");
+            return false;
+        }
+
+        CatalogState expected;
+        string before;
+        if (index == 0)
+        {
+            expected = new CatalogState([]);
+            before = "an empty database";
+        }
+        else
+        {
+            var previous = journal.Entries[index - 1];
+            var snapshot = _store.ReadSnapshot(previous.Id);
+            if (snapshot is null)
+            {
+                _output.WriteLine(
+                    $"Refusing to repair {entry.Id}: the snapshot for {previous.Id} is missing, so the state "
+                    + "before the failed migration cannot be verified.");
+                return false;
+            }
+
+            expected = snapshot;
+            before = previous.Id;
+        }
+
+        var drift = await SchemaDiff.ComputeAsync(
+            expected,
+            await PostgresCatalog.ReadAsync(connection, _schema, cancellationToken),
+            (table, column) => HasNullsAsync(connection, _schema, table, column, cancellationToken));
+
+        if (drift.IsEmpty)
+            return true;
+
+        _output.WriteLine($"Refusing to repair {entry.Id}: the database no longer matches the state before it ({before}).");
+        foreach (var operation in drift.Operations)
+            _output.WriteLine($"  - {operation.Statement};");
+        _output.WriteLine(
+            "No migration file was modified. Reconcile those changes before repairing; recovery never "
+            + "plans over unexplained drift.");
+        return false;
+    }
+
+    /// <summary>Replaces a pending entry and applies it through the normal transaction. Returns the
+    /// repaired entry only when it was applied; any failure leaves the entry pending and recoverable.</summary>
+    private async Task<JournalEntry?> RepairPendingAsync(
+        NpgsqlConnection connection,
+        JournalEntry entry,
+        MigrationPlan plan,
+        CatalogState desired,
+        SchemaIds ids,
+        IdentityRegistry registry,
+        CancellationToken cancellationToken)
+    {
+        if (plan.Blocked.Count > 0)
+        {
+            _output.WriteLine($"Refusing to repair {entry.Id}: these statements would remove objects the schema file does not express.");
+            foreach (var operation in plan.Blocked)
+                _output.WriteLine($"  - {operation.Statement};  would remove {string.Join(", ", operation.Dependents!)}");
+            _output.WriteLine("No migration file was modified. Remove those objects yourself before repairing.");
+            return null;
+        }
+
+        _output.WriteLine($"Replacement for {entry.Id}:");
+        if (plan.IsEmpty)
+        {
+            _output.WriteLine("-- no statements: the current schema already matches the database.");
+        }
+        else
+        {
+            foreach (var operation in plan.Operations)
+            {
+                _output.WriteLine(operation.Destructive
+                    ? $"-- destructive: {operation.Reason}"
+                    : "-- safe");
+                _output.WriteLine(operation.Statement + ";");
+                _output.WriteLine();
+            }
+        }
+
+        var destructive = plan.Destructive;
+        if (destructive.Count > 0 && !_confirm(destructive))
+        {
+            _output.WriteLine("Aborted: destructive changes were not confirmed. No migration file was modified.");
+            return null;
+        }
+
+        if (_confirmRepair is null || !_confirmRepair(entry))
+        {
+            _output.WriteLine("Aborted: the repair was not confirmed. No migration file was modified.");
+            return null;
+        }
+
+        var repaired = _store.Replace(entry, plan.Operations, desired);
+        _output.WriteLine(
+            $"Repaired {entry.Id}: {plan.Operations.Count} statement(s) replaced; the previous attempt is archived in "
+            + $"{Path.Combine(_store.MigrationDirectory(entry.Id), "meta")}.");
+
+        if (!await ApplyMigrationAsync(
+                connection,
+                desired,
+                repaired,
+                _store.ReadSql(repaired.Id),
+                ids,
+                registry,
+                cancellationToken))
+        {
+            _output.WriteLine($"Repair of {entry.Id} was rolled back. It remains pending and can be repaired again.");
+            return null;
+        }
+
+        _store.ClearFailure(repaired.Id);
+        _output.WriteLine($"Applied repaired migration {repaired.Id}.");
+        return repaired;
     }
 
     /// <summary>Matches declared objects to recorded identities. Nothing is written: a run that ends
@@ -694,10 +980,19 @@ internal sealed class MigrationRunner
         catch (NpgsqlException exception)
         {
             await transaction.RollbackAsync(cancellationToken);
+            try
+            {
+                _store.MarkFailed(entry, exception.Message);
+            }
+            catch (IOException markFailure)
+            {
+                _output.WriteLine($"warning: could not record the failure marker: {markFailure.Message}");
+            }
+
             _output.WriteLine($"Migration {entry.Id} failed and was rolled back at:");
             _output.WriteLine($"  {current}");
             _output.WriteLine($"  {exception.Message}");
-            _output.WriteLine("Nothing was applied. Fix the statement or the schema, then apply again.");
+            _output.WriteLine("Nothing was applied. Fix the schema, then apply again to retry or repair the migration.");
             return false;
         }
     }
