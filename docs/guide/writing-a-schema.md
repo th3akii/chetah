@@ -401,7 +401,11 @@ object names and say what to do.
    exits `1` when a migration is pending.
 3. **`apply`** — writes the migration file(s), then executes in one transaction:
    the DDL, the applied-state row, and the identity registry update. A failure
-   rolls everything back and the entry is retried next run.
+   rolls everything back and records the failure. The next interactive `apply`
+   offers Retry, Repair, or Cancel; non-interactive apply refuses. `repair`
+   re-plans the failed entry from the corrected schema, verifies the database
+   still matches the previous snapshot, archives the failed SQL, and applies
+   the replacement.
 4. **Regenerate the models** if the shape the code sees changed.
 5. **Commit** the schema file and the generated `migrations/` files together.
 

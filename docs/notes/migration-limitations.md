@@ -22,7 +22,13 @@ instead of matched or dropped; foreign keys from another schema detected;
 a declared unique index is not duplicated on top of a live unique constraint
 (the skip is silent — see item 9); statement-level failure reporting;
 renaming a table or column carries its constraints and indexes with it; a
-baseline no longer records the schema file's declarations as applied.
+baseline no longer records the schema file's declarations as applied;
+failed migrations are recorded and recoverable — interactive `apply` offers
+Retry/Repair/Cancel, non-interactive apply refuses, and `repair` re-plans the
+single pending entry from the current schema after verifying the database still
+matches the previous snapshot. The failed SQL and every superseded attempt are
+archived under `meta/`; applied migrations are never eligible; a repair that
+fails remains pending and can be repaired again.
 
 Also fixed by the ordering pass:
 
@@ -183,9 +189,10 @@ a multi-statement batch:
 
 records `... DEFAULT 0; SELECT 1` and fails at apply with `42601: syntax error at
 or near ";"`. It is safe (the transaction rolls back, the failing statement is
-printed, the entry is retried) but the diagnostic talks about syntax, not about
-the cause. The `--> statement-breakpoint` marker inside a default would split the
-statement more subtly.
+printed, the entry remains pending and can be retried or repaired) but the
+diagnostic talks about syntax, not about the cause. The
+`--> statement-breakpoint` marker inside a default would split the statement
+more subtly.
 
 **Fix:** reject `;` outside quoted literals and the breakpoint marker in
 `SchemaParser`, or make statement splitting quote-aware.
@@ -301,10 +308,12 @@ keys are reported.
 
 ### 19–20. Recorded order and applied order — Low
 
-A migration that is replayed executes its recorded statements in the order they
-were written, because history is never re-planned. If the catalog changed shape
-since (a dependency appeared that the recorded order does not satisfy), the
-migration fails at apply and rolls back instead of being re-ordered.
+A migration that is replayed with Retry executes its recorded statements in the
+order they were written, because history is never re-planned. If the catalog
+changed shape since (a dependency appeared that the recorded order does not
+satisfy), the migration fails at apply and rolls back instead of being
+re-ordered. Repair is the escape hatch: it plans the single pending entry from
+the current schema and live catalog, then replaces the recorded SQL.
 
 Two histories that applied the same migration ids in a different order are not
 detected: the journal has an order, the database has its own `id` sequence, and

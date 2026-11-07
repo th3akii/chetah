@@ -53,11 +53,14 @@ A diff/push tool in the drizzle-kit mental model, with cheap inspection added:
    shadowed by a fresh empty one. The table owns "what has been applied"; the
    journal owns "what has been generated".
 5. **Transaction per `apply`:** the whole migration runs in one transaction. A
-   failed statement rolls the run back; the recorded-but-unapplied migration is
-   retried by the next `apply`. Per-statement execution was considered and
-   rejected: its executor loop is simpler, but a failure would leave a
-   half-migrated database needing per-statement progress bookkeeping, and an
-   already-confirmed destructive statement could not be undone.
+   failed statement rolls the run back and the entry stays in the journal. The
+   failure is recorded in `meta/<id>_failed.json`; the next interactive `apply`
+   offers Retry, Repair, or Cancel, and non-interactive apply refuses rather
+   than replaying it. `chetah-db repair` performs Repair explicitly. Per-statement
+   execution was considered and rejected: its executor loop is simpler, but a
+   failure would leave a half-migrated database needing per-statement progress
+   bookkeeping, and an already-confirmed destructive statement could not be
+   undone.
 6. **Drizzle-style record layout, one folder per migration:**
 
    ```text
@@ -87,8 +90,9 @@ A diff/push tool in the drizzle-kit mental model, with cheap inspection added:
 ## Commands
 
 ```sh
-dotnet run --project src/Chetah.Db -- diff  --schema <schema.json> [--connection <conn>] [--migrations <dir>] [--drop-add <object> ...] [--check]
-dotnet run --project src/Chetah.Db -- apply --schema <schema.json> [--connection <conn>] [--migrations <dir>] [--drop-add <object> ...]
+dotnet run --project src/Chetah.Db -- diff   --schema <schema.json> [--connection <conn>] [--migrations <dir>] [--drop-add <object> ...] [--check]
+dotnet run --project src/Chetah.Db -- apply  --schema <schema.json> [--connection <conn>] [--migrations <dir>] [--drop-add <object> ...]
+dotnet run --project src/Chetah.Db -- repair --schema <schema.json> [--connection <conn>] [--migrations <dir>] [--drop-add <object> ...]
 ```
 
 - `diff` — prints the DDL the catalog comparison produces, flags destructive
@@ -103,8 +107,18 @@ dotnet run --project src/Chetah.Db -- apply --schema <schema.json> [--connection
   what a CI job gates on.
 - `apply` — runs the destructive confirmation gate, writes the record files,
   executes the migration in one transaction, records it in
-  `"chetah"."migrations"`. `--check` is rejected here rather than silently
-  behaving like `diff`.
+  `"chetah"."migrations"`. A migration with a recorded failure is offered as
+  Retry, Repair, or Cancel on a terminal; without one, apply refuses and names
+  `repair`. `--check` is rejected here rather than silently behaving like `diff`.
+- `repair` — requires exactly one pending migration, verifies it is not in
+  `"chetah"."migrations"` and that the live catalog still matches the previous
+  migration's snapshot, prints a replacement planned from the current schema,
+  archives the failed SQL and failure under `meta/`, replaces the entry in
+  place (same id and position), and applies it through the normal transaction.
+  Drift, blocked statements, a declined destructive gate, or a declined
+  replacement confirmation leaves the journal and files untouched. A repaired
+  migration that fails again remains pending and its next attempt is archived
+  separately. Applied migrations are never candidates.
 - `--drop-add <table>` / `--drop-add <table>.<column>` — resolves an otherwise
   ambiguous replacement; see *Identities*.
 
@@ -270,6 +284,13 @@ column therefore carries a persistent `"$id"` in `chetah-schema.json`:
   every attached constraint and index — including ones the schema file does
   express — because the recorded drop predates them. A recorded destructive
   change is confirmed again, and a non-interactive replay refuses.
+- **Failed migrations are recoverable:** a failure marker distinguishes an
+  attempted migration from one a fresh checkout has never run, so a clone can
+  still replay its journal normally. Repair is only offered for a single
+  pending entry; with several, it refuses because a replanned migration would
+  absorb the later ones. The replacement is planned from the live catalog, not
+  replayed from history, and the pre-failure snapshot must still match the
+  database.
 - **One run at a time:** a session advisory lock guards planning and execution;
   a competing run waits up to 30s and then fails with a clear message rather
   than interleaving.
@@ -284,8 +305,9 @@ Implementation notes as built:
   `timestamp(3)`), so a different spelling the catalog normalizes away (e.g.
   `int4` vs `integer`) is not a change while a different modifier is.
 - Adding a `NOT NULL` column to an already-populated table without a `default`
-  fails; the transaction rolls back and the journal entry is retried after the
-  schema is corrected.
+  fails; the transaction rolls back, the failure is recorded, and the entry can
+  be retried after the database is fixed or repaired after the schema is
+  corrected.
 - Managed tables are those in the resolved schema; the `chetah` schema is never
   diffed. Tables in other schemas are untouched.
 - A table-level object that PostgreSQL reports without a column list blocks any
@@ -348,10 +370,18 @@ skipped ones.
   matching what ran, `"chetah"."migrations"` rows with the right hash and name,
   `diff` reporting drift without writing, declined destructive gate writing
   nothing, failed statement rolling back with the journal entry present and no
-  migration row (rerun succeeds after the fix), hand-edited SQL refused, an
-  existing database recorded as a baseline, and a legacy `chetah_migrations`
-  table moved into `chetah` with its history (including a table stranded under
-  the old name by an interrupted move).
+  migration row, hand-edited SQL refused, an existing database recorded as a
+  baseline, and a legacy `chetah_migrations` table moved into `chetah` with its
+  history (including a table stranded under the old name by an interrupted
+  move).
+- **Failed migration recovery** — a failure marker makes non-interactive apply
+  refuse; Retry replays the recorded bytes unchanged; Repair re-plans from a
+  corrected schema, preserves the id and order, archives the failed SQL and its
+  error, and applies; Cancel leaves files, journal and database untouched; drift
+  from the pre-failure snapshot, a destructive replacement without confirmation,
+  and more than one pending entry are all refused; a repair that fails again
+  stays pending and its next attempt is archived separately; applied migrations
+  are never candidates.
 - **Live constraints** — a table created with a primary key, identity column,
   single-column unique, foreign key, default and unique index; a second apply
   finds nothing; a later revision replaces the key with a composite one, drops

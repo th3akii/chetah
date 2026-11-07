@@ -166,8 +166,9 @@ the statements that hit the database are always reviewable.
 [`schema-tooling.md`](../reference/schema-tooling.md)):
 
 - The generator stays single-purpose (D002): `Chetah.CodeGen` owns the schema
-  parser and typed-model output, `Chetah.Db` owns catalog work. The two commands
-  are `diff` (print, write nothing) and `apply`.
+  parser and typed-model output, `Chetah.Db` owns catalog work. The three commands
+  are `diff` (print, write nothing), `apply`, and `repair` (replace a failed
+  migration).
 - One apply path for fresh and existing databases. No `create` command. On an
   empty database the first entry is the full CREATE script; on an existing
   database it is an introspective baseline (snapshot only, no DDL).
@@ -182,10 +183,19 @@ the statements that hit the database are always reviewable.
   The journal records what has been generated; only the table decides what ran.
 - Each migration runs in one transaction together with its `"chetah"."migrations`
   row. A failed statement rolls everything back, the entry stays in the journal,
-  and the next `apply` retries it. A retry is not a blind replay: the entry's
-  recorded operations are re-checked against the current catalog (a drop that
-  now has dependents is refused) and any destructive statement is confirmed
-  again. Entries without recorded metadata require confirmation.
+  and the runner records why in `meta/<id>_failed.json`. The next interactive
+  `apply` offers Retry, Repair, or Cancel; non-interactive apply refuses instead
+  of replaying a migration it knows failed. `chetah-db repair` is the explicit
+  form. Repair re-plans the single pending entry from the current schema and the
+  live catalog, verifies the database still matches the previous migration's
+  snapshot, prints the replacement, and requires confirmation. It replaces the
+  SQL in place (preserving the id and journal order) and archives every
+  superseded attempt under `meta/`, so the original failure stays readable.
+  Applied migrations are never touched, and repair refuses when more than one
+  migration is pending. Retry remains a replay, not a blind one: the recorded
+  operations are re-checked against the current catalog (a drop that now has
+  dependents is refused) and any destructive statement is confirmed again.
+  Entries without recorded metadata require confirmation.
 - Destructive statements — DROP TABLE, DROP COLUMN, DROP INDEX, DROP CONSTRAINT,
   non-widening type changes, and `nullable → NOT NULL` on a column that already
   holds NULLs — require an interactive `yes`. Non-interactive runs refuse
