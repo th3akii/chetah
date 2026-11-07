@@ -1,0 +1,682 @@
+{
+  "tables": [
+    {
+      "name": "departments",
+      "columns": [
+        {
+          "name": "id",
+          "type": "int4",
+          "notNull": true,
+          "default": null,
+          "identity": true,
+          "rawDefault": null
+        },
+        {
+          "name": "code",
+          "type": "varchar(16)",
+          "notNull": true,
+          "default": null,
+          "identity": false,
+          "rawDefault": null
+        },
+        {
+          "name": "name",
+          "type": "varchar(120)",
+          "notNull": true,
+          "default": null,
+          "identity": false,
+          "rawDefault": null
+        }
+      ]
+    },
+    {
+      "name": "instructors",
+      "columns": [
+        {
+          "name": "id",
+          "type": "int4",
+          "notNull": true,
+          "default": null,
+          "identity": true,
+          "rawDefault": null
+        },
+        {
+          "name": "department_id",
+          "type": "int4",
+          "notNull": true,
+          "default": null,
+          "identity": false,
+          "rawDefault": null
+        },
+        {
+          "name": "first_name",
+          "type": "varchar(80)",
+          "notNull": true,
+          "default": null,
+          "identity": false,
+          "rawDefault": null
+        },
+        {
+          "name": "last_name",
+          "type": "varchar(80)",
+          "notNull": true,
+          "default": null,
+          "identity": false,
+          "rawDefault": null
+        },
+        {
+          "name": "email",
+          "type": "varchar(320)",
+          "notNull": true,
+          "default": null,
+          "identity": false,
+          "rawDefault": null
+        },
+        {
+          "name": "active",
+          "type": "bool",
+          "notNull": true,
+          "default": "true",
+          "identity": false,
+          "rawDefault": "true"
+        }
+      ]
+    },
+    {
+      "name": "students",
+      "columns": [
+        {
+          "name": "id",
+          "type": "int8",
+          "notNull": true,
+          "default": null,
+          "identity": true,
+          "rawDefault": null
+        },
+        {
+          "name": "department_id",
+          "type": "int4",
+          "notNull": true,
+          "default": null,
+          "identity": false,
+          "rawDefault": null
+        },
+        {
+          "name": "index_number",
+          "type": "varchar(24)",
+          "notNull": true,
+          "default": null,
+          "identity": false,
+          "rawDefault": null
+        },
+        {
+          "name": "first_name",
+          "type": "varchar(80)",
+          "notNull": true,
+          "default": null,
+          "identity": false,
+          "rawDefault": null
+        },
+        {
+          "name": "last_name",
+          "type": "varchar(80)",
+          "notNull": true,
+          "default": null,
+          "identity": false,
+          "rawDefault": null
+        },
+        {
+          "name": "enrollment_year",
+          "type": "int4",
+          "notNull": false,
+          "default": null,
+          "identity": false,
+          "rawDefault": null
+        },
+        {
+          "name": "phone",
+          "type": "varchar(30)",
+          "notNull": false,
+          "default": null,
+          "identity": false,
+          "rawDefault": null
+        },
+        {
+          "name": "test_flag",
+          "type": "bool",
+          "notNull": false,
+          "default": null,
+          "identity": false,
+          "rawDefault": null
+        },
+        {
+          "name": "invalid_reference",
+          "type": "int4",
+          "notNull": false,
+          "default": null,
+          "identity": false,
+          "rawDefault": null
+        }
+      ]
+    },
+    {
+      "name": "courses",
+      "columns": [
+        {
+          "name": "id",
+          "type": "int4",
+          "notNull": true,
+          "default": null,
+          "identity": true,
+          "rawDefault": null
+        },
+        {
+          "name": "department_id",
+          "type": "int4",
+          "notNull": true,
+          "default": null,
+          "identity": false,
+          "rawDefault": null
+        },
+        {
+          "name": "code",
+          "type": "varchar(20)",
+          "notNull": true,
+          "default": null,
+          "identity": false,
+          "rawDefault": null
+        },
+        {
+          "name": "course_name",
+          "type": "varchar(160)",
+          "notNull": true,
+          "default": null,
+          "identity": false,
+          "rawDefault": null
+        },
+        {
+          "name": "credits",
+          "type": "int4",
+          "notNull": true,
+          "default": "5",
+          "identity": false,
+          "rawDefault": "5"
+        }
+      ]
+    },
+    {
+      "name": "semesters",
+      "columns": [
+        {
+          "name": "id",
+          "type": "int4",
+          "notNull": true,
+          "default": null,
+          "identity": true,
+          "rawDefault": null
+        },
+        {
+          "name": "academic_year",
+          "type": "varchar(9)",
+          "notNull": true,
+          "default": null,
+          "identity": false,
+          "rawDefault": null
+        },
+        {
+          "name": "term",
+          "type": "varchar(12)",
+          "notNull": true,
+          "default": null,
+          "identity": false,
+          "rawDefault": null
+        },
+        {
+          "name": "starts_at",
+          "type": "timestamp",
+          "notNull": true,
+          "default": null,
+          "identity": false,
+          "rawDefault": null
+        },
+        {
+          "name": "ends_at",
+          "type": "timestamp",
+          "notNull": true,
+          "default": null,
+          "identity": false,
+          "rawDefault": null
+        }
+      ]
+    },
+    {
+      "name": "course_offerings",
+      "columns": [
+        {
+          "name": "id",
+          "type": "int8",
+          "notNull": true,
+          "default": null,
+          "identity": true,
+          "rawDefault": null
+        },
+        {
+          "name": "course_id",
+          "type": "int4",
+          "notNull": true,
+          "default": null,
+          "identity": false,
+          "rawDefault": null
+        },
+        {
+          "name": "semester_id",
+          "type": "int4",
+          "notNull": true,
+          "default": null,
+          "identity": false,
+          "rawDefault": null
+        },
+        {
+          "name": "professor_id",
+          "type": "int4",
+          "notNull": false,
+          "default": null,
+          "identity": false,
+          "rawDefault": null
+        },
+        {
+          "name": "group_code",
+          "type": "varchar(12)",
+          "notNull": true,
+          "default": "'A'",
+          "identity": false,
+          "rawDefault": "'A'"
+        }
+      ]
+    },
+    {
+      "name": "enrollments",
+      "columns": [
+        {
+          "name": "student_id",
+          "type": "int8",
+          "notNull": true,
+          "default": null,
+          "identity": false,
+          "rawDefault": null
+        },
+        {
+          "name": "offering_id",
+          "type": "int8",
+          "notNull": true,
+          "default": null,
+          "identity": false,
+          "rawDefault": null
+        },
+        {
+          "name": "enrolled_at",
+          "type": "timestamp",
+          "notNull": true,
+          "default": "now()",
+          "identity": false,
+          "rawDefault": "now()"
+        },
+        {
+          "name": "status",
+          "type": "varchar(20)",
+          "notNull": true,
+          "default": "'enrolled'",
+          "identity": false,
+          "rawDefault": "'enrolled'"
+        }
+      ]
+    }
+  ],
+  "foreignObjects": null,
+  "constraints": [
+    {
+      "name": "departments_pkey",
+      "kind": "p",
+      "table": "departments",
+      "columns": [
+        "id"
+      ],
+      "refTable": null,
+      "refColumns": null,
+      "onDelete": "no action",
+      "onUpdate": "no action"
+    },
+    {
+      "name": "departments_code_key",
+      "kind": "u",
+      "table": "departments",
+      "columns": [
+        "code"
+      ],
+      "refTable": null,
+      "refColumns": null,
+      "onDelete": "no action",
+      "onUpdate": "no action"
+    },
+    {
+      "name": "instructors_pkey",
+      "kind": "p",
+      "table": "instructors",
+      "columns": [
+        "id"
+      ],
+      "refTable": null,
+      "refColumns": null,
+      "onDelete": "no action",
+      "onUpdate": "no action"
+    },
+    {
+      "name": "instructors_email_key",
+      "kind": "u",
+      "table": "instructors",
+      "columns": [
+        "email"
+      ],
+      "refTable": null,
+      "refColumns": null,
+      "onDelete": "no action",
+      "onUpdate": "no action"
+    },
+    {
+      "name": "instructors_department_id_first_name_last_name_key",
+      "kind": "u",
+      "table": "instructors",
+      "columns": [
+        "department_id",
+        "first_name",
+        "last_name"
+      ],
+      "refTable": null,
+      "refColumns": null,
+      "onDelete": "no action",
+      "onUpdate": "no action"
+    },
+    {
+      "name": "professors_department_fkey",
+      "kind": "f",
+      "table": "instructors",
+      "columns": [
+        "department_id"
+      ],
+      "refTable": "departments",
+      "refColumns": [
+        "id"
+      ],
+      "onDelete": "cascade",
+      "onUpdate": "cascade"
+    },
+    {
+      "name": "students_pkey",
+      "kind": "p",
+      "table": "students",
+      "columns": [
+        "id"
+      ],
+      "refTable": null,
+      "refColumns": null,
+      "onDelete": "no action",
+      "onUpdate": "no action"
+    },
+    {
+      "name": "students_index_number_key",
+      "kind": "u",
+      "table": "students",
+      "columns": [
+        "index_number"
+      ],
+      "refTable": null,
+      "refColumns": null,
+      "onDelete": "no action",
+      "onUpdate": "no action"
+    },
+    {
+      "name": "students_invalid_reference_fkey",
+      "kind": "f",
+      "table": "students",
+      "columns": [
+        "invalid_reference"
+      ],
+      "refTable": "departments",
+      "refColumns": [
+        "nonexistent_column"
+      ],
+      "onDelete": "no action",
+      "onUpdate": "no action"
+    },
+    {
+      "name": "students_department_fkey",
+      "kind": "f",
+      "table": "students",
+      "columns": [
+        "department_id"
+      ],
+      "refTable": "departments",
+      "refColumns": [
+        "id"
+      ],
+      "onDelete": "restrict",
+      "onUpdate": "cascade"
+    },
+    {
+      "name": "courses_pkey",
+      "kind": "p",
+      "table": "courses",
+      "columns": [
+        "id"
+      ],
+      "refTable": null,
+      "refColumns": null,
+      "onDelete": "no action",
+      "onUpdate": "no action"
+    },
+    {
+      "name": "courses_department_id_code_key",
+      "kind": "u",
+      "table": "courses",
+      "columns": [
+        "department_id",
+        "code"
+      ],
+      "refTable": null,
+      "refColumns": null,
+      "onDelete": "no action",
+      "onUpdate": "no action"
+    },
+    {
+      "name": "courses_department_fkey",
+      "kind": "f",
+      "table": "courses",
+      "columns": [
+        "department_id"
+      ],
+      "refTable": "departments",
+      "refColumns": [
+        "id"
+      ],
+      "onDelete": "restrict",
+      "onUpdate": "cascade"
+    },
+    {
+      "name": "semesters_pkey",
+      "kind": "p",
+      "table": "semesters",
+      "columns": [
+        "id"
+      ],
+      "refTable": null,
+      "refColumns": null,
+      "onDelete": "no action",
+      "onUpdate": "no action"
+    },
+    {
+      "name": "semesters_academic_year_term_key",
+      "kind": "u",
+      "table": "semesters",
+      "columns": [
+        "academic_year",
+        "term"
+      ],
+      "refTable": null,
+      "refColumns": null,
+      "onDelete": "no action",
+      "onUpdate": "no action"
+    },
+    {
+      "name": "course_offerings_pkey",
+      "kind": "p",
+      "table": "course_offerings",
+      "columns": [
+        "id"
+      ],
+      "refTable": null,
+      "refColumns": null,
+      "onDelete": "no action",
+      "onUpdate": "no action"
+    },
+    {
+      "name": "course_offerings_course_id_semester_id_group_code_key",
+      "kind": "u",
+      "table": "course_offerings",
+      "columns": [
+        "course_id",
+        "semester_id",
+        "group_code"
+      ],
+      "refTable": null,
+      "refColumns": null,
+      "onDelete": "no action",
+      "onUpdate": "no action"
+    },
+    {
+      "name": "offerings_course_fkey",
+      "kind": "f",
+      "table": "course_offerings",
+      "columns": [
+        "course_id"
+      ],
+      "refTable": "courses",
+      "refColumns": [
+        "id"
+      ],
+      "onDelete": "restrict",
+      "onUpdate": "no action"
+    },
+    {
+      "name": "offerings_semester_fkey",
+      "kind": "f",
+      "table": "course_offerings",
+      "columns": [
+        "semester_id"
+      ],
+      "refTable": "semesters",
+      "refColumns": [
+        "id"
+      ],
+      "onDelete": "restrict",
+      "onUpdate": "no action"
+    },
+    {
+      "name": "offerings_professor_fkey",
+      "kind": "f",
+      "table": "course_offerings",
+      "columns": [
+        "professor_id"
+      ],
+      "refTable": "instructors",
+      "refColumns": [
+        "id"
+      ],
+      "onDelete": "restrict",
+      "onUpdate": "cascade"
+    },
+    {
+      "name": "enrollments_pkey",
+      "kind": "p",
+      "table": "enrollments",
+      "columns": [
+        "student_id",
+        "offering_id"
+      ],
+      "refTable": null,
+      "refColumns": null,
+      "onDelete": "no action",
+      "onUpdate": "no action"
+    },
+    {
+      "name": "enrollments_student_fkey",
+      "kind": "f",
+      "table": "enrollments",
+      "columns": [
+        "student_id"
+      ],
+      "refTable": "students",
+      "refColumns": [
+        "id"
+      ],
+      "onDelete": "cascade",
+      "onUpdate": "cascade"
+    },
+    {
+      "name": "enrollments_offering_fkey",
+      "kind": "f",
+      "table": "enrollments",
+      "columns": [
+        "offering_id"
+      ],
+      "refTable": "course_offerings",
+      "refColumns": [
+        "id"
+      ],
+      "onDelete": "cascade",
+      "onUpdate": "cascade"
+    }
+  ],
+  "indexes": [
+    {
+      "name": "professors_department_idx",
+      "table": "instructors",
+      "columns": [
+        "department_id"
+      ],
+      "unique": false
+    },
+    {
+      "name": "students_department_year_idx",
+      "table": "students",
+      "columns": [
+        "department_id",
+        "index_number"
+      ],
+      "unique": false
+    },
+    {
+      "name": "students_phone_idx",
+      "table": "students",
+      "columns": [
+        "phone"
+      ],
+      "unique": false
+    },
+    {
+      "name": "course_offerings_professor_idx",
+      "table": "course_offerings",
+      "columns": [
+        "professor_id"
+      ],
+      "unique": false
+    },
+    {
+      "name": "enrollments_offering_idx",
+      "table": "enrollments",
+      "columns": [
+        "offering_id"
+      ],
+      "unique": false
+    }
+  ]
+}

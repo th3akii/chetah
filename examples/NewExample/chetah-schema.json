@@ -1,0 +1,426 @@
+{
+  "tables": {
+    "departments": {
+      "$id": 1,
+      "model": "Department",
+      "primaryKey": [
+        "id"
+      ],
+      "columns": {
+        "id": {
+          "$id": 1,
+          "type": "integer",
+          "nullable": false,
+          "identity": true
+        },
+        "code": {
+          "$id": 2,
+          "type": "varchar(16)",
+          "nullable": false,
+          "unique": true
+        },
+        "name": {
+          "$id": 3,
+          "type": "varchar(120)",
+          "nullable": false
+        }
+      }
+    },
+    "instructors": {
+      "$id": 2,
+      "model": "Professor",
+      "primaryKey": [
+        "id"
+      ],
+      "unique": [
+        [
+          "department_id",
+          "first_name",
+          "last_name"
+        ]
+      ],
+      "indexes": {
+        "professors_department_idx": {
+          "columns": [
+            "department_id"
+          ]
+        }
+      },
+      "foreignKeys": {
+        "professors_department_fkey": {
+          "columns": [
+            "department_id"
+          ],
+          "references": "departments",
+          "referenceColumns": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "cascade"
+        }
+      },
+      "columns": {
+        "id": {
+          "$id": 1,
+          "type": "integer",
+          "nullable": false,
+          "identity": true
+        },
+        "department_id": {
+          "$id": 2,
+          "type": "integer",
+          "nullable": false
+        },
+        "first_name": {
+          "$id": 3,
+          "type": "varchar(80)",
+          "nullable": false
+        },
+        "last_name": {
+          "$id": 4,
+          "type": "varchar(80)",
+          "nullable": false
+        },
+        "email": {
+          "$id": 5,
+          "type": "varchar(320)",
+          "nullable": false,
+          "unique": true
+        },
+        "active": {
+          "$id": 6,
+          "type": "boolean",
+          "nullable": false,
+          "default": "true"
+        }
+      }
+    },
+    "students": {
+      "$id": 3,
+      "model": "Student",
+      "primaryKey": [
+        "id"
+      ],
+      "indexes": {
+        "students_department_year_idx": {
+          "columns": [
+            "department_id",
+            "index_number"
+          ]
+        },
+        "students_phone_idx": {
+          "columns": [
+            "phone"
+          ]
+        }
+      },
+      "foreignKeys": {
+        "students_department_fkey": {
+          "columns": [
+            "department_id"
+          ],
+          "references": "departments",
+          "referenceColumns": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "cascade"
+        }
+      },
+      "columns": {
+        "id": {
+          "$id": 1,
+          "type": "bigint",
+          "nullable": false,
+          "identity": true
+        },
+        "department_id": {
+          "$id": 2,
+          "type": "integer",
+          "nullable": false
+        },
+        "index_number": {
+          "$id": 3,
+          "type": "varchar(24)",
+          "nullable": false,
+          "unique": true
+        },
+        "first_name": {
+          "$id": 4,
+          "type": "varchar(80)",
+          "nullable": false
+        },
+        "last_name": {
+          "$id": 5,
+          "type": "varchar(80)",
+          "nullable": false
+        },
+        "enrollment_year": {
+          "$id": 6,
+          "type": "integer",
+          "nullable": true
+        },
+        "phone": {
+          "$id": 8,
+          "type": "varchar(30)",
+          "nullable": true
+        },
+        "test_flag": {
+          "$id": 9,
+          "type": "boolean",
+          "nullable": true
+        },
+        "invalid_reference": {
+          "$id": 10,
+          "type": "integer",
+          "nullable": true,
+          "references": "departments.id"
+        }
+      }
+    },
+    "courses": {
+      "$id": 4,
+      "model": "Course",
+      "primaryKey": [
+        "id"
+      ],
+      "unique": [
+        [
+          "department_id",
+          "code"
+        ]
+      ],
+      "foreignKeys": {
+        "courses_department_fkey": {
+          "columns": [
+            "department_id"
+          ],
+          "references": "departments",
+          "referenceColumns": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "cascade"
+        }
+      },
+      "columns": {
+        "id": {
+          "$id": 1,
+          "type": "integer",
+          "nullable": false,
+          "identity": true
+        },
+        "department_id": {
+          "$id": 2,
+          "type": "integer",
+          "nullable": false
+        },
+        "code": {
+          "$id": 3,
+          "type": "varchar(20)",
+          "nullable": false
+        },
+        "course_name": {
+          "$id": 4,
+          "type": "varchar(160)",
+          "nullable": false
+        },
+        "credits": {
+          "$id": 5,
+          "type": "integer",
+          "nullable": false,
+          "default": "5"
+        }
+      }
+    },
+    "semesters": {
+      "$id": 5,
+      "model": "Semester",
+      "primaryKey": [
+        "id"
+      ],
+      "unique": [
+        [
+          "academic_year",
+          "term"
+        ]
+      ],
+      "columns": {
+        "id": {
+          "$id": 1,
+          "type": "integer",
+          "nullable": false,
+          "identity": true
+        },
+        "academic_year": {
+          "$id": 2,
+          "type": "varchar(9)",
+          "nullable": false
+        },
+        "term": {
+          "$id": 3,
+          "type": "varchar(12)",
+          "nullable": false
+        },
+        "starts_at": {
+          "$id": 4,
+          "type": "timestamp",
+          "nullable": false
+        },
+        "ends_at": {
+          "$id": 5,
+          "type": "timestamp",
+          "nullable": false
+        }
+      }
+    },
+    "course_offerings": {
+      "$id": 6,
+      "model": "CourseOffering",
+      "primaryKey": [
+        "id"
+      ],
+      "unique": [
+        [
+          "course_id",
+          "semester_id",
+          "group_code"
+        ]
+      ],
+      "indexes": {
+        "course_offerings_professor_idx": {
+          "columns": [
+            "professor_id"
+          ]
+        }
+      },
+      "foreignKeys": {
+        "offerings_course_fkey": {
+          "columns": [
+            "course_id"
+          ],
+          "references": "courses",
+          "referenceColumns": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "offerings_semester_fkey": {
+          "columns": [
+            "semester_id"
+          ],
+          "references": "semesters",
+          "referenceColumns": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "offerings_professor_fkey": {
+          "columns": [
+            "professor_id"
+          ],
+          "references": "instructors",
+          "referenceColumns": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "cascade"
+        }
+      },
+      "columns": {
+        "id": {
+          "$id": 1,
+          "type": "bigint",
+          "nullable": false,
+          "identity": true
+        },
+        "course_id": {
+          "$id": 2,
+          "type": "integer",
+          "nullable": false
+        },
+        "semester_id": {
+          "$id": 3,
+          "type": "integer",
+          "nullable": false
+        },
+        "professor_id": {
+          "$id": 4,
+          "type": "integer",
+          "nullable": true
+        },
+        "group_code": {
+          "$id": 5,
+          "type": "varchar(12)",
+          "nullable": false,
+          "default": "'A'"
+        }
+      }
+    },
+    "enrollments": {
+      "$id": 7,
+      "model": "Enrollment",
+      "primaryKey": [
+        "student_id",
+        "offering_id"
+      ],
+      "indexes": {
+        "enrollments_offering_idx": {
+          "columns": [
+            "offering_id"
+          ]
+        }
+      },
+      "foreignKeys": {
+        "enrollments_student_fkey": {
+          "columns": [
+            "student_id"
+          ],
+          "references": "students",
+          "referenceColumns": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "cascade"
+        },
+        "enrollments_offering_fkey": {
+          "columns": [
+            "offering_id"
+          ],
+          "references": "course_offerings",
+          "referenceColumns": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "cascade"
+        }
+      },
+      "columns": {
+        "student_id": {
+          "$id": 1,
+          "type": "bigint",
+          "nullable": false
+        },
+        "offering_id": {
+          "$id": 2,
+          "type": "bigint",
+          "nullable": false
+        },
+        "enrolled_at": {
+          "$id": 3,
+          "type": "timestamp",
+          "nullable": false,
+          "default": "now()"
+        },
+        "status": {
+          "$id": 4,
+          "type": "varchar(20)",
+          "nullable": false,
+          "default": "'enrolled'"
+        }
+      }
+    }
+  }
+}
