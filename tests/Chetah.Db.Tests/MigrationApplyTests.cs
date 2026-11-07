@@ -317,6 +317,8 @@ public class MigrationApplyTests
         Assert.Contains("repair --schema", blocked.ToString(), StringComparison.Ordinal);
         Assert.Equal(0, await fixture.CountAsync(TableExists("rollback_probe")));
         Assert.Equal(0, await fixture.CountAsync("SELECT count(*) FROM chetah.migrations"));
+        // The refusal happens before identity persistence, so the schema file is byte-identical.
+        Assert.Equal(schema, File.ReadAllText(fixture.SchemaPath));
 
         // The recorded-but-unapplied migration is retried once the SQL is fixed. Nothing destructive
         // is recorded, so the destructive confirmation gate must not be consulted.
@@ -463,6 +465,8 @@ public class MigrationApplyTests
         Assert.NotNull(store.ReadFailure(before.Id));
         Assert.Equal(0, await fixture.CountAsync(TableExists("probe")));
         Assert.Equal(0, await fixture.CountAsync("SELECT count(*) FROM chetah.migrations"));
+        // Cancel is chosen before identity resolution writes missing "$id" members.
+        Assert.Equal(FixedDefaultSchema, File.ReadAllText(fixture.SchemaPath));
     }
 
     [PostgresFact]

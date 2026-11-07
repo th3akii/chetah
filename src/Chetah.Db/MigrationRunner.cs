@@ -269,6 +269,48 @@ internal sealed class MigrationRunner
             return 1;
         }
 
+        var pending = journal.Entries.Where(entry => !applied.ContainsKey(entry.Id)).ToArray();
+
+        // The recovery question comes before any file write. Cancel and a non-interactive refusal
+        // must leave the schema file byte-identical, and a repair refusal (drift, several pending)
+        // must not persist identities on the way to saying no.
+        JournalEntry? chosen = null;
+        PendingMigrationAction? chosenAction = null;
+        foreach (var candidate in pending)
+        {
+            var candidateFailure = _store.ReadFailure(candidate.Id);
+            if (candidateFailure is null)
+                continue;
+
+            chosenAction = _recover?.Invoke(candidate, candidateFailure);
+            if (chosenAction is null)
+            {
+                WriteRecoveryHelp(candidate, candidateFailure);
+                return 1;
+            }
+
+            if (chosenAction == PendingMigrationAction.Cancel)
+            {
+                _output.WriteLine($"Canceled: {candidate.Id} was not executed and nothing was modified.");
+                return 1;
+            }
+
+            if (chosenAction == PendingMigrationAction.Repair)
+            {
+                if (pending.Length > 1)
+                {
+                    WriteRepairRequiresOnePending(candidate, pending);
+                    return 1;
+                }
+
+                if (!await VerifyPendingRolledBackAsync(connection, journal, candidate, cancellationToken))
+                    return 1;
+            }
+
+            chosen = candidate;
+            break;
+        }
+
         var desired = SchemaCatalog.FromSchema(schema);
 
         // Identity is resolved before anything runs: every statement this command executes, replayed
@@ -283,20 +325,16 @@ internal sealed class MigrationRunner
         else
             await PersistIdentitiesAsync(schema, ids, cancellationToken);
 
-        var pending = journal.Entries.Where(entry => !applied.ContainsKey(entry.Id)).ToArray();
-
         foreach (var entry in pending)
         {
-            var failure = _store.ReadFailure(entry.Id);
-            if (failure is not null)
+            var action = entry.Id == chosen?.Id ? chosenAction : null;
+            if (action is null && _store.ReadFailure(entry.Id) is { } failure)
             {
-                var action = _recover?.Invoke(entry, failure);
+                // A second marked entry can only follow an unmarked one here; normal runs have one.
+                action = _recover?.Invoke(entry, failure);
                 if (action is null)
                 {
-                    _output.WriteLine($"Migration {entry.Id} previously failed and was rolled back:");
-                    _output.WriteLine($"  {failure.Error}");
-                    _output.WriteLine("Nothing was executed. Recover explicitly with:");
-                    _output.WriteLine($"  chetah-db repair --schema {_schemaPath} --migrations {_store.MigrationsDirectory}");
+                    WriteRecoveryHelp(entry, failure);
                     return 1;
                 }
 
@@ -310,33 +348,31 @@ internal sealed class MigrationRunner
                 {
                     if (pending.Length > 1)
                     {
-                        _output.WriteLine(
-                            $"Refusing to repair {entry.Id}: {pending.Length} migrations are pending "
-                            + $"({string.Join(", ", pending.Select(candidate => candidate.Id))}).");
-                        _output.WriteLine(
-                            "Repair is only safe when exactly one migration is pending; a replanned migration "
-                            + "would otherwise absorb the later entries. No migration file was modified.");
+                        WriteRepairRequiresOnePending(entry, pending);
                         return 1;
                     }
 
                     if (!await VerifyPendingRolledBackAsync(connection, journal, entry, cancellationToken))
                         return 1;
-
-                    var repairPlan = await ComputePlanAsync(connection, desired, identities, cancellationToken);
-                    var repaired = await RepairPendingAsync(
-                        connection,
-                        entry,
-                        repairPlan,
-                        desired,
-                        ids,
-                        registry,
-                        cancellationToken);
-                    if (repaired is null)
-                        return 1;
-
-                    applied[repaired.Id] = repaired.Hash;
-                    continue;
                 }
+            }
+
+            if (action == PendingMigrationAction.Repair)
+            {
+                var repairPlan = await ComputePlanAsync(connection, desired, identities, cancellationToken);
+                var repaired = await RepairPendingAsync(
+                    connection,
+                    entry,
+                    repairPlan,
+                    desired,
+                    ids,
+                    registry,
+                    cancellationToken);
+                if (repaired is null)
+                    return 1;
+
+                applied[repaired.Id] = repaired.Hash;
+                continue;
             }
 
             var sql = _store.ReadSql(entry.Id);
@@ -447,6 +483,24 @@ internal sealed class MigrationRunner
         return 0;
     }
 
+    private void WriteRecoveryHelp(JournalEntry entry, MigrationFailure failure)
+    {
+        _output.WriteLine($"Migration {entry.Id} previously failed and was rolled back:");
+        _output.WriteLine($"  {failure.Error}");
+        _output.WriteLine("Nothing was executed. Recover explicitly with:");
+        _output.WriteLine($"  chetah-db repair --schema {_schemaPath} --migrations {_store.MigrationsDirectory}");
+    }
+
+    private void WriteRepairRequiresOnePending(JournalEntry entry, IReadOnlyList<JournalEntry> pending)
+    {
+        _output.WriteLine(
+            $"Refusing to repair {entry.Id}: {pending.Count} migrations are pending "
+            + $"({string.Join(", ", pending.Select(candidate => candidate.Id))}).");
+        _output.WriteLine(
+            "Repair is only safe when exactly one migration is pending; a replanned migration would "
+            + "otherwise absorb the later entries. No migration file was modified.");
+    }
+
     private async Task<int> RepairCoreAsync(
         NpgsqlConnection connection,
         Schema schema,
@@ -479,12 +533,7 @@ internal sealed class MigrationRunner
 
         if (pending.Length > 1)
         {
-            _output.WriteLine(
-                $"Refusing to repair: {pending.Length} migrations are pending "
-                + $"({string.Join(", ", pending.Select(entry => entry.Id))}).");
-            _output.WriteLine(
-                "Repair is only safe when exactly one migration is pending; a replanned migration would "
-                + "otherwise absorb the later entries. No migration file was modified.");
+            WriteRepairRequiresOnePending(pending[0], pending);
             return 1;
         }
 
