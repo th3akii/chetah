@@ -360,14 +360,17 @@ in the format is refused explicitly with its path instead of being ignored.
 
 **Format decisions:**
 
-- Root collections are `tables` (required), `enums`, `sequences`, `views` and
-  `materializedViews`; `public` is the default namespace, and any table or other
-  object may set `"schema"`.
+- Root collections are `tables`, `enums`, `sequences`, `views` and
+  `materializedViews`; all are optional, but at least one object must be
+  declared so an empty file cannot read as "drop everything". `public` is the
+  default namespace, and any table or other object may set `"schema"`.
 - `nullable` omitted means nullable (PostgreSQL's default). Primary key columns
   are implicitly `NOT NULL`; declaring one nullable is an error.
 - Defaults follow one rule: a JSON scalar is a SQL literal, `{ "sql": "..." }` is
   an expression. Strings are quoted and escaped, never parsed as SQL — the old
   "everything is raw SQL" convention silently changed meaning when copied.
+  `"$schema"` doubles as the v1 opt-in: a string default that looks like SQL is
+  refused without it, so a pre-v1 file cannot be reinterpreted silently.
 - Primary keys: `true` on a single column, or a table-level object with `name`
   and `columns`. Column-level and table-level declarations cannot coexist.
 - Unique constraints: `true` on a single column, or table-level objects with

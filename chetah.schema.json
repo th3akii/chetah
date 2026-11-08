@@ -5,15 +5,21 @@
   "description": "The single source of truth for a Chetah database: generated C# models and the SQL migrations diffed from the live PostgreSQL catalog. Comments are allowed in schema files (JSONC). Unknown properties are rejected.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["tables"],
+  "anyOf": [
+    { "required": ["tables"] },
+    { "required": ["enums"] },
+    { "required": ["sequences"] },
+    { "required": ["views"] },
+    { "required": ["materializedViews"] }
+  ],
   "properties": {
     "$schema": {
       "type": "string",
-      "description": "Path or URL of this JSON Schema contract. Editors use it for completion and structural validation."
+      "description": "Path or URL of this JSON Schema contract. Editors use it for completion and validation. It also marks the file as schema v1: without it, a string default that looks like SQL is refused instead of being reinterpreted as a literal."
     },
     "tables": {
       "type": "object",
-      "description": "Tables keyed by their SQL name. This is the only collection the migration engine currently executes.",
+      "description": "Tables keyed by their SQL name. Every collection is optional; at least one object must be declared across them. This is the only collection the migration engine currently executes.",
       "additionalProperties": { "$ref": "#/$defs/table" }
     },
     "enums": {
@@ -129,7 +135,7 @@
           "description": "Omitted means nullable, PostgreSQL's own default. false produces NOT NULL. A primary key column is never nullable."
         },
         "default": {
-          "description": "A literal (string, number, boolean, null) or an explicit SQL expression: { \"sql\": \"now()\" }. Strings are quoted and escaped; they are never interpreted as SQL.",
+          "description": "A literal (string, number, boolean, null) or an explicit SQL expression: { \"sql\": \"now()\" }. Strings are quoted and escaped; they are never interpreted as SQL. Without \"$schema\", a string that looks like SQL ('x', now(), 0, true, a cast or a semicolon) is refused, so a pre-v1 file cannot be silently reinterpreted.",
           "oneOf": [
             { "type": "string" },
             { "type": "number" },

@@ -47,14 +47,21 @@ public static class SchemaParser
             if (root.TryGetProperty("$schema", out var schemaRef) && schemaRef.ValueKind != JsonValueKind.String)
                 throw Error("$schema", "\"$schema\" must be a string path to the JSON Schema contract.");
 
+            // The contract marker doubles as the "this file is schema v1" opt-in. Without it, a
+            // string default that looks like SQL is refused instead of silently reinterpreted.
+            var contractDeclared = root.TryGetProperty("$schema", out _);
+
             var enums = ParseEnums(root);
             var sequences = ParseSequences(root);
             var views = ParseViews(root);
             var materializedViews = ParseMaterializedViews(root);
-            var tables = ParseTables(root, enums);
+            var tables = ParseTables(root, enums, contractDeclared);
 
-            if (tables.Count == 0)
-                throw Error("tables", "Schema must declare at least one table.");
+            // A schema that declares no object at all is almost certainly a mistake, and diffing it
+            // would propose dropping everything. One declared object is enough; the collections
+            // themselves are optional.
+            if (tables.Count == 0 && enums.Count == 0 && sequences.Count == 0 && views.Count == 0 && materializedViews.Count == 0)
+                throw Error("", "Schema must declare at least one table, enum, sequence, view or materialized view.");
 
             var schema = new Schema(tables, enums, sequences, views, materializedViews);
 
@@ -75,7 +82,7 @@ public static class SchemaParser
 
     // ---------------------------------------------------------------- tables
 
-    private static List<TableSchema> ParseTables(JsonElement root, IReadOnlyList<EnumSchema> enums)
+    private static List<TableSchema> ParseTables(JsonElement root, IReadOnlyList<EnumSchema> enums, bool contractDeclared)
     {
         var tables = new List<TableSchema>();
         if (!root.TryGetProperty("tables", out var tablesElement))
@@ -144,7 +151,8 @@ public static class SchemaParser
                 path,
                 columnsElement,
                 enums,
-                primaryKey?.Columns.ToHashSet(StringComparer.Ordinal));
+                primaryKey?.Columns.ToHashSet(StringComparer.Ordinal),
+                contractDeclared);
             if (columns.Count == 0)
                 throw Error(path, $"Table '{tableName}' must define at least one column.");
 
@@ -177,7 +185,8 @@ public static class SchemaParser
         string tablePath,
         JsonElement columnsElement,
         IReadOnlyList<EnumSchema> enums,
-        IReadOnlySet<string>? primaryKeyColumns)
+        IReadOnlySet<string>? primaryKeyColumns,
+        bool contractDeclared)
     {
         var columns = new List<ColumnSchema>();
         var columnNames = new HashSet<string>(StringComparer.Ordinal);
@@ -257,7 +266,7 @@ public static class SchemaParser
             var identitySchema = ParseIdentity(element, path, type);
             var generated = ParseGenerated(element, path);
             var columnDefault = element.TryGetProperty("default", out var defaultElement)
-                ? ParseDefault(defaultElement, $"{path}.default")
+                ? ParseDefault(defaultElement, $"{path}.default", contractDeclared)
                 : null;
 
             if (identitySchema is not null && columnDefault is not null)
@@ -340,9 +349,9 @@ public static class SchemaParser
         return new GeneratedSchema(expression, isStored);
     }
 
-    private static ColumnDefault ParseDefault(JsonElement element, string path) => element.ValueKind switch
+    private static ColumnDefault ParseDefault(JsonElement element, string path, bool contractDeclared) => element.ValueKind switch
     {
-        JsonValueKind.String => ColumnDefault.FromLiteral(SqlStringLiteral(element.GetString()!)),
+        JsonValueKind.String => ParseStringDefault(element.GetString()!, path, contractDeclared),
         JsonValueKind.Number => ColumnDefault.FromLiteral(element.GetRawText()),
         JsonValueKind.True => ColumnDefault.FromLiteral("true"),
         JsonValueKind.False => ColumnDefault.FromLiteral("false"),
@@ -350,6 +359,48 @@ public static class SchemaParser
         JsonValueKind.Object => ParseSqlDefault(element, path),
         _ => throw Error(path,
             "\"default\" must be a string, number, boolean, null, or { \"sql\": \"...\" } expression."),
+    };
+
+    /// <summary>A string default is a literal. A pre-v1 file used raw SQL here, so a value that
+    /// looks like SQL is refused unless the file declares the contract: converting a timestamp
+    /// default from <c>now()</c> to the text <c>'now()'</c> is exactly the silent reinterpretation
+    /// the format change must not perform.</summary>
+    private static ColumnDefault ParseStringDefault(string value, string path, bool contractDeclared)
+    {
+        if (!contractDeclared && LooksLikeSql(value))
+        {
+            throw Error(path,
+                $"The string default \"{value}\" looks like a pre-v1 SQL expression. In this format a string is a "
+                + "literal: write { \"sql\": \"...\" } for SQL, or add \"$schema\" to confirm the new format. "
+                + "See the schema guide's conversion table.");
+        }
+
+        return ColumnDefault.FromLiteral(SqlStringLiteral(value));
+    }
+
+    /// <summary>Conservative shape test for values that were SQL in the previous format: quoted
+    /// literals, booleans, bare numbers, function calls, casts and statements.</summary>
+    private static bool LooksLikeSql(string value)
+    {
+        var trimmed = value.Trim();
+        if (trimmed.Length == 0)
+            return false;
+
+        if (trimmed[0] == '\''
+            || bool.TryParse(trimmed, out _)
+            || double.TryParse(trimmed, NumberStyles.Float, CultureInfo.InvariantCulture, out _)
+            || trimmed.Contains('(')
+            || trimmed.Contains(';')
+            || trimmed.Contains("::", StringComparison.Ordinal))
+            return true;
+
+        return SqlKeywordDefaults.Contains(trimmed);
+    }
+
+    private static readonly HashSet<string> SqlKeywordDefaults = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "null", "current_date", "current_time", "current_timestamp", "localtime", "localtimestamp",
+        "current_user", "session_user", "user",
     };
 
     private static ColumnDefault ParseSqlDefault(JsonElement element, string path)

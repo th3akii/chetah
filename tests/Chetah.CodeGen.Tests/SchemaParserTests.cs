@@ -584,7 +584,7 @@ public class SchemaParserTests
     [InlineData("[1, 2]", "root must be an object")]
     [InlineData("""{ "nope": true }""", "Unknown property 'nope'")]
     [InlineData("""{ "tables": [] }""", "\"tables\" must be an object")]
-    [InlineData("""{ "tables": {} }""", "at least one table")]
+    [InlineData("""{ "tables": {} }""", "at least one")]
     [InlineData("""{ "tables": { "t": [] } }""", "must be an object")]
     [InlineData("""{ "tables": { "t": { "name": "t", "columns": { "id": { "type": "integer" } } } } }""", "Unknown property 'name'")]
     [InlineData("""{ "tables": { "my table": { "columns": { "id": { "type": "integer" } } } } }""", "valid C# accessor class name")]
@@ -594,6 +594,46 @@ public class SchemaParserTests
     [InlineData("""{ "tables": { "t": { "columns": {} } } }""", "at least one column")]
     [InlineData("""{ "tables": { "t": { "columns": { "7id": { "type": "integer" } } } } }""", "plain identifier")]
     public void RejectsMalformedDocuments(string json, string expected) => AssertRejected(json, expected);
+
+    [Fact]
+    public void EveryCollectionIsOptional()
+    {
+        var schema = Parse("""{ "sequences": { "invoice_numbers": {} } }""");
+
+        Assert.Empty(schema.Tables);
+        Assert.Equal("invoice_numbers", schema.Sequences!.Single().Name);
+    }
+
+    [Fact]
+    public void AnEmptySchemaIsRejected() => AssertRejected("{}", "at least one");
+
+    [Theory]
+    [InlineData("now()")]
+    [InlineData("'pending'")]
+    [InlineData("0")]
+    [InlineData("true")]
+    [InlineData("CURRENT_TIMESTAMP")]
+    [InlineData("nextval('s')")]
+    public void RejectsLegacyLookingStringDefaultsWithoutTheContract(string value)
+    {
+        AssertRejected($$"""
+            { "tables": { "t": { "columns": { "c": { "type": "text", "default": "{{value}}" } } } } }
+            """, "pre-v1 SQL expression");
+    }
+
+    [Fact]
+    public void AcceptsExpressionLookingLiteralsWhenTheContractIsDeclared()
+    {
+        var column = Parse("""
+            { "$schema": "./chetah.schema.json", "tables": { "t": { "columns": {
+              "c": { "type": "text", "default": "now()" } } } } }
+            """).Tables[0].Columns.Single();
+
+        // The contract marker says "this is v1"; now() is a literal here, and SQL is written as
+        // { "sql": "now()" } instead.
+        Assert.Equal("'now()'", column.Default!.Sql);
+        Assert.Equal(DefaultKind.Literal, column.Default.Kind);
+    }
 
     [Fact]
     public void RejectsInvalidJson()

@@ -36,8 +36,16 @@ public class SchemaContractTests
         Assert.Equal(
             ["$schema", "enums", "materializedViews", "sequences", "tables", "views"],
             Properties(Contract()));
-        Assert.Equal(["tables"], Required(Contract()));
+        Assert.Empty(Required(Contract()));
         Assert.False(Contract().GetProperty("additionalProperties").GetBoolean());
+
+        // Every collection is optional, but at least one must be declared: the contract expresses
+        // the same rule as the parser, so an empty schema is invalid in both.
+        Assert.Equal(
+            ["tables", "enums", "sequences", "views", "materializedViews"],
+            Contract().GetProperty("anyOf").EnumerateArray()
+                .Select(variant => Assert.Single(variant.GetProperty("required").EnumerateArray()).GetString()!)
+                .ToArray());
     }
 
     [Theory]
