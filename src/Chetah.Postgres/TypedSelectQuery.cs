@@ -145,20 +145,132 @@ public sealed class TypedSelectQuery<T>
     private static SqlExpression And(SqlExpression? left, SqlExpression right) => left is null ? right
         : new SqlBinary(SqlBinaryOperator.And, left, right, typeof(bool), false);
 
-    public CompiledQuery Compile()
+    /// <summary>True when the query selects whole entities, so the generated name-based mapper applies.</summary>
+    private bool IsEntity => _fullEntity && _query.GroupKeys.Count == 0;
+
+    public CompiledQuery Compile() => CompileQuery(_query);
+
+    private CompiledQuery CompileQuery(SelectQuery query) => IsEntity
+        ? PostgresCompiler.Compile(query)
+        : PostgresCompiler.Compile(query with { Projection = ProjectionMapper.Plan(_shape).Items });
+
+    private Task<IReadOnlyList<T>> ExecuteAsync(CompiledQuery compiled, CancellationToken cancellationToken)
     {
-        if (_fullEntity && _query.GroupKeys.Count == 0) return PostgresCompiler.Compile(_query);
-        var plan = ProjectionMapper.Plan(_shape);
-        return PostgresCompiler.Compile(_query with { Projection = plan.Items });
+        if (IsEntity)
+            return _db.ExecuteAsync(compiled, reader => (T)((EntityShape)_shape).Binding.Map(reader), cancellationToken);
+        return _db.ExecuteAsync(compiled, ProjectionMapper.CreateMapper<T>(ProjectionMapper.Plan(_shape)), cancellationToken);
     }
 
-    public Task<IReadOnlyList<T>> ToListAsync(CancellationToken cancellationToken = default)
+    public Task<IReadOnlyList<T>> ToListAsync(CancellationToken cancellationToken = default) =>
+        ExecuteAsync(Compile(), cancellationToken);
+
+    /// <summary>
+    /// Caps the rows read without overriding a smaller caller limit, so pagination stays part of
+    /// the query: <c>Limit(0)</c> still yields no row and <c>Limit(1)</c> still bounds a Single.
+    /// </summary>
+    private SelectQuery Capped(int rows) => _query with { Limit = Math.Min(rows, _query.Limit ?? rows) };
+
+    internal CompiledQuery CompileFirst() => CompileQuery(Capped(1));
+
+    internal CompiledQuery CompileSingle() => CompileQuery(Capped(2));
+
+    public async Task<T> FirstAsync(CancellationToken cancellationToken = default)
     {
-        if (_fullEntity && _query.GroupKeys.Count == 0 && _shape is EntityShape entity)
-            return _db.ExecuteAsync(PostgresCompiler.Compile(_query), reader => (T)entity.Binding.Map(reader), cancellationToken);
-        var plan = ProjectionMapper.Plan(_shape);
-        var compiled = PostgresCompiler.Compile(_query with { Projection = plan.Items });
-        var mapper = ProjectionMapper.CreateMapper<T>(plan);
-        return _db.ExecuteAsync(compiled, mapper, cancellationToken);
+        var rows = await ExecuteAsync(CompileFirst(), cancellationToken);
+        if (rows.Count == 0)
+            throw new InvalidOperationException("The query returned no rows; FirstAsync requires at least one.");
+        return rows[0];
+    }
+
+    public async Task<T?> FirstOrDefaultAsync(CancellationToken cancellationToken = default)
+    {
+        var rows = await ExecuteAsync(CompileFirst(), cancellationToken);
+        return rows.Count == 0 ? default : rows[0];
+    }
+
+    public async Task<T> SingleAsync(CancellationToken cancellationToken = default)
+    {
+        var rows = await ExecuteAsync(CompileSingle(), cancellationToken);
+        return rows.Count switch
+        {
+            1 => rows[0],
+            0 => throw new InvalidOperationException("The query returned no rows; SingleAsync requires exactly one."),
+            _ => throw new InvalidOperationException("The query returned more than one row; SingleAsync requires exactly one."),
+        };
+    }
+
+    public async Task<T?> SingleOrDefaultAsync(CancellationToken cancellationToken = default)
+    {
+        var rows = await ExecuteAsync(CompileSingle(), cancellationToken);
+        return rows.Count switch
+        {
+            0 => default,
+            1 => rows[0],
+            _ => throw new InvalidOperationException("The query returned more than one row; SingleOrDefaultAsync requires at most one."),
+        };
+    }
+
+    /// <summary>
+    /// Probe statement capped at one row. Everything that decides whether a result row exists is
+    /// kept — predicate, joins, DISTINCT, grouping, HAVING, LIMIT, OFFSET — while ordering is dropped
+    /// because it cannot create or remove a row. A plain query can answer with one constant output;
+    /// DISTINCT cannot, because collapsing many distinct rows into one constant row makes a positive
+    /// OFFSET discard a row the real query still returns, so DISTINCT keeps its own output.
+    /// </summary>
+    internal CompiledQuery CompileAny()
+    {
+        var capped = Capped(1) with { Orderings = [] };
+        if (!_query.IsDistinct)
+            return PostgresCompiler.Compile(capped with { Projection = [new SelectItem(new SqlValue(1, typeof(int)), null)] });
+
+        // Parameterless grouped entity: the group keys are the distinct output DISTINCT would see.
+        if (_fullEntity && capped.GroupKeys.Count > 0)
+            return PostgresCompiler.Compile(capped with
+            {
+                Projection = capped.GroupKeys.Select(key => new SelectItem(key, null)).ToArray(),
+            });
+
+        return CompileQuery(capped);
+    }
+
+    public async Task<bool> AnyAsync(CancellationToken cancellationToken = default)
+    {
+        var rows = await _db.ExecuteAsync<bool>(CompileAny(), _ => true, cancellationToken);
+        return rows.Count != 0;
+    }
+
+    /// <summary>
+    /// Count statement: the query's joins and filters, with ordering and paging removed because
+    /// COUNT observes neither. DISTINCT and grouping would need a wrapped subquery, so they are
+    /// refused rather than answered with the wrong number; paging is clamped by
+    /// <see cref="CountAsync"/> after the count comes back.
+    /// </summary>
+    internal CompiledQuery CompileCount() => PostgresCompiler.CompileCount(_query with
+    {
+        Projection = null,
+        Orderings = [],
+        Limit = null,
+        Offset = null,
+    });
+
+    public async Task<long> CountAsync(CancellationToken cancellationToken = default)
+    {
+        if (_query.IsDistinct)
+            throw new InvalidOperationException(
+                "CountAsync cannot count DISTINCT rows without a subquery; drop DISTINCT or count the distinct values at the caller.");
+        if (_query.GroupKeys.Count > 0)
+            throw new InvalidOperationException(
+                "CountAsync cannot count groups without a subquery; select Sql.Count() per group instead.");
+
+        var rows = await _db.ExecuteAsync(CompileCount(), reader => reader.GetInt64(0), cancellationToken);
+        // COUNT(*) always yields exactly one row, so the paging clamp is local arithmetic.
+        var total = rows.Count == 1
+            ? rows[0]
+            : throw new InvalidOperationException("A COUNT statement must return exactly one row.");
+        if (_query.Offset is int offset)
+            total = Math.Max(total - offset, 0);
+        if (_query.Limit is int limit)
+            total = Math.Min(total, limit);
+        return total;
     }
 }

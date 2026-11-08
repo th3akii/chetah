@@ -188,6 +188,55 @@ public class Stage2LiveTests
         Assert.Equal(new TestWidgets(1, null, 4000000000L, true, null, new DateTime(2020, 1, 2)), widget);
     }
 
+    [PostgresFact]
+    public async Task SingleRowExistenceAndCountTerminals_ReturnExpectedValues()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var users = fixture.Db.Select<Stage2User>();
+        var orders = fixture.Db.Select<Stage2Order>();
+
+        // Users are 1 Ada 36, 2 Grace 45, 3 Linus NULL, 4 Ada 17.
+        Assert.Equal(1, (await users.OrderBy(user => user.Id).FirstAsync()).Id);
+        Assert.Equal(4, (await users.OrderByDescending(user => user.Id).FirstAsync()).Id);
+        Assert.Null(await users.Where(user => user.Id > 100).FirstOrDefaultAsync());
+        Assert.Null(await users.Limit(0).FirstOrDefaultAsync());
+        await Assert.ThrowsAsync<InvalidOperationException>(() => users.Where(user => user.Id > 100).FirstAsync());
+
+        Assert.Equal("Ada", (await users.Where(user => user.Id == 1).SingleAsync()).Name);
+        Assert.Null(await users.Where(user => user.Id > 100).SingleOrDefaultAsync());
+        await Assert.ThrowsAsync<InvalidOperationException>(() => users.Where(user => user.Id > 100).SingleAsync());
+        await Assert.ThrowsAsync<InvalidOperationException>(() => users.Where(user => user.Age >= 18).SingleAsync());
+        await Assert.ThrowsAsync<InvalidOperationException>(() => users.Where(user => user.Age >= 18).SingleOrDefaultAsync());
+        // A caller limit still bounds what Single sees: 2 rows match, Limit(1) leaves one.
+        Assert.Equal(1, (await users.Where(user => user.Age >= 18).OrderBy(user => user.Id).Limit(1).SingleAsync()).Id);
+
+        Assert.True(await users.Where(user => user.Age >= 18).AnyAsync());
+        Assert.False(await users.Where(user => user.Id > 100).AnyAsync());
+        Assert.False(await users.Limit(0).AnyAsync());
+        Assert.False(await users.OrderBy(user => user.Id).Offset(4).AnyAsync());
+        Assert.True(await users.Offset(3).AnyAsync());
+        Assert.True(await users.Select(user => user.Name).Distinct().AnyAsync());
+        // DISTINCT output still decides existence: three names exist, so OFFSET 1 leaves rows and OFFSET 3 does not.
+        Assert.True(await users.Select(user => user.Name).Distinct().Offset(1).AnyAsync());
+        Assert.False(await users.Select(user => user.Name).Distinct().Offset(3).AnyAsync());
+
+        Assert.Equal(4L, await users.CountAsync());
+        Assert.Equal(2L, await users.Where(user => user.Age >= 18).CountAsync());
+        Assert.Equal(0L, await users.Where(user => user.Id > 100).CountAsync());
+        // Paging is part of the query's result set, so the count is clamped to it.
+        Assert.Equal(2L, await users.OrderBy(user => user.Id).Limit(2).CountAsync());
+        Assert.Equal(1L, await users.OrderBy(user => user.Id).Offset(3).CountAsync());
+        Assert.Equal(0L, await users.Offset(10).CountAsync());
+        Assert.Equal(2L, await users.Limit(2).Offset(1).CountAsync());
+        // Filters and joins decide which rows are counted.
+        Assert.Equal(3L, await users.Where(user => user.Age != null).CountAsync());
+        Assert.Equal(6L, await users.LeftJoin<Stage2Order>((user, order) => user.Id == order.UserId).CountAsync());
+
+        // DISTINCT and grouped counts are refused rather than answered with the wrong number.
+        await Assert.ThrowsAsync<InvalidOperationException>(() => users.Select(user => user.Name).Distinct().CountAsync());
+        await Assert.ThrowsAsync<InvalidOperationException>(() => orders.GroupBy(order => order.UserId).CountAsync());
+    }
+
     public sealed record NullableRow(string? Value);
 
     private sealed class Fixture : IAsyncDisposable

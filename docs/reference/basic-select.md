@@ -130,6 +130,14 @@ The compiler is pure: same input query, same output `CompiledQuery`, no
 connection involved. That property is why tests can assert exact SQL text and
 parameter values without a database.
 
+`PostgresCompiler.CompileCount` is the count entry point used by
+`CountAsync`: `SELECT COUNT(*)` over the same `FROM`/`JOIN`/`WHERE`, since
+`COUNT(*)` only ever observes the rows those clauses produce. `DISTINCT`,
+`GROUP BY`/`HAVING`, `ORDER BY` and `LIMIT`/`OFFSET` are therefore refused
+rather than silently dropped — expressing them correctly would need a wrapped
+subquery, which this milestone does not add. Paging is applied to the returned
+number by the typed layer instead.
+
 ## Step 3 — execute
 
 ```csharp
@@ -248,6 +256,14 @@ valid), `Distinct`, explicit INNER/LEFT joins (self and repeated joins), and
 grouped queries with `GROUP BY`/`HAVING` plus `Sql.Count/Sum/Average/Min/Max`.
 No SQL string building without compilation: everything goes through
 `Compile`/`ExecuteAsync` with positional parameters.
+
+Single-row and aggregate terminals are thin layers over the same compiler:
+`FirstAsync`/`FirstOrDefaultAsync` cap at `LIMIT 1`, `SingleAsync`/
+`SingleOrDefaultAsync` at `LIMIT 2` (a smaller caller `Limit` wins), `AnyAsync`
+selects one constant row at `LIMIT 1`, and `CountAsync` compiles
+`SELECT COUNT(*)` over the query's joins and filters. `CountAsync` refuses
+`DISTINCT` and grouped queries, and applies the query's `LIMIT`/`OFFSET` to the
+resulting number — see [`typed-models.md`](typed-models.md#step-4--typed-queries).
 
 Not implemented, not hidden: `INSERT`/`UPDATE`/`DELETE`, transactions,
 migrations, RIGHT/FULL/CROSS joins and automatic relationship loading (Stage 5

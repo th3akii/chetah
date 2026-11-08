@@ -10,7 +10,8 @@ the single source of truth that produces C# models **and** table metadata, a CLI
 generator emits one deterministic source file, and the Postgres
 executor returns strongly typed records. Since Stage 2 those typed models also
 drive `Where`/`Select`/join/group chains (see the "Typed queries" step and
-[`decisions.md`](../project/decisions.md) D004).
+[`decisions.md`](../project/decisions.md) D004). For a task-oriented walkthrough
+of the query API, see [`../guide/querying.md`](../guide/querying.md).
 
 ```
 chetah-schema.json → Chetah.CodeGen → Chetah.Schema.g.cs → db.Select<T>()… → List<User>
@@ -201,6 +202,39 @@ var totals = await db.Select<Order>()
 // Or compile without executing (same contract as Compile on the compiler layer):
 var compiled = db.Select<User>().Where(u => u.Name.StartsWith("A")).Compile();
 ```
+
+Terminal operators read what they need instead of the whole result set. They take
+the same chain — filters, projections, ordering and paging all still apply:
+
+```csharp
+// Asks the database for one row (LIMIT 1); throws InvalidOperationException when nothing matches.
+var first = await db.Select<User>().Where(u => u.Age >= 18).OrderBy(u => u.Age).FirstAsync();
+var maybe = await db.Select<User>().Where(u => u.Id == 99).FirstOrDefaultAsync();   // null
+
+// Asks for at most two rows (LIMIT 2) so "more than one" is detectable without loading the rest.
+var only = await db.Select<User>().Where(u => u.Id == 1).SingleAsync();             // throws on 0 or 2+
+var absent = await db.Select<User>().Where(u => u.Id == 99).SingleOrDefaultAsync(); // null; throws on 2+
+
+// One constant output row, capped at one row: existence without reading any table column.
+var any = await db.Select<User>().Where(u => u.Age >= 18).AnyAsync();
+
+// SELECT COUNT(*) over the query's joins and filters, clamped by its LIMIT/OFFSET afterwards.
+var count = await db.Select<User>().Where(u => u.Age >= 18).CountAsync();           // long
+```
+
+- `First`/`Single` add `LIMIT 1`/`LIMIT 2`, but a smaller `Limit` already on the
+  query wins: pagination is part of the query, so `Limit(0)` still reads nothing
+  and `Limit(1)` still bounds what `Single` can see. `Offset` is preserved.
+- `FirstAsync` throws when no row matches. `SingleAsync` throws on zero or more
+  than one. `SingleOrDefaultAsync` throws only on more than one, otherwise
+  returns `default`. `AnyAsync` never materializes rows.
+- `AnyAsync` keeps every clause that decides whether a row exists (filter, joins,
+  `Distinct`, grouping, `HAVING`, paging) and drops `ORDER BY`, which cannot
+  create or remove a row.
+- `CountAsync` cannot observe `DISTINCT` or grouping with a plain `COUNT(*)`, so
+  those two chains are refused explicitly rather than answered with the count of
+  rows read (which is what the wrong number would be). Count groups with
+  `Select(… Sql.Count())` instead.
 
 Behavior contract (enforced before any connection opens):
 

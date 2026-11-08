@@ -26,6 +26,29 @@ public static class PostgresCompiler
         return compilation.Materialize();
     }
 
+    /// <summary>
+    /// Compiles the query into a single-row <c>SELECT COUNT(*) FROM … JOIN … WHERE …</c> statement.
+    /// <c>COUNT(*)</c> only observes the rows FROM/JOIN/WHERE produce, so clauses that reshape the
+    /// row set afterwards (DISTINCT, GROUP BY, HAVING, ORDER BY, LIMIT, OFFSET) are refused rather
+    /// than silently ignored — expressing them correctly needs a wrapped subquery, which this
+    /// milestone deliberately does not add. Paging is applied by the caller instead.
+    /// </summary>
+    internal static CompiledQuery CompileCount(SelectQuery query)
+    {
+        if (query is null)
+            throw new ArgumentNullException(nameof(query));
+
+        if (query.Projection is not null || query.IsDistinct || query.GroupKeys.Count > 0
+            || query.Having is not null || query.Orderings.Count > 0
+            || query.Limit is not null || query.Offset is not null)
+            throw new NotSupportedException(
+                "COUNT cannot be combined with a projection, DISTINCT, GROUP BY, HAVING, ORDER BY, LIMIT or OFFSET.");
+
+        var compilation = new Compilation(query, countOnly: true);
+        compilation.Execute();
+        return compilation.Materialize();
+    }
+
     /// <summary>Quotes an identifier so embedded quotes and reserved words are safe to use.</summary>
     internal static string QuoteIdentifier(string identifier) =>
         $"\"{identifier.Replace("\"", "\"\"")}\"";
@@ -62,6 +85,8 @@ public static class PostgresCompiler
         };
 
         private readonly SelectQuery _query;
+        /// <summary>Count mode renders <c>SELECT COUNT(*)</c> and drops every clause COUNT cannot observe.</summary>
+        private readonly bool _countOnly;
         private readonly StringBuilder _sql = new();
         private readonly List<CompiledParameter> _parameters = new();
         /// <summary>Source id → table. Source 0 is the base table; each join supplies the next id.</summary>
@@ -74,7 +99,11 @@ public static class PostgresCompiler
         /// <summary>True while rendering SELECT items, GROUP BY, HAVING or ORDER BY, where group-key subtrees must reuse their first rendered SQL.</summary>
         private bool _captureGroupKeys;
 
-        internal Compilation(SelectQuery query) => _query = query;
+        internal Compilation(SelectQuery query, bool countOnly = false)
+        {
+            _query = query;
+            _countOnly = countOnly;
+        }
 
         internal void Execute()
         {
@@ -676,20 +705,29 @@ public static class PostgresCompiler
 
         private void RenderStatement()
         {
-            _sql.Append("SELECT ");
-            if (_query.IsDistinct)
-                _sql.Append("DISTINCT ");
-
-            if (_query.Projection is { } projection)
+            if (_countOnly)
             {
-                _captureGroupKeys = true;
-                _sql.Append(string.Join(", ", projection.Select((item, index) => RenderSelectItem(item, index))));
-                _captureGroupKeys = false;
+                // Only FROM/JOIN/WHERE survive into the count; every other clause is refused up front
+                // because COUNT(*) cannot observe it (see CompileCount).
+                _sql.Append("SELECT COUNT(*)");
             }
             else
-                _sql.Append(string.Join(
-                    ", ",
-                    _query.Table.Columns.Select(c => $"\"t0\".{QuoteIdentifier(c.Name)}")));
+            {
+                _sql.Append("SELECT ");
+                if (_query.IsDistinct)
+                    _sql.Append("DISTINCT ");
+
+                if (_query.Projection is { } projection)
+                {
+                    _captureGroupKeys = true;
+                    _sql.Append(string.Join(", ", projection.Select((item, index) => RenderSelectItem(item, index))));
+                    _captureGroupKeys = false;
+                }
+                else
+                    _sql.Append(string.Join(
+                        ", ",
+                        _query.Table.Columns.Select(c => $"\"t0\".{QuoteIdentifier(c.Name)}")));
+            }
 
             _sql.Append(" FROM ")
                 .Append(QuoteIdentifier(_query.Table.Name))
@@ -701,6 +739,9 @@ public static class PostgresCompiler
 
             if (_query.Predicate is { } predicate)
                 _sql.Append(" WHERE ").Append(RenderExpression(predicate));
+
+            if (_countOnly)
+                return;
 
             if (_query.GroupKeys.Count > 0)
             {

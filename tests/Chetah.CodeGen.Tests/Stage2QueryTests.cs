@@ -357,6 +357,103 @@ public class Stage2QueryTests
         Assert.Throws<NotSupportedException>(() => innerJoined.Where(row => row.Right == null));
     }
 
+    [Fact]
+    public void SingleRowTerminalsCapWithoutChangingFiltersOrderingOrPaging()
+    {
+        var page = Database().Select<Stage2User>().Where(user => user.Age >= 18)
+            .OrderByDescending(user => user.Age).Offset(1);
+
+        var first = page.CompileFirst();
+        var single = page.CompileSingle();
+
+        // Only the row cap is added, last and still parameterized; the caller's clauses are untouched.
+        Assert.Contains("ORDER BY", first.Sql);
+        Assert.EndsWith("LIMIT $2 OFFSET $3", first.Sql);
+        Assert.EndsWith("LIMIT $2 OFFSET $3", single.Sql);
+        Assert.Equal(new object?[] { 18, 1, 1 }, first.Parameters.Select(parameter => parameter.Value));
+        Assert.Equal(new object?[] { 18, 2, 1 }, single.Parameters.Select(parameter => parameter.Value));
+    }
+
+    [Fact]
+    public void SingleRowTerminalsNeverOverrideASmallerCallerLimit()
+    {
+        // A LIMIT already on the query bounds how many rows Single may ever see, and Limit(0) still means none.
+        Assert.EndsWith("LIMIT $1", Database().Select<Stage2User>().Limit(1).CompileFirst().Sql);
+        Assert.Equal(1, Assert.Single(Database().Select<Stage2User>().Limit(1).CompileSingle().Parameters).Value);
+        Assert.Equal(0, Assert.Single(Database().Select<Stage2User>().Limit(0).CompileFirst().Parameters).Value);
+        Assert.Equal(2, Assert.Single(Database().Select<Stage2User>().CompileSingle().Parameters).Value);
+    }
+
+    [Fact]
+    public void AnyProbesOneConstantRowAndKeepsExistenceClauses()
+    {
+        var probe = Database().Select<Stage2Order>().Where(order => order.Amount >= 10)
+            .GroupBy(order => order.UserId).Having(order => Sql.Sum(order.Amount) >= 20)
+            .OrderBy(order => order.UserId).CompileAny();
+
+        Assert.StartsWith("SELECT $1 AS \"c0\" FROM", probe.Sql);
+        Assert.Contains("GROUP BY", probe.Sql);
+        Assert.Contains("HAVING", probe.Sql);
+        // Ordering cannot create or remove a row, so the probe does not pay for it.
+        Assert.DoesNotContain("ORDER BY", probe.Sql);
+        Assert.EndsWith("LIMIT $4", probe.Sql);
+        Assert.Equal(new object?[] { 1, 10, 20, 1 }, probe.Parameters.Select(parameter => parameter.Value));
+
+        var distinct = Database().Select<Stage2User>().Select(user => user.Name).Distinct().CompileAny();
+        Assert.StartsWith("SELECT DISTINCT \"t0\".\"name\" AS \"c0\"", distinct.Sql);
+        // The probe constant binds first, then the capped LIMIT.
+        Assert.Equal(new object?[] { 1, 0 }, Database().Select<Stage2User>().Limit(0).CompileAny()
+            .Parameters.Select(parameter => parameter.Value));
+    }
+
+    [Fact]
+    public void AnyKeepsDistinctOutputSoOffsetSeesEveryDistinctRow()
+    {
+        // Collapsing the distinct output to one constant would make OFFSET 1 look empty.
+        var projected = Database().Select<Stage2User>().Select(user => user.Name).Distinct().Offset(1).CompileAny();
+        Assert.StartsWith("SELECT DISTINCT \"t0\".\"name\" AS \"c0\"", projected.Sql);
+        Assert.EndsWith("LIMIT $1 OFFSET $2", projected.Sql);
+        Assert.Equal(new object?[] { 1, 1 }, projected.Parameters.Select(parameter => parameter.Value));
+
+        // Unprojected DISTINCT keeps the base columns it distincts on.
+        Assert.StartsWith("SELECT DISTINCT \"t0\".\"id\", \"t0\".\"name\", \"t0\".\"age\"",
+            Database().Select<Stage2User>().Distinct().CompileAny().Sql);
+
+        // A grouped entity DISTINCTs over its group keys.
+        Assert.StartsWith("SELECT DISTINCT \"t0\".\"id\" AS \"c0\"",
+            Database().Select<Stage2User>().GroupBy(user => user.Id).Distinct().CompileAny().Sql);
+    }
+
+    [Fact]
+    public void CountReadsOnlyFromJoinsAndFilters()
+    {
+        var counted = Database().Select<Stage2User>().Where(user => user.Age >= 18)
+            .OrderBy(user => user.Id).Limit(5).Offset(2).CompileCount();
+
+        // COUNT(*) cannot observe ordering, DISTINCT, grouping or paging, so the statement carries
+        // none of them; the caller clamps paging on the returned number instead.
+        Assert.Equal(
+            "SELECT COUNT(*) FROM \"users\" AS \"t0\" WHERE (\"t0\".\"age\" >= $1) IS TRUE",
+            counted.Sql);
+        Assert.Equal(new object?[] { 18 }, counted.Parameters.Select(parameter => parameter.Value));
+
+        var joined = Database().Select<Stage2Order>().Where(order => order.Amount >= 10)
+            .InnerJoin<Stage2User>((order, user) => order.UserId == user.Id).CompileCount();
+        Assert.Contains("INNER JOIN", joined.Sql);
+        Assert.Contains("SELECT COUNT(*) FROM \"orders\" AS \"t0\"", joined.Sql);
+        Assert.Equal(new object?[] { 10 }, joined.Parameters.Select(parameter => parameter.Value));
+    }
+
+    [Fact]
+    public async Task CountRefusesDistinctAndGrouping()
+    {
+        // Both would need a wrapped subquery; returning the ungrouped count instead would be wrong.
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Database().Select<Stage2User>()
+            .Select(user => user.Name).Distinct().CountAsync());
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Database().Select<Stage2Order>()
+            .GroupBy(order => order.UserId).CountAsync());
+    }
+
     public sealed record UserLabel(int Id, string Name);
     public sealed class LabelDto { public string? Name { get; init; } }
     private sealed class CountingGetter

@@ -424,3 +424,48 @@ in the format is refused explicitly with its path instead of being ignored.
   synthesized names), so existing databases see no churn.
 - Revisit trigger: when one of the refused features is needed end to end, extend
   `SchemaCatalog`/`SchemaDiff` for that feature and remove only its refusal.
+
+## D009 — Terminal operators read only the rows they need
+
+**Date:** 2026-11-08 (read API follow-up to Stage 2)
+
+**Decision:** `TypedSelectQuery<T>` gained `FirstAsync`, `FirstOrDefaultAsync`,
+`SingleAsync`, `SingleOrDefaultAsync`, `AnyAsync` and `CountAsync`. Each is a
+thin layer over the existing compiler and executor: no new query objects, no new
+expression nodes, no client-side evaluation.
+
+**Details:**
+
+- `First*` adds `LIMIT 1`, `Single*` adds `LIMIT 2` (two rows are enough to
+  prove "more than one" without reading the rest). A smaller `Limit` already on
+  the query wins, because pagination is part of the query: `Limit(0)` still
+  yields no row and `Limit(1)` still bounds `Single`. `Offset`, filters,
+  projections and ordering are untouched.
+- `Any` compiles to one constant output row capped at one row, keeping every
+  clause that decides whether a row exists — predicate, joins, `DISTINCT`,
+  grouping, `HAVING`, paging — and dropping `ORDER BY`, which cannot create or
+  remove a row.
+- `Count` compiles to `SELECT COUNT(*)` over the same `FROM`/`JOIN`/`WHERE`
+  (`PostgresCompiler.CompileCount`). `COUNT(*)` observes only the rows those
+  clauses produce, so `DISTINCT`, `GROUP BY`/`HAVING`, `ORDER BY` and
+  `LIMIT`/`OFFSET` are refused instead of being silently ignored. The query's
+  `LIMIT`/`OFFSET` are applied to the returned number in code.
+- A missing row is `InvalidOperationException` (as in LINQ); `*OrDefault`
+  returns `default`.
+
+**Why:**
+
+- Reading `ToListAsync().First()` pulls every row and changes behavior whenever
+  the caller's limit is smaller than the data.
+- Counting through a wrapped subquery (`SELECT COUNT(*) FROM (…)`) would support
+  `DISTINCT` and grouping, but subqueries are out of scope for this milestone;
+  returning the ungrouped count instead would answer a different question.
+  Refusing is the honest half-implementation.
+- Keeping the terminal methods over the same `CompiledQuery`/`ExecuteAsync`
+  path preserves parameterization, compiled mappers and cancellation.
+
+**Consequences:**
+
+- `CountAsync` returns `long`, matching `Sql.Count()`.
+- Revisit trigger: when a caller needs `Distinct().Count()` or a group count,
+  add a counted derived table in `CompileCount` rather than a second counter.
