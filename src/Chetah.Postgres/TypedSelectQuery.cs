@@ -188,6 +188,12 @@ public sealed class TypedSelectQuery<T>
         return rows.Count == 0 ? default : rows[0];
     }
 
+    /// <summary>
+    /// Returns the query's only row, throwing when it yields none or more than one. Uniqueness is
+    /// checked within the query's own result — pagination included — so <c>Limit(1).SingleAsync()</c>
+    /// reads at most one row and cannot detect duplicates the query already limited away. Drop the
+    /// <c>Limit</c> when uniqueness across all matching rows is what matters.
+    /// </summary>
     public async Task<T> SingleAsync(CancellationToken cancellationToken = default)
     {
         var rows = await ExecuteAsync(CompileSingle(), cancellationToken);
@@ -199,6 +205,11 @@ public sealed class TypedSelectQuery<T>
         };
     }
 
+    /// <summary>
+    /// Returns the query's row, or <c>default</c> when it yields none; throws only when it yields
+    /// more than one. Like <see cref="SingleAsync"/>, uniqueness is judged within the query's own
+    /// result, pagination included.
+    /// </summary>
     public async Task<T?> SingleOrDefaultAsync(CancellationToken cancellationToken = default)
     {
         var rows = await ExecuteAsync(CompileSingle(), cancellationToken);
@@ -240,37 +251,30 @@ public sealed class TypedSelectQuery<T>
     }
 
     /// <summary>
-    /// Count statement: the query's joins and filters, with ordering and paging removed because
-    /// COUNT observes neither. DISTINCT and grouping would need a wrapped subquery, so they are
-    /// refused rather than answered with the wrong number; paging is clamped by
-    /// <see cref="CountAsync"/> after the count comes back.
+    /// Count statement for the query as a whole. The compiler counts a derived table when DISTINCT,
+    /// grouping or paging decide how many rows come back, and counts the base row set directly when
+    /// they cannot (it drops ordering either way, since order never changes a count). A grouped query
+    /// without an explicit projection is counted over its group keys, a lawful grouped projection.
     /// </summary>
-    internal CompiledQuery CompileCount() => PostgresCompiler.CompileCount(_query with
+    internal CompiledQuery CompileCount()
     {
-        Projection = null,
-        Orderings = [],
-        Limit = null,
-        Offset = null,
-    });
+        if (IsEntity)
+            return PostgresCompiler.CompileCount(_query);
+        if (_fullEntity)
+            return PostgresCompiler.CompileCount(_query with
+            {
+                Projection = _query.GroupKeys.Select(key => new SelectItem(key, null)).ToArray(),
+            });
+
+        // DISTINCT counts the projected output, so the planned projection has to reach the compiler.
+        return PostgresCompiler.CompileCount(_query with { Projection = ProjectionMapper.Plan(_shape).Items });
+    }
 
     public async Task<long> CountAsync(CancellationToken cancellationToken = default)
     {
-        if (_query.IsDistinct)
-            throw new InvalidOperationException(
-                "CountAsync cannot count DISTINCT rows without a subquery; drop DISTINCT or count the distinct values at the caller.");
-        if (_query.GroupKeys.Count > 0)
-            throw new InvalidOperationException(
-                "CountAsync cannot count groups without a subquery; select Sql.Count() per group instead.");
-
         var rows = await _db.ExecuteAsync(CompileCount(), reader => reader.GetInt64(0), cancellationToken);
-        // COUNT(*) always yields exactly one row, so the paging clamp is local arithmetic.
-        var total = rows.Count == 1
+        return rows.Count == 1
             ? rows[0]
             : throw new InvalidOperationException("A COUNT statement must return exactly one row.");
-        if (_query.Offset is int offset)
-            total = Math.Max(total - offset, 0);
-        if (_query.Limit is int limit)
-            total = Math.Min(total, limit);
-        return total;
     }
 }

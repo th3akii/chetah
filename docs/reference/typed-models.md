@@ -218,7 +218,7 @@ var absent = await db.Select<User>().Where(u => u.Id == 99).SingleOrDefaultAsync
 // One constant output row, capped at one row: existence without reading any table column.
 var any = await db.Select<User>().Where(u => u.Age >= 18).AnyAsync();
 
-// SELECT COUNT(*) over the query's joins and filters, clamped by its LIMIT/OFFSET afterwards.
+// SELECT COUNT(*) over the complete query — a derived table when DISTINCT, grouping or paging apply.
 var count = await db.Select<User>().Where(u => u.Age >= 18).CountAsync();           // long
 ```
 
@@ -228,13 +228,19 @@ var count = await db.Select<User>().Where(u => u.Age >= 18).CountAsync();       
 - `FirstAsync` throws when no row matches. `SingleAsync` throws on zero or more
   than one. `SingleOrDefaultAsync` throws only on more than one, otherwise
   returns `default`. `AnyAsync` never materializes rows.
+- Because pagination is part of the query, `SingleAsync` checks uniqueness
+  within the query's resulting rows, not among all matching table rows:
+  `Limit(1).SingleAsync()` can never report "more than one". Drop the limit when
+  uniqueness across every match is what matters.
 - `AnyAsync` keeps every clause that decides whether a row exists (filter, joins,
   `Distinct`, grouping, `HAVING`, paging) and drops `ORDER BY`, which cannot
   create or remove a row.
-- `CountAsync` cannot observe `DISTINCT` or grouping with a plain `COUNT(*)`, so
-  those two chains are refused explicitly rather than answered with the count of
-  rows read (which is what the wrong number would be). Count groups with
-  `Select(… Sql.Count())` instead.
+- `CountAsync` is the number of rows the complete query yields. Filters and joins
+  alone decide that, so it compiles to a direct `SELECT COUNT(*)`; when
+  `DISTINCT`, `GROUP BY`/`HAVING` or `LIMIT`/`OFFSET` change how many rows come
+  back, the whole SELECT is compiled as a derived table and counted. Ordering is
+  never rendered (it cannot change a count) but is still validated, so a chain
+  `Compile` would reject is rejected by the count too.
 
 Behavior contract (enforced before any connection opens):
 

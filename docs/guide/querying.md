@@ -35,11 +35,14 @@ before `Where(...)` still emits `WHERE … LIMIT 5`.
 | how many match | `CountAsync()` |
 
 `First*` reads `LIMIT 1`, `Single*` reads `LIMIT 2`, `Any` reads one constant
-row at `LIMIT 1`, and `Count` runs `SELECT COUNT(*)` over the query's joins and
-filters. A `Limit`/`Offset` already on the chain still applies (a smaller
-`Limit` wins; the count is clamped to it). Missing rows throw
-`InvalidOperationException` in the non-`OrDefault` methods; `SingleOrDefault`
-still throws when more than one row matches.
+row at `LIMIT 1`, and `Count` counts the complete query — `SELECT COUNT(*)`
+directly when filters and joins decide the row count, otherwise over a derived
+table so `DISTINCT`, `GROUP BY`/`HAVING` and `LIMIT`/`OFFSET` are counted
+instead of ignored. A `Limit`/`Offset` already on the chain still applies: a
+smaller `Limit` wins, and `SingleAsync` therefore checks uniqueness within the
+query's resulting rows, including its pagination, rather than among all matching
+table rows. Missing rows throw `InvalidOperationException` in the non-`OrDefault`
+methods; `SingleOrDefault` still throws when more than one row matches.
 
 ## Filter with a lambda
 
@@ -148,11 +151,14 @@ ad-hoc queries that do not come from the typed chain.
 
 | Refused | Reason / use instead |
 |---|---|
-| `CountAsync` on a `Distinct()` query | a plain `COUNT(*)` would count rows read, not distinct values |
-| `CountAsync` on a grouped query | counting groups needs a wrapped subquery; use `Select(… Sql.Count())` per group |
-| aggregates outside grouped `Select`/`Having`/`OrderBy` | `SELECT COUNT(*)` from a non-grouped chain has no group to count |
+| aggregates outside grouped `Select`/`Having`/`OrderBy` | a non-grouped chain has no group to aggregate |
 | `ThenBy` without `OrderBy`, second `GroupBy`, joins after grouping/`DISTINCT`/paging | the emitted SQL would be ambiguous or invalid |
 | C# not in the translator surface (`ToLower`, `Invoke`, arbitrary getters) | no client-side evaluation exists, so it fails loudly instead |
+
+`CountAsync` refuses nothing: it counts whatever the chain yields, including
+`DISTINCT`, groups surviving `HAVING`, and a page. Ordering never reaches the
+count statement — it cannot change how many rows a query returns — but it is
+still validated, so an invalid chain fails here exactly as it would on `ToListAsync`.
 
 Also not implemented: writes (`INSERT`/`UPDATE`/`DELETE`), transactions,
 RIGHT/FULL/CROSS joins, automatic relationship loading, and dialects other than

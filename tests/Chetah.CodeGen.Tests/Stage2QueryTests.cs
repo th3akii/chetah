@@ -425,33 +425,78 @@ public class Stage2QueryTests
     }
 
     [Fact]
-    public void CountReadsOnlyFromJoinsAndFilters()
+    public void CountAggregatesDirectlyWhenJoinsAndFiltersDecideTheRows()
     {
-        var counted = Database().Select<Stage2User>().Where(user => user.Age >= 18)
-            .OrderBy(user => user.Id).Limit(5).Offset(2).CompileCount();
-
-        // COUNT(*) cannot observe ordering, DISTINCT, grouping or paging, so the statement carries
-        // none of them; the caller clamps paging on the returned number instead.
         Assert.Equal(
             "SELECT COUNT(*) FROM \"users\" AS \"t0\" WHERE (\"t0\".\"age\" >= $1) IS TRUE",
-            counted.Sql);
-        Assert.Equal(new object?[] { 18 }, counted.Parameters.Select(parameter => parameter.Value));
+            Database().Select<Stage2User>().Where(user => user.Age >= 18)
+                .OrderBy(user => user.Id).CompileCount().Sql);
 
         var joined = Database().Select<Stage2Order>().Where(order => order.Amount >= 10)
             .InnerJoin<Stage2User>((order, user) => order.UserId == user.Id).CompileCount();
-        Assert.Contains("INNER JOIN", joined.Sql);
-        Assert.Contains("SELECT COUNT(*) FROM \"orders\" AS \"t0\"", joined.Sql);
+        Assert.Equal(
+            "SELECT COUNT(*) FROM \"orders\" AS \"t0\" INNER JOIN \"users\" AS \"t1\" ON \"t0\".\"user_id\" = \"t1\".\"id\" WHERE \"t0\".\"amount\" >= $1",
+            joined.Sql);
         Assert.Equal(new object?[] { 10 }, joined.Parameters.Select(parameter => parameter.Value));
+
+        // Ordering cannot change a count, so neither form pays for it.
+        Assert.Equal(
+            "SELECT COUNT(*) FROM \"users\" AS \"t0\"",
+            Database().Select<Stage2User>().OrderBy(user => user.Name).CompileCount().Sql);
     }
 
     [Fact]
-    public async Task CountRefusesDistinctAndGrouping()
+    public void CountWrapsQueriesWhoseOwnClausesReduceTheRowCount()
     {
-        // Both would need a wrapped subquery; returning the ungrouped count instead would be wrong.
-        await Assert.ThrowsAsync<InvalidOperationException>(() => Database().Select<Stage2User>()
-            .Select(user => user.Name).Distinct().CountAsync());
-        await Assert.ThrowsAsync<InvalidOperationException>(() => Database().Select<Stage2Order>()
-            .GroupBy(order => order.UserId).CountAsync());
+        // DISTINCT counts distinct output rows, so the projection reaches the derived table.
+        Assert.Equal(
+            "SELECT COUNT(*) FROM (SELECT DISTINCT \"t0\".\"name\" AS \"c0\" FROM \"users\" AS \"t0\") AS \"__chetah_count\"",
+            Database().Select<Stage2User>().Select(user => user.Name).Distinct().CompileCount().Sql);
+
+        // Grouping with HAVING: one counted row per surviving group, over the group key projection.
+        var grouped = Database().Select<Stage2Order>().Where(order => order.Amount >= 10)
+            .GroupBy(order => order.UserId).Having(order => Sql.Sum(order.Amount) >= 20).CompileCount();
+        Assert.Equal(
+            "SELECT COUNT(*) FROM (SELECT \"t0\".\"user_id\" AS \"c0\" FROM \"orders\" AS \"t0\" WHERE \"t0\".\"amount\" >= $1 GROUP BY \"t0\".\"user_id\" HAVING (SUM(\"t0\".\"amount\") >= CAST($2 AS bigint)) IS TRUE) AS \"__chetah_count\"",
+            grouped.Sql);
+        Assert.Equal(new object?[] { 10, 20 }, grouped.Parameters.Select(parameter => parameter.Value));
+
+        // Paging is applied inside the derived table and never to the aggregate's single row.
+        var paged = Database().Select<Stage2User>().Limit(2).Offset(1).CompileCount();
+        Assert.Equal(
+            "SELECT COUNT(*) FROM (SELECT \"t0\".\"id\", \"t0\".\"name\", \"t0\".\"age\" FROM \"users\" AS \"t0\" LIMIT $1 OFFSET $2) AS \"__chetah_count\"",
+            paged.Sql);
+        Assert.Equal(new object?[] { 2, 1 }, paged.Parameters.Select(parameter => parameter.Value));
+    }
+
+    [Fact]
+    public void CountKeepsParameterOrderAcrossTheDerivedQuery()
+    {
+        var counted = Database().Select<Stage2User>().Where(user => user.Age >= 18)
+            .Select(user => user.Name).Distinct()
+            .Limit(3).Offset(1).CompileCount();
+
+        Assert.Equal(
+            "SELECT COUNT(*) FROM (SELECT DISTINCT \"t0\".\"name\" AS \"c0\" FROM \"users\" AS \"t0\" WHERE (\"t0\".\"age\" >= $1) IS TRUE LIMIT $2 OFFSET $3) AS \"__chetah_count\"",
+            counted.Sql);
+        Assert.Equal(new object?[] { 18, 3, 1 }, counted.Parameters.Select(parameter => parameter.Value));
+    }
+
+    [Fact]
+    public void CountValidatesTheChainItCounts()
+    {
+        // Counting must not launder a chain that could never run: DISTINCT ordered by an unselected
+        // expression is rejected by Compile, so it is rejected by the count too.
+        var badDistinct = Database().Select<Stage2User>()
+            .OrderBy(user => user.Age).Select(user => user.Name).Distinct();
+        Assert.Throws<InvalidOperationException>(() => badDistinct.Compile());
+        Assert.Throws<InvalidOperationException>(() => badDistinct.CompileCount());
+
+        // Same for a grouped query ordering by a column outside its group keys.
+        var badGrouping = Database().Select<Stage2Order>()
+            .GroupBy(order => order.UserId).OrderBy(order => order.Amount).Select(order => new { order.UserId });
+        Assert.Throws<InvalidOperationException>(() => badGrouping.Compile());
+        Assert.Throws<InvalidOperationException>(() => badGrouping.CompileCount());
     }
 
     public sealed record UserLabel(int Id, string Name);

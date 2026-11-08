@@ -223,7 +223,7 @@ public class Stage2LiveTests
         Assert.Equal(4L, await users.CountAsync());
         Assert.Equal(2L, await users.Where(user => user.Age >= 18).CountAsync());
         Assert.Equal(0L, await users.Where(user => user.Id > 100).CountAsync());
-        // Paging is part of the query's result set, so the count is clamped to it.
+        // Paging decides how many rows the query yields, so the count respects it in SQL.
         Assert.Equal(2L, await users.OrderBy(user => user.Id).Limit(2).CountAsync());
         Assert.Equal(1L, await users.OrderBy(user => user.Id).Offset(3).CountAsync());
         Assert.Equal(0L, await users.Offset(10).CountAsync());
@@ -232,9 +232,14 @@ public class Stage2LiveTests
         Assert.Equal(3L, await users.Where(user => user.Age != null).CountAsync());
         Assert.Equal(6L, await users.LeftJoin<Stage2Order>((user, order) => user.Id == order.UserId).CountAsync());
 
-        // DISTINCT and grouped counts are refused rather than answered with the wrong number.
-        await Assert.ThrowsAsync<InvalidOperationException>(() => users.Select(user => user.Name).Distinct().CountAsync());
-        await Assert.ThrowsAsync<InvalidOperationException>(() => orders.GroupBy(order => order.UserId).CountAsync());
+        // The complete SELECT is counted: DISTINCT output, groups surviving HAVING, paging included.
+        Assert.Equal(3L, await users.Select(user => user.Name).Distinct().CountAsync());
+        Assert.Equal(4L, await users.Select(user => user.Age).Distinct().CountAsync());  // NULL age is its own value
+        Assert.Equal(1L, await users.Select(user => user.Name).Distinct().Offset(2).CountAsync());
+        Assert.Equal(2L, await users.Select(user => user.Name).Distinct().Limit(2).CountAsync());
+        Assert.Equal(2L, await orders.GroupBy(order => order.UserId).CountAsync());
+        Assert.Equal(1L, await orders.Where(order => order.Amount >= 10).GroupBy(order => order.UserId)
+            .Having(order => Sql.Sum(order.Amount) >= 25).CountAsync());
     }
 
     public sealed record NullableRow(string? Value);

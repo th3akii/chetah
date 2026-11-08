@@ -27,22 +27,17 @@ public static class PostgresCompiler
     }
 
     /// <summary>
-    /// Compiles the query into a single-row <c>SELECT COUNT(*) FROM … JOIN … WHERE …</c> statement.
-    /// <c>COUNT(*)</c> only observes the rows FROM/JOIN/WHERE produce, so clauses that reshape the
-    /// row set afterwards (DISTINCT, GROUP BY, HAVING, ORDER BY, LIMIT, OFFSET) are refused rather
-    /// than silently ignored — expressing them correctly needs a wrapped subquery, which this
-    /// milestone deliberately does not add. Paging is applied by the caller instead.
+    /// Compiles the query into a single-row count statement. When FROM/JOIN/WHERE already decide how
+    /// many rows come back, that is a direct <c>SELECT COUNT(*)</c>. When the query yields fewer rows
+    /// than it reads — DISTINCT, GROUP BY/HAVING, LIMIT/OFFSET — it is compiled as a derived table and
+    /// counted, so the number is exactly the rows the SELECT would return. Ordering is validated like
+    /// any other clause (a chain that could not compile is not counted either) but never rendered:
+    /// it can choose which rows a LIMIT keeps, never how many.
     /// </summary>
     internal static CompiledQuery CompileCount(SelectQuery query)
     {
         if (query is null)
             throw new ArgumentNullException(nameof(query));
-
-        if (query.Projection is not null || query.IsDistinct || query.GroupKeys.Count > 0
-            || query.Having is not null || query.Orderings.Count > 0
-            || query.Limit is not null || query.Offset is not null)
-            throw new NotSupportedException(
-                "COUNT cannot be combined with a projection, DISTINCT, GROUP BY, HAVING, ORDER BY, LIMIT or OFFSET.");
 
         var compilation = new Compilation(query, countOnly: true);
         compilation.Execute();
@@ -705,13 +700,14 @@ public static class PostgresCompiler
 
         private void RenderStatement()
         {
+            // COUNT(*) observes only the rows the whole statement yields, so a query whose own
+            // clauses reduce that row set has to be counted from a derived table.
+            var derived = _countOnly && CountNeedsDerivedTable();
+
             if (_countOnly)
-            {
-                // Only FROM/JOIN/WHERE survive into the count; every other clause is refused up front
-                // because COUNT(*) cannot observe it (see CompileCount).
-                _sql.Append("SELECT COUNT(*)");
-            }
-            else
+                _sql.Append(derived ? "SELECT COUNT(*) FROM (" : "SELECT COUNT(*)");
+
+            if (!_countOnly || derived)
             {
                 _sql.Append("SELECT ");
                 if (_query.IsDistinct)
@@ -740,7 +736,7 @@ public static class PostgresCompiler
             if (_query.Predicate is { } predicate)
                 _sql.Append(" WHERE ").Append(RenderExpression(predicate));
 
-            if (_countOnly)
+            if (_countOnly && !derived)
                 return;
 
             if (_query.GroupKeys.Count > 0)
@@ -759,7 +755,9 @@ public static class PostgresCompiler
                 _captureGroupKeys = false;
             }
 
-            if (_query.Orderings.Count > 0)
+            // Count validates ordering but never renders it: it can pick which rows a LIMIT keeps,
+            // never how many rows there are.
+            if (!_countOnly && _query.Orderings.Count > 0)
             {
                 _sql.Append(" ORDER BY ");
                 _captureGroupKeys = true;
@@ -775,7 +773,18 @@ public static class PostgresCompiler
 
             if (_query.Offset is int offset)
                 _sql.Append(" OFFSET ").Append(RenderValue(new SqlValue(offset, typeof(int))));
+
+            if (derived)
+                _sql.Append(") AS ").Append(QuoteIdentifier("__chetah_count"));
         }
+
+        /// <summary>
+        /// True when the query yields fewer rows than FROM/JOIN/WHERE produce, so COUNT(*) has to
+        /// read a derived table instead of the base row set.
+        /// </summary>
+        private bool CountNeedsDerivedTable() =>
+            _query.IsDistinct || _query.GroupKeys.Count > 0 || _query.Having is not null
+            || _query.Limit is not null || _query.Offset is not null;
 
         private void RenderJoin(JoinClause join)
         {

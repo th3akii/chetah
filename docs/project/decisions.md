@@ -445,27 +445,36 @@ expression nodes, no client-side evaluation.
   clause that decides whether a row exists — predicate, joins, `DISTINCT`,
   grouping, `HAVING`, paging — and dropping `ORDER BY`, which cannot create or
   remove a row.
-- `Count` compiles to `SELECT COUNT(*)` over the same `FROM`/`JOIN`/`WHERE`
-  (`PostgresCompiler.CompileCount`). `COUNT(*)` observes only the rows those
-  clauses produce, so `DISTINCT`, `GROUP BY`/`HAVING`, `ORDER BY` and
-  `LIMIT`/`OFFSET` are refused instead of being silently ignored. The query's
-  `LIMIT`/`OFFSET` are applied to the returned number in code.
+- `Count` compiles to a direct `SELECT COUNT(*)` over the same `FROM`/`JOIN`/
+  `WHERE` when those clauses already decide the row count. When the query yields
+  fewer rows than it reads — `DISTINCT`, `GROUP BY`/`HAVING`, `LIMIT`/`OFFSET` —
+  the complete SELECT is compiled as a derived table and counted
+  (`SELECT COUNT(*) FROM (…) AS "__chetah_count"`). Ordering is never rendered —
+  it can choose which rows a limit keeps, never how many — but it is still
+  validated, so a chain `Compile` rejects is rejected by the count too.
 - A missing row is `InvalidOperationException` (as in LINQ); `*OrDefault`
-  returns `default`.
+  returns `default`. Uniqueness in `Single*` is judged within the query's own
+  result, pagination included, so `Limit(1).SingleAsync()` cannot report
+  "more than one".
 
 **Why:**
 
 - Reading `ToListAsync().First()` pulls every row and changes behavior whenever
   the caller's limit is smaller than the data.
-- Counting through a wrapped subquery (`SELECT COUNT(*) FROM (…)`) would support
-  `DISTINCT` and grouping, but subqueries are out of scope for this milestone;
-  returning the ungrouped count instead would answer a different question.
-  Refusing is the honest half-implementation.
+- Count must answer "how many rows does this SELECT return", and `COUNT(*)`
+  cannot observe `DISTINCT`, grouping or paging. The derived table is internal
+  compiled SQL, not a public query-builder feature, so it does not widen the API;
+  clamping the number in code was the alternative and it silently miscounted
+  whenever a projection or `HAVING` reduced the row set first.
 - Keeping the terminal methods over the same `CompiledQuery`/`ExecuteAsync`
   path preserves parameterization, compiled mappers and cancellation.
 
 **Consequences:**
 
 - `CountAsync` returns `long`, matching `Sql.Count()`.
-- Revisit trigger: when a caller needs `Distinct().Count()` or a group count,
-  add a counted derived table in `CompileCount` rather than a second counter.
+- Count statements are one round trip, never a materialized row set. Cost follows
+  the query: the direct form needs no derived table; the counted form pays for
+  the inner sorted/distinct/grouped work only when the query asked for it.
+- Revision (2026-11-08): an earlier cut refused `DISTINCT` and grouped counts
+  because subqueries were out of scope. That restriction covers the public query
+  API, not compiler-internal SQL, so the derived-table form replaced the refusal.

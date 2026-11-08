@@ -131,12 +131,17 @@ connection involved. That property is why tests can assert exact SQL text and
 parameter values without a database.
 
 `PostgresCompiler.CompileCount` is the count entry point used by
-`CountAsync`: `SELECT COUNT(*)` over the same `FROM`/`JOIN`/`WHERE`, since
-`COUNT(*)` only ever observes the rows those clauses produce. `DISTINCT`,
-`GROUP BY`/`HAVING`, `ORDER BY` and `LIMIT`/`OFFSET` are therefore refused
-rather than silently dropped — expressing them correctly would need a wrapped
-subquery, which this milestone does not add. Paging is applied to the returned
-number by the typed layer instead.
+`CountAsync`. It emits a direct `SELECT COUNT(*)` over the same
+`FROM`/`JOIN`/`WHERE` whenever those clauses already decide the row count, and
+otherwise compiles the complete SELECT as a derived table —
+`SELECT COUNT(*) FROM (…) AS "__chetah_count"` — so `DISTINCT`, `GROUP BY`/
+`HAVING` and `LIMIT`/`OFFSET` are counted rather than ignored. The derived form
+keeps parameter slots in render order (projection, predicate, grouping, having,
+paging), so `$1…$n` still line up with the compiled parameter list. `ORDER BY` is
+never rendered in either form: it can choose which rows a limit keeps, never how
+many. It is still validated against the rest of the query, so a chain that
+`Compile` rejects (DISTINCT ordered by an unselected expression, a grouped
+ordering outside the group keys) is rejected by the count as well.
 
 ## Step 3 — execute
 
@@ -259,11 +264,11 @@ No SQL string building without compilation: everything goes through
 
 Single-row and aggregate terminals are thin layers over the same compiler:
 `FirstAsync`/`FirstOrDefaultAsync` cap at `LIMIT 1`, `SingleAsync`/
-`SingleOrDefaultAsync` at `LIMIT 2` (a smaller caller `Limit` wins), `AnyAsync`
-selects one constant row at `LIMIT 1`, and `CountAsync` compiles
-`SELECT COUNT(*)` over the query's joins and filters. `CountAsync` refuses
-`DISTINCT` and grouped queries, and applies the query's `LIMIT`/`OFFSET` to the
-resulting number — see [`typed-models.md`](typed-models.md#step-4--typed-queries).
+`SingleOrDefaultAsync` at `LIMIT 2` (a smaller caller `Limit` wins, so `Single`
+judges uniqueness within the query's paginated result), `AnyAsync` selects one
+constant row at `LIMIT 1`, and `CountAsync` compiles a direct `SELECT COUNT(*)`
+or a counted derived table for queries whose own clauses reduce the row set —
+see [`typed-models.md`](typed-models.md#step-4--typed-queries).
 
 Not implemented, not hidden: `INSERT`/`UPDATE`/`DELETE`, transactions,
 migrations, RIGHT/FULL/CROSS joins and automatic relationship loading (Stage 5
