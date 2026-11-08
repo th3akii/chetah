@@ -27,6 +27,10 @@ public sealed class PostgresDb
     public TypedSelectQuery<T> Select<T>() =>
         new(this, Resolve<T>());
 
+    /// <summary>Starts an INSERT into the table registered for model T.</summary>
+    public TypedInsertQuery<T> Insert<T>() =>
+        new(this, Resolve<T>());
+
     internal TableBinding<T> Resolve<T>()
     {
         if (_bindings is not null && _bindings.TryGetValue(typeof(T), out var binding))
@@ -57,17 +61,12 @@ public sealed class PostgresDb
     {
         ArgumentNullException.ThrowIfNull(map);
         // Resolve types before opening a connection, including for NULL parameters.
-        var parameterTypes = query.Parameters.Select(parameter => ParameterType(parameter.ClrType)).ToArray();
+        var parameterTypes = ResolveParameterTypes(query);
         await using var connection = new NpgsqlConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
 
         await using var command = new NpgsqlCommand(query.Sql, connection);
-        for (var index = 0; index < query.Parameters.Count; index++)
-            command.Parameters.Add(new NpgsqlParameter
-            {
-                NpgsqlDbType = parameterTypes[index],
-                Value = query.Parameters[index].Value ?? DBNull.Value
-            });
+        BindParameters(command, query, parameterTypes);
         await using NpgsqlDataReader reader = await command.ExecuteReaderAsync(cancellationToken);
 
         var rows = new List<T>();
@@ -75,6 +74,34 @@ public sealed class PostgresDb
             rows.Add(map(reader));
 
         return rows;
+    }
+
+    /// <summary>Executes a statement that returns an affected-row count, such as INSERT without RETURNING.</summary>
+    internal async Task<int> ExecuteNonQueryAsync(CompiledQuery query, CancellationToken cancellationToken)
+    {
+        var parameterTypes = ResolveParameterTypes(query);
+        await using var connection = new NpgsqlConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        await using var command = new NpgsqlCommand(query.Sql, connection);
+        BindParameters(command, query, parameterTypes);
+        return await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static NpgsqlDbType[] ResolveParameterTypes(CompiledQuery query) =>
+        query.Parameters.Select(parameter => ParameterType(parameter.ClrType)).ToArray();
+
+    private static void BindParameters(
+        NpgsqlCommand command,
+        CompiledQuery query,
+        IReadOnlyList<NpgsqlDbType> parameterTypes)
+    {
+        for (var index = 0; index < query.Parameters.Count; index++)
+            command.Parameters.Add(new NpgsqlParameter
+            {
+                NpgsqlDbType = parameterTypes[index],
+                Value = query.Parameters[index].Value ?? DBNull.Value
+            });
     }
 
     private static NpgsqlDbType ParameterType(Type type)
