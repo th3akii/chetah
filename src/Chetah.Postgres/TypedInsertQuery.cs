@@ -18,7 +18,7 @@ public sealed class TypedInsertQuery<T>
     internal TypedInsertQuery(PostgresDb db, TableBinding<T> binding)
         : this(db, binding, new InsertQuery(binding.Table)) { }
 
-    private TypedInsertQuery(PostgresDb db, TableBinding<T> binding, InsertQuery query)
+    internal TypedInsertQuery(PostgresDb db, TableBinding<T> binding, InsertQuery query)
     {
         _db = db;
         _binding = binding;
@@ -72,6 +72,34 @@ public sealed class TypedInsertQuery<T>
     }
 
     public CompiledQuery Compile() => PostgresInsertCompiler.Compile(_query);
+
+    /// <summary>ON CONFLICT DO NOTHING without a target (any unique violation is ignored).</summary>
+    public TypedInsertQuery<T> OnConflictDoNothing()
+    {
+        EnsureNoConflict();
+        return With(_query with
+        {
+            Conflict = new InsertConflict([], InsertConflictAction.DoNothing, []),
+        });
+    }
+
+    /// <summary>
+    /// Starts a targeted ON CONFLICT clause. The selector may be one column
+    /// (<c>student => student.Id</c>) or an anonymous object of columns.
+    /// </summary>
+    public TypedInsertConflictQuery<T> OnConflict<TKey>(Expression<Func<T, TKey>> target)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+        EnsureNoConflict();
+        return new TypedInsertConflictQuery<T>(
+            _db, _binding, _query, InsertColumn.ResolveTargets(_binding, target));
+    }
+
+    private void EnsureNoConflict()
+    {
+        if (_query.Conflict is not null)
+            throw new InvalidOperationException("Conflict handling may only be specified once.");
+    }
 
     /// <summary>
     /// Adds a typed RETURNING projection and returns the query's reading half. The projection is

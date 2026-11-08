@@ -241,4 +241,106 @@ public class TypedInsertQueryTests
                 .Values(new { FirstName = "Marko" })
                 .Returning(student => Sql.Count(student.Id)));
     }
+
+    // ---------- ON CONFLICT ----------
+
+    [Fact]
+    public void GlobalConflictDoNothingCompiles()
+    {
+        var compiled = Db.Insert<Student>()
+            .Values(new { FirstName = "Marko" })
+            .OnConflictDoNothing()
+            .Compile();
+
+        Assert.Equal(
+            """INSERT INTO "students" ("first_name") VALUES ($1) ON CONFLICT DO NOTHING""",
+            compiled.Sql);
+    }
+
+    [Fact]
+    public void TargetedConflictDoNothingUsesTheSelectedColumn()
+    {
+        var compiled = Db.Insert<Student>()
+            .Values(new { FirstName = "Marko" })
+            .OnConflict(student => student.FirstName)
+            .DoNothing()
+            .Compile();
+
+        Assert.Equal(
+            """INSERT INTO "students" ("first_name") VALUES ($1) ON CONFLICT ("first_name") DO NOTHING""",
+            compiled.Sql);
+    }
+
+    [Fact]
+    public void CompositeConflictTargetFlattensAnonymousColumns()
+    {
+        var compiled = Db.Insert<Student>()
+            .Values(new { FirstName = "Marko", Age = (int?)20 })
+            .OnConflict(student => new { student.FirstName, student.Age })
+            .DoNothing()
+            .Compile();
+
+        Assert.Equal(
+            """INSERT INTO "students" ("first_name", "age") VALUES ($1, $2) ON CONFLICT ("first_name", "age") DO NOTHING""",
+            compiled.Sql);
+    }
+
+    [Fact]
+    public void DoUpdateSupportsExcludedConstantsAndDefaults()
+    {
+        var compiled = Db.Insert<Student>()
+            .Values(new { FirstName = "Marko", Age = (int?)20 })
+            .OnConflict(student => student.FirstName)
+            .DoUpdate(update => update
+                .SetExcluded(student => student.Age)
+                .Set(student => student.Nickname, "updated")
+                .SetDefault(student => student.Id))
+            .Compile();
+
+        Assert.Equal(
+            "INSERT INTO \"students\" (\"first_name\", \"age\") VALUES ($1, $2) ON CONFLICT (\"first_name\") DO UPDATE SET \"age\" = EXCLUDED.\"age\", \"nickname\" = $3, \"id\" = DEFAULT",
+            compiled.Sql);
+        Assert.Equal(new object?[] { "Marko", 20, "updated" }, compiled.Parameters.Select(parameter => parameter.Value));
+    }
+
+    [Fact]
+    public void DoUpdateRejectsGeneratedAssignmentsAndEmptyAssignments()
+    {
+        Assert.Throws<InvalidOperationException>(
+            () => Db.Insert<Student>()
+                .Values(new { FirstName = "Marko" })
+                .OnConflict(student => student.FirstName)
+                .DoUpdate(update => update.SetExcluded(student => student.Display))
+                .Compile());
+
+        Assert.Throws<ArgumentException>(
+            () => Db.Insert<Student>()
+                .Values(new { FirstName = "Marko" })
+                .OnConflict(student => student.FirstName)
+                .DoUpdate(update => { }));
+    }
+
+    [Fact]
+    public void ConflictComposesWithReturning()
+    {
+        var compiled = Db.Insert<Student>()
+            .Values(new { FirstName = "Marko" })
+            .OnConflict(student => student.FirstName)
+            .DoUpdate(update => update.SetExcluded(student => student.Age))
+            .Returning(student => new { student.Id, student.Age })
+            .Compile();
+
+        Assert.Equal(
+            "INSERT INTO \"students\" (\"first_name\") VALUES ($1) ON CONFLICT (\"first_name\") DO UPDATE SET \"age\" = EXCLUDED.\"age\" RETURNING \"id\" AS \"c0\", \"age\" AS \"c1\"",
+            compiled.Sql);
+    }
+
+    [Fact]
+    public void DuplicateConflictTargetsAreRejected()
+    {
+        Assert.Throws<ArgumentException>(
+            () => Db.Insert<Student>()
+                .Values(new { FirstName = "Marko" })
+                .OnConflict(student => new { Primary = student.FirstName, Secondary = student.FirstName }));
+    }
 }
