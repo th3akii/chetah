@@ -53,7 +53,10 @@ internal sealed record ConstraintState(
     string? RefTable = null,
     IReadOnlyList<string>? RefColumns = null,
     string OnDelete = "no action",
-    string OnUpdate = "no action");
+    string OnUpdate = "no action",
+    string Match = "simple",
+    bool Deferrable = false,
+    bool InitiallyDeferred = false);
 
 /// <summary>A standalone index: not backing any constraint, matched by columns and uniqueness.</summary>
 internal sealed record IndexState(string Name, string Table, IReadOnlyList<string> Columns, bool Unique);
@@ -93,8 +96,12 @@ internal static class SchemaCatalog
 
             // Names follow PostgreSQL's own convention, so a database created by this tool and one
             // created by hand describe the same definition the same way.
-            if (table.PrimaryKey is { Count: > 0 } primaryKey)
-                constraints.Add(new ConstraintState($"{table.Name}_pkey", "p", table.Name, primaryKey));
+            var primaryKey = table.PrimaryKey
+                ?? (table.Columns.FirstOrDefault(column => column.PrimaryKey) is { } columnKey
+                    ? new PrimaryKeySchema($"{table.Name}_pkey", [columnKey.Name])
+                    : null);
+            if (primaryKey is not null)
+                constraints.Add(new ConstraintState(primaryKey.Name, "p", table.Name, primaryKey.Columns));
 
             // Column flags and table entries can describe the same key; each definition is declared
             // once, or CREATE TABLE would carry two constraints with the same name.
@@ -103,29 +110,21 @@ internal static class SchemaCatalog
                 uniqueColumns.Add([column.Name]);
             foreach (var uniqueKey in table.UniqueKeys ?? [])
             {
-                if (!uniqueColumns.Any(existing => existing.SequenceEqual(uniqueKey, StringComparer.Ordinal)))
-                    uniqueColumns.Add(uniqueKey);
+                if (!uniqueColumns.Any(existing => existing.SequenceEqual(uniqueKey.Columns, StringComparer.Ordinal)))
+                    uniqueColumns.Add(uniqueKey.Columns);
             }
+
+            var declaredUniqueNames = (table.UniqueKeys ?? [])
+                .ToDictionary(unique => string.Join(",", unique.Columns), unique => unique.Name, StringComparer.Ordinal);
 
             foreach (var columns in uniqueColumns)
             {
+                var key = string.Join(",", columns);
                 constraints.Add(new ConstraintState(
-                    $"{table.Name}_{string.Join("_", columns)}_key",
+                    declaredUniqueNames.GetValueOrDefault(key, $"{table.Name}_{string.Join("_", columns)}_key"),
                     "u",
                     table.Name,
                     columns));
-            }
-
-            foreach (var column in table.Columns.Where(column => column.References is not null))
-            {
-                var (refTable, refColumn) = SplitReference(column.References!);
-                constraints.Add(new ConstraintState(
-                    $"{table.Name}_{column.Name}_fkey",
-                    "f",
-                    table.Name,
-                    [column.Name],
-                    refTable,
-                    [refColumn]));
             }
 
             foreach (var foreignKey in table.ForeignKeys ?? [])
@@ -137,12 +136,15 @@ internal static class SchemaCatalog
                     foreignKey.Columns,
                     foreignKey.RefTable,
                     foreignKey.RefColumns,
-                    foreignKey.OnDelete,
-                    foreignKey.OnUpdate));
+                    foreignKey.OnDelete.ToLowerInvariant(),
+                    foreignKey.OnUpdate.ToLowerInvariant(),
+                    foreignKey.Match.ToLowerInvariant(),
+                    foreignKey.Deferrable,
+                    foreignKey.InitiallyDeferred));
             }
 
             foreach (var index in table.Indexes ?? [])
-                indexes.Add(new IndexState(index.Name, table.Name, index.Columns, index.Unique));
+                indexes.Add(new IndexState(index.Name, table.Name, index.Keys.Select(key => key.Column!).ToArray(), index.Unique));
         }
 
         return new CatalogState(tables, null, constraints, indexes);
@@ -154,21 +156,12 @@ internal static class SchemaCatalog
         new(
             column.Name,
             PgType(column),
-            column.Identity || !column.Nullable,
-            Defaults.Normalize(column.Default),
-            column.Identity,
-            column.Default);
+            column.Identity is not null || !column.Nullable,
+            Defaults.Normalize(column.Default?.Sql),
+            column.Identity is not null,
+            column.Default?.Sql);
 
-    /// <summary><c>table.column</c> stays unqualified; <c>schema.table.column</c> keeps its schema.</summary>
-    private static (string Table, string Column) SplitReference(string reference)
-    {
-        var parts = reference.Split('.');
-        return parts.Length == 2
-            ? (parts[0], parts[1])
-            : ($"{parts[0]}.{parts[1]}", parts[2]);
-    }
-
-    private static string PgType(ColumnSchema column) => column.StorageType;
+    private static string PgType(ColumnSchema column) => column.Type.SqlType;
 }
 
 /// <summary>Normalizes default expressions so declared text and catalog text can be compared.
@@ -331,6 +324,14 @@ internal static class PostgresCatalog
         _ => "no action",
     };
 
+    /// <summary>And an FK match type as one character.</summary>
+    private static string Match(string code) => code switch
+    {
+        "f" => "full",
+        "p" => "partial",
+        _ => "simple",
+    };
+
     /// <summary>Catalog type spelling with its modifier: <c>varchar(100)</c>, <c>timestamp(3)</c>.
     /// The modifier is part of the type — a declared <c>timestamp</c> and a live <c>timestamp(3)</c>
     /// are different columns, and a diff that ignored it would report a false match.</summary>
@@ -373,7 +374,10 @@ internal static class PostgresCatalog
                          FROM unnest(con.confkey) WITH ORDINALITY AS k2(attnum, ord)
                          JOIN pg_attribute a2 ON a2.attrelid = con.confrelid AND a2.attnum = k2.attnum), '{}'::text[]),
                con.confdeltype::text,
-               con.confupdtype::text
+               con.confupdtype::text,
+               con.confmatchtype::text,
+               con.condeferrable,
+               con.condeferred
         FROM pg_constraint con
         JOIN pg_class c ON c.oid = con.conrelid
         JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -563,7 +567,10 @@ internal static class PostgresCatalog
                 refTable,
                 reader.IsDBNull(4) ? null : reader.GetFieldValue<string[]>(6),
                 Action(reader.GetString(7)),
-                Action(reader.GetString(8))));
+                Action(reader.GetString(8)),
+                Match(reader.GetString(9)),
+                reader.GetBoolean(10),
+                reader.GetBoolean(11)));
         }
 
         return constraints;

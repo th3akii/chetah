@@ -430,7 +430,10 @@ internal static class SchemaDiff
             || (desired.RefTable == live.RefTable
                 && (desired.RefColumns ?? []).SequenceEqual(live.RefColumns ?? [], StringComparer.Ordinal)
                 && desired.OnDelete == live.OnDelete
-                && desired.OnUpdate == live.OnUpdate));
+                && desired.OnUpdate == live.OnUpdate
+                && desired.Match == live.Match
+                && desired.Deferrable == live.Deferrable
+                && desired.InitiallyDeferred == live.InitiallyDeferred));
 
     private static bool SameDefinition(IndexState desired, IndexState live) =>
         desired.Table == live.Table
@@ -452,7 +455,8 @@ internal static class SchemaDiff
                 "u" => $"ALTER TABLE {Quote(constraint.Table)} ADD CONSTRAINT {Quote(constraint.Name)} UNIQUE ({QuoteList(constraint.Columns)})",
                 _ => $"ALTER TABLE {Quote(constraint.Table)} ADD CONSTRAINT {Quote(constraint.Name)} "
                     + $"FOREIGN KEY ({QuoteList(constraint.Columns)}) REFERENCES {Reference(constraint.RefTable!)} "
-                    + $"({QuoteList(constraint.RefColumns ?? [])}){Actions(constraint)}",
+                    + $"({QuoteList(constraint.RefColumns ?? [])}){MatchType(constraint)}"
+                    + $"{Actions(constraint)}{Deferrability(constraint)}",
             },
             $"add_{constraint.Name}",
             null,
@@ -486,6 +490,15 @@ internal static class SchemaDiff
     private static string Actions(ConstraintState constraint) =>
         (constraint.OnDelete == "no action" ? "" : $" ON DELETE {constraint.OnDelete.ToUpperInvariant()}")
         + (constraint.OnUpdate == "no action" ? "" : $" ON UPDATE {constraint.OnUpdate.ToUpperInvariant()}");
+
+    private static string MatchType(ConstraintState constraint) =>
+        constraint.Match == "simple" ? "" : $" MATCH {constraint.Match.ToUpperInvariant()}";
+
+    /// <summary>Omitted when the constraint is not deferrable, which is PostgreSQL's default.</summary>
+    private static string Deferrability(ConstraintState constraint) =>
+        !constraint.Deferrable
+            ? ""
+            : constraint.InitiallyDeferred ? " DEFERRABLE INITIALLY DEFERRED" : " DEFERRABLE";
 
     private static string QuoteList(IReadOnlyList<string> identifiers) =>
         string.Join(", ", identifiers.Select(Quote));

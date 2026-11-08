@@ -52,7 +52,17 @@ public static class Program
 
         Directory.CreateDirectory(outputDirectory);
         var outputPath = Path.Combine(outputDirectory, OutputFileName);
-        var source = GeneratedSource.Render(parsed.Schema!, @namespace);
+        string source;
+        try
+        {
+            source = GeneratedSource.Render(parsed.Schema!, @namespace);
+        }
+        catch (InvalidOperationException error)
+        {
+            Console.Error.WriteLine($"Error in {schemaPath}: {error.Message}");
+            return 1;
+        }
+
         await File.WriteAllTextAsync(outputPath, source);
 
         Console.WriteLine($"Generated {outputPath} ({source.Length} characters)");

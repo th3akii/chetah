@@ -179,11 +179,30 @@ internal sealed class MigrationRunner
     public Task<int> RepairAsync(Schema schema, CancellationToken cancellationToken = default) =>
         WithLockAsync((connection, token) => RepairCoreAsync(connection, schema, token), cancellationToken);
 
+    /// <summary>Reports schema declarations the migration engine cannot manage and returns true when
+    /// anything was refused. Nothing is written in that case: a half-managed schema is worse than a
+    /// clear stop.</summary>
+    private bool RefuseUnsupported(Schema schema)
+    {
+        var problems = SchemaCapabilities.Unsupported(schema);
+        if (problems.Count == 0)
+            return false;
+
+        _output.WriteLine("This schema declares objects the migration engine cannot manage yet:");
+        foreach (var problem in problems)
+            _output.WriteLine($"  - {problem}");
+        _output.WriteLine("Nothing was written. Remove those declarations, or use them only with code generation.");
+        return true;
+    }
+
     private async Task<int> DiffCoreAsync(
         NpgsqlConnection connection,
         Schema schema,
         CancellationToken cancellationToken)
     {
+        if (RefuseUnsupported(schema))
+            return 1;
+
         // A read-only run reports a history problem but does not act on it; --check turns it into a
         // failing exit code so CI notices before anything is applied.
         var history = History(_store.ReadJournal(), await ReadAppliedAsync(connection, cancellationToken));
@@ -249,6 +268,9 @@ internal sealed class MigrationRunner
         Schema schema,
         CancellationToken cancellationToken)
     {
+        if (RefuseUnsupported(schema))
+            return 1;
+
         await EnsureInternalSchemaAsync(connection, cancellationToken);
         await ExecuteAsync(connection, null, CreateStateTable, cancellationToken);
 
@@ -506,6 +528,9 @@ internal sealed class MigrationRunner
         Schema schema,
         CancellationToken cancellationToken)
     {
+        if (RefuseUnsupported(schema))
+            return 1;
+
         await EnsureInternalSchemaAsync(connection, cancellationToken);
         await ExecuteAsync(connection, null, CreateStateTable, cancellationToken);
 

@@ -1,0 +1,378 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chetah.dev/schema/chetah-schema.json",
+  "title": "Chetah schema",
+  "description": "The single source of truth for a Chetah database: generated C# models and the SQL migrations diffed from the live PostgreSQL catalog. Comments are allowed in schema files (JSONC). Unknown properties are rejected.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["tables"],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Path or URL of this JSON Schema contract. Editors use it for completion and structural validation."
+    },
+    "tables": {
+      "type": "object",
+      "description": "Tables keyed by their SQL name. This is the only collection the migration engine currently executes.",
+      "additionalProperties": { "$ref": "#/$defs/table" }
+    },
+    "enums": {
+      "type": "object",
+      "description": "PostgreSQL enum types keyed by name.",
+      "additionalProperties": { "$ref": "#/$defs/enum" }
+    },
+    "sequences": {
+      "type": "object",
+      "description": "PostgreSQL sequences keyed by name.",
+      "additionalProperties": { "$ref": "#/$defs/sequence" }
+    },
+    "views": {
+      "type": "object",
+      "description": "Views keyed by name.",
+      "additionalProperties": { "$ref": "#/$defs/view" }
+    },
+    "materializedViews": {
+      "type": "object",
+      "description": "Materialized views keyed by name.",
+      "additionalProperties": { "$ref": "#/$defs/materializedView" }
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+      "description": "A plain PostgreSQL identifier: letters, digits and underscores, not starting with a digit."
+    },
+    "tableReference": {
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)?$",
+      "description": "A table name, optionally schema-qualified: roles or other_schema.roles."
+    },
+    "columnList": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/identifier" },
+      "description": "Declared column names, in constraint or index order."
+    },
+    "referentialAction": {
+      "type": "string",
+      "enum": ["NO ACTION", "RESTRICT", "CASCADE", "SET NULL", "SET DEFAULT"],
+      "description": "What PostgreSQL does when the referenced row changes."
+    },
+    "table": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["columns"],
+      "properties": {
+        "$id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Chetah's persistent identity for this table. Written and maintained by the tool; keep it across renames so a rename never becomes drop-and-create."
+        },
+        "schema": {
+          "$ref": "#/$defs/identifier",
+          "default": "public",
+          "description": "PostgreSQL namespace. Defaults to public. Only public can be migrated today."
+        },
+        "model": {
+          "$ref": "#/$defs/identifier",
+          "description": "Generated C# model name. Defaults to PascalCase of the table name."
+        },
+        "columns": {
+          "type": "object",
+          "minProperties": 1,
+          "description": "Columns keyed by SQL name.",
+          "additionalProperties": { "$ref": "#/$defs/column" }
+        },
+        "primaryKey": { "$ref": "#/$defs/tablePrimaryKey" },
+        "unique": {
+          "type": "array",
+          "description": "Table-level UNIQUE constraints. Use the column flag for a single-column key.",
+          "items": { "$ref": "#/$defs/unique" }
+        },
+        "foreignKeys": {
+          "type": "array",
+          "description": "Foreign keys, single- or multi-column. There is no column-level shorthand.",
+          "items": { "$ref": "#/$defs/foreignKey" }
+        },
+        "checks": {
+          "type": "array",
+          "description": "Table-level CHECK constraints.",
+          "items": { "$ref": "#/$defs/check" }
+        },
+        "indexes": {
+          "type": "array",
+          "description": "Standalone indexes.",
+          "items": { "$ref": "#/$defs/index" }
+        }
+      }
+    },
+    "column": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "$id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Chetah's persistent identity for this column, unique within its table. Written and maintained by the tool; keep it across renames."
+        },
+        "type": {
+          "type": "string",
+          "minLength": 1,
+          "description": "A PostgreSQL type: a built-in name, a parameterized type, an array, or a declared enum. Examples: text, varchar(100), timestamptz, numeric(10, 2), text[], user_status.",
+          "examples": ["integer", "text", "varchar(100)", "timestamp(3)", "timestamptz", "numeric(12, 2)", "text[]", "user_status"]
+        },
+        "nullable": {
+          "type": "boolean",
+          "description": "Omitted means nullable, PostgreSQL's own default. false produces NOT NULL. A primary key column is never nullable."
+        },
+        "default": {
+          "description": "A literal (string, number, boolean, null) or an explicit SQL expression: { \"sql\": \"now()\" }. Strings are quoted and escaped; they are never interpreted as SQL.",
+          "oneOf": [
+            { "type": "string" },
+            { "type": "number" },
+            { "type": "boolean" },
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["sql"],
+              "properties": {
+                "sql": { "type": "string", "minLength": 1, "description": "A SQL expression emitted verbatim." }
+              }
+            }
+          ],
+          "examples": ["pending", 0, true, { "sql": "gen_random_uuid()" }]
+        },
+        "identity": {
+          "description": "GENERATED ... AS IDENTITY. true is BY DEFAULT with PostgreSQL's own start and increment. Integer and bigint columns only.",
+          "oneOf": [
+            { "type": "boolean" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "generation": {
+                  "type": "string",
+                  "enum": ["BY DEFAULT", "ALWAYS"],
+                  "default": "BY DEFAULT"
+                },
+                "start": { "type": "integer", "description": "First value (START WITH)." },
+                "increment": { "type": "integer", "description": "Step (INCREMENT BY)." }
+              }
+            }
+          ]
+        },
+        "generated": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["expression"],
+          "description": "A generated column computed by PostgreSQL.",
+          "properties": {
+            "expression": { "type": "string", "minLength": 1, "description": "The generation expression." },
+            "stored": {
+              "type": "boolean",
+              "default": true,
+              "description": "Stored generated columns exist in PostgreSQL 12+; virtual ones require 18 and are rejected by this project's PostgreSQL 16 semantics."
+            }
+          },
+          "examples": [{ "expression": "price * quantity", "stored": true }]
+        },
+        "primaryKey": {
+          "type": "boolean",
+          "description": "This column alone is the primary key. For composite or named keys use the table-level primaryKey object."
+        },
+        "unique": {
+          "type": "boolean",
+          "description": "A single-column UNIQUE constraint on this column."
+        }
+      }
+    },
+    "tablePrimaryKey": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["columns"],
+      "description": "A composite or explicitly named primary key. Cannot be combined with column-level primaryKey flags.",
+      "properties": {
+        "name": { "$ref": "#/$defs/identifier", "description": "Constraint name. Defaults to <table>_pkey." },
+        "columns": { "$ref": "#/$defs/columnList" }
+      },
+      "examples": [{ "name": "pk_enrollments", "columns": ["student_id", "course_id"] }]
+    },
+    "unique": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["columns"],
+      "properties": {
+        "name": { "$ref": "#/$defs/identifier", "description": "Constraint name. Defaults to <table>_<columns>_key." },
+        "columns": { "$ref": "#/$defs/columnList" },
+        "nullsNotDistinct": {
+          "type": "boolean",
+          "default": false,
+          "description": "Treat NULLs as equal. Requires PostgreSQL 15 or later."
+        }
+      },
+      "examples": [{ "name": "uq_student_course", "columns": ["student_id", "course_id"] }]
+    },
+    "foreignKey": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["columns", "references"],
+      "properties": {
+        "name": { "$ref": "#/$defs/identifier", "description": "Constraint name. Defaults to <table>_<columns>_fkey." },
+        "columns": { "$ref": "#/$defs/columnList" },
+        "references": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["table", "columns"],
+          "properties": {
+            "table": { "$ref": "#/$defs/tableReference" },
+            "columns": { "$ref": "#/$defs/columnList" }
+          }
+        },
+        "onDelete": { "$ref": "#/$defs/referentialAction" },
+        "onUpdate": { "$ref": "#/$defs/referentialAction" },
+        "match": {
+          "type": "string",
+          "enum": ["SIMPLE", "FULL", "PARTIAL"],
+          "default": "SIMPLE",
+          "description": "MATCH PARTIAL is accepted by PostgreSQL but not implemented; validation rejects it."
+        },
+        "deferrable": { "type": "boolean", "default": false },
+        "initiallyDeferred": {
+          "type": "boolean",
+          "default": false,
+          "description": "Requires deferrable: true."
+        }
+      },
+      "examples": [
+        {
+          "columns": ["department_id"],
+          "references": { "table": "departments", "columns": ["id"] },
+          "onDelete": "SET NULL",
+          "onUpdate": "CASCADE"
+        }
+      ]
+    },
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "expression"],
+      "properties": {
+        "name": { "$ref": "#/$defs/identifier" },
+        "expression": { "type": "string", "minLength": 1, "description": "A SQL boolean expression, emitted verbatim." }
+      },
+      "examples": [{ "name": "chk_valid_grade", "expression": "grade BETWEEN 5 AND 10" }]
+    },
+    "index": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "keys"],
+      "properties": {
+        "name": { "$ref": "#/$defs/identifier", "description": "Index name, unique within the schema." },
+        "keys": {
+          "type": "array",
+          "minItems": 1,
+          "description": "Ordered index keys. Columns and expressions mix freely.",
+          "items": { "$ref": "#/$defs/indexKey" }
+        },
+        "unique": { "type": "boolean", "default": false, "description": "CREATE UNIQUE INDEX. Distinct from a UNIQUE constraint." },
+        "method": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+          "default": "btree",
+          "description": "Index access method, for example btree or gin."
+        },
+        "where": { "type": "string", "minLength": 1, "description": "Partial index predicate." },
+        "include": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/identifier" },
+          "description": "Covering (INCLUDE) columns."
+        },
+        "nullsNotDistinct": { "type": "boolean", "default": false, "description": "Requires PostgreSQL 15 or later." }
+      },
+      "examples": [
+        { "name": "idx_students_name", "keys": [{ "column": "last_name" }, { "column": "first_name" }] }
+      ]
+    },
+    "indexKey": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Exactly one of column or expression.",
+      "oneOf": [
+        { "required": ["column"] },
+        { "required": ["expression"] }
+      ],
+      "properties": {
+        "column": { "$ref": "#/$defs/identifier" },
+        "expression": { "type": "string", "minLength": 1 },
+        "direction": { "type": "string", "enum": ["asc", "desc"], "default": "asc" },
+        "nulls": { "type": "string", "enum": ["first", "last"] },
+        "opclass": { "$ref": "#/$defs/identifier", "description": "Operator class for this key." }
+      }
+    },
+    "enum": {
+      "description": "An enum: a label array, or an object when it needs a namespace.",
+      "oneOf": [
+        {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["values"],
+          "properties": {
+            "values": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": { "type": "string", "minLength": 1 }
+            },
+            "schema": { "$ref": "#/$defs/identifier", "default": "public" }
+          }
+        }
+      ],
+      "examples": [["active", "inactive", "banned"], { "values": ["a"], "schema": "app" }]
+    },
+    "sequence": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": { "$ref": "#/$defs/identifier", "default": "public" },
+        "start": { "type": "integer" },
+        "increment": { "type": "integer" },
+        "minValue": { "type": "integer" },
+        "maxValue": { "type": "integer" },
+        "cycle": { "type": "boolean" },
+        "cache": { "type": "integer", "minimum": 1 }
+      },
+      "examples": [{ "start": 1000, "increment": 1 }]
+    },
+    "view": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["query"],
+      "properties": {
+        "schema": { "$ref": "#/$defs/identifier", "default": "public" },
+        "query": { "type": "string", "minLength": 1, "description": "The SELECT the view stands for, emitted verbatim." }
+      }
+    },
+    "materializedView": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["query"],
+      "properties": {
+        "schema": { "$ref": "#/$defs/identifier", "default": "public" },
+        "query": { "type": "string", "minLength": 1 },
+        "withData": { "type": "boolean", "default": true, "description": "WITH DATA when the view is created." }
+      }
+    }
+  }
+}
