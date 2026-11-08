@@ -373,13 +373,13 @@ public class MigrationApplyTests
     private const string BrokenDefaultSchema = """
         { "tables": { "probe": { "columns": {
           "id": { "type": "integer", "nullable": false },
-          "flag": { "type": "integer", "nullable": false, "default": "0; SELECT 1" } } } } }
+          "flag": { "type": "integer", "nullable": false, "default": { "sql": "0; SELECT 1" } } } } } }
         """;
 
     private const string FixedDefaultSchema = """
         { "tables": { "probe": { "columns": {
           "id": { "type": "integer", "nullable": false },
-          "flag": { "type": "integer", "nullable": false, "default": "0" } } } } }
+          "flag": { "type": "integer", "nullable": false, "default": 0 } } } } }
         """;
 
     [PostgresFact]
@@ -596,7 +596,7 @@ public class MigrationApplyTests
         const string stillBroken = """
             { "tables": { "probe": { "columns": {
               "id": { "type": "integer", "nullable": false },
-              "flag": { "type": "integer", "nullable": false, "default": "1; SELECT 2" } } } } }
+              "flag": { "type": "integer", "nullable": false, "default": { "sql": "1; SELECT 2" } } } } } }
             """;
         var firstAttempt = new StringWriter();
         Assert.Equal(1, await fixture.Runner(firstAttempt, confirmRepair: _ => true)
@@ -790,15 +790,19 @@ public class MigrationApplyTests
         const string schema = """
             { "tables": {
               "tenants": {
-                "primaryKey": ["id"],
+                "primaryKey": { "columns": ["id"] },
                 "columns": { "id": { "type": "integer", "nullable": false } } },
               "users": {
-                "primaryKey": ["id"],
-                "indexes": { "users_code_idx": { "columns": ["code"] } },
+                "primaryKey": { "columns": ["id"] },
+                "indexes": [{ "name": "users_code_idx", "keys": [{ "column": "code" }] }],
                 "columns": {
                   "id": { "type": "integer", "nullable": false },
-                  "tenant_id": { "type": "integer", "nullable": false, "references": "tenants.id" },
-                  "code": { "type": "text", "nullable": false, "unique": true } } } } }
+                  "tenant_id": { "type": "integer", "nullable": false },
+                  "code": { "type": "text", "nullable": false, "unique": true } },
+                "foreignKeys": [{
+                  "name": "users_tenant_id_fkey",
+                  "columns": ["tenant_id"],
+                  "references": { "table": "tenants", "columns": ["id"] } }] } } }
             """;
 
         Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(schema)));
@@ -832,20 +836,22 @@ public class MigrationApplyTests
         await using var fixture = await Fixture.CreateAsync();
         const string before = """
             { "tables": {
-              "parent": { "primaryKey": ["a", "b"], "columns": {
+              "parent": { "primaryKey": { "columns": ["a", "b"] }, "columns": {
                 "a": { "type": "integer", "nullable": false },
                 "b": { "type": "integer", "nullable": false } } },
               "child": {
-                "unique": [["pa", "pb"]],
+                "unique": [{ "columns": ["pa", "pb"] }],
                 "columns": {
                   "pa": { "type": "integer", "nullable": false },
                   "pb": { "type": "integer", "nullable": false } },
-                "foreignKeys": { "child_fkey": {
-                  "columns": ["pa", "pb"], "references": "parent", "referenceColumns": ["a", "b"] } } } } }
+                "foreignKeys": [{
+                  "name": "child_fkey",
+                  "columns": ["pa", "pb"],
+                  "references": { "table": "parent", "columns": ["a", "b"] } }] } } }
             """;
         const string after = """
             { "tables": {
-              "parent": { "primaryKey": ["a", "b"], "columns": {
+              "parent": { "primaryKey": { "columns": ["a", "b"] }, "columns": {
                 "a": { "type": "integer", "nullable": false },
                 "b": { "type": "integer", "nullable": false } } },
               "child": {
@@ -878,26 +884,30 @@ public class MigrationApplyTests
         await using var fixture = await Fixture.CreateAsync();
         const string schema = """
             { "tables": {
-              "parent": { "primaryKey": ["id"], "columns": { "id": { "type": "integer", "nullable": false } } },
+              "parent": { "primaryKey": { "columns": ["id"] }, "columns": { "id": { "type": "integer", "nullable": false } } },
               "child": {
                 "columns": {
                   "on_delete_set_null": { "type": "integer" },
-                  "on_delete_set_default": { "type": "integer", "default": "0" },
+                  "on_delete_set_default": { "type": "integer", "default": 0 },
                   "on_update_set_null": { "type": "integer" },
-                  "on_update_set_default": { "type": "integer", "default": "0" } },
-                "foreignKeys": {
-                  "fk_delete_null": {
-                    "columns": ["on_delete_set_null"], "references": "parent", "referenceColumns": ["id"],
-                    "onDelete": "set null" },
-                  "fk_delete_default": {
-                    "columns": ["on_delete_set_default"], "references": "parent", "referenceColumns": ["id"],
-                    "onDelete": "set default" },
-                  "fk_update_null": {
-                    "columns": ["on_update_set_null"], "references": "parent", "referenceColumns": ["id"],
-                    "onUpdate": "set null" },
-                  "fk_update_default": {
-                    "columns": ["on_update_set_default"], "references": "parent", "referenceColumns": ["id"],
-                    "onUpdate": "set default" } } } } }
+                  "on_update_set_default": { "type": "integer", "default": 0 } },
+                "foreignKeys": [
+                  { "name": "fk_delete_null",
+                    "columns": ["on_delete_set_null"],
+                    "references": { "table": "parent", "columns": ["id"] },
+                    "onDelete": "SET NULL" },
+                  { "name": "fk_delete_default",
+                    "columns": ["on_delete_set_default"],
+                    "references": { "table": "parent", "columns": ["id"] },
+                    "onDelete": "SET DEFAULT" },
+                  { "name": "fk_update_null",
+                    "columns": ["on_update_set_null"],
+                    "references": { "table": "parent", "columns": ["id"] },
+                    "onUpdate": "SET NULL" },
+                  { "name": "fk_update_default",
+                    "columns": ["on_update_set_default"],
+                    "references": { "table": "parent", "columns": ["id"] },
+                    "onUpdate": "SET DEFAULT" } ] } } }
             """;
 
         Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(schema)));
@@ -923,15 +933,17 @@ public class MigrationApplyTests
         await using var fixture = await Fixture.CreateAsync();
         const string schema = """
             { "tables": {
-              "a_parent": { "primaryKey": ["a", "b"], "columns": {
+              "a_parent": { "primaryKey": { "columns": ["a", "b"] }, "columns": {
                 "a": { "type": "integer", "nullable": false },
                 "b": { "type": "integer", "nullable": false } } },
               "z_child": {
                 "columns": {
                   "pa": { "type": "integer", "nullable": false },
                   "pb": { "type": "integer", "nullable": false } },
-                "foreignKeys": { "z_child_fkey": {
-                  "columns": ["pa", "pb"], "references": "a_parent", "referenceColumns": ["a", "b"] } } } } }
+                "foreignKeys": [{
+                  "name": "z_child_fkey",
+                  "columns": ["pa", "pb"],
+                  "references": { "table": "a_parent", "columns": ["a", "b"] } }] } } }
             """;
 
         Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(schema)));
@@ -959,15 +971,17 @@ public class MigrationApplyTests
         await using var fixture = await Fixture.CreateAsync();
         const string before = """
             { "tables": {
-              "p": { "primaryKey": ["a", "b"], "columns": {
+              "p": { "primaryKey": { "columns": ["a", "b"] }, "columns": {
                 "a": { "type": "integer", "nullable": false },
                 "b": { "type": "integer", "nullable": false } } },
               "c": {
                 "columns": {
                   "pa": { "type": "integer", "nullable": false },
                   "pb": { "type": "integer", "nullable": false } },
-                "foreignKeys": { "c_fkey": {
-                  "columns": ["pa", "pb"], "references": "p", "referenceColumns": ["a", "b"] } } } } }
+                "foreignKeys": [{
+                  "name": "c_fkey",
+                  "columns": ["pa", "pb"],
+                  "references": { "table": "p", "columns": ["a", "b"] } }] } } }
             """;
 
         Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(before)));
@@ -993,28 +1007,32 @@ public class MigrationApplyTests
         await using var fixture = await Fixture.CreateAsync();
         const string before = """
             { "tables": {
-              "parent": { "primaryKey": ["id"], "columns": { "id": { "type": "integer", "nullable": false } } },
+              "parent": { "primaryKey": { "columns": ["id"] }, "columns": { "id": { "type": "integer", "nullable": false } } },
               "child": {
-                "unique": [["pa", "pb"]],
+                "unique": [{ "columns": ["pa", "pb"] }],
                 "columns": {
                   "pa": { "type": "integer", "nullable": false },
                   "pb": { "type": "integer", "nullable": false },
                   "parent_id": { "type": "integer" } },
-                "foreignKeys": { "child_fkey": {
-                  "columns": ["parent_id"], "references": "parent", "referenceColumns": ["id"],
-                  "onDelete": "cascade" } } } } }
+                "foreignKeys": [{
+                  "name": "child_fkey",
+                  "columns": ["parent_id"],
+                  "references": { "table": "parent", "columns": ["id"] },
+                  "onDelete": "CASCADE" }] } } }
             """;
         const string after = """
             { "tables": {
-              "parent": { "primaryKey": ["id"], "columns": { "id": { "type": "integer", "nullable": false } } },
+              "parent": { "primaryKey": { "columns": ["id"] }, "columns": { "id": { "type": "integer", "nullable": false } } },
               "child": {
                 "columns": {
                   "pa": { "type": "integer", "nullable": false },
                   "pb": { "type": "integer", "nullable": false },
                   "parent_id": { "type": "integer" } },
-                "foreignKeys": { "child_fkey": {
-                  "columns": ["parent_id"], "references": "parent", "referenceColumns": ["id"],
-                  "onDelete": "restrict" } } } } }
+                "foreignKeys": [{
+                  "name": "child_fkey",
+                  "columns": ["parent_id"],
+                  "references": { "table": "parent", "columns": ["id"] },
+                  "onDelete": "RESTRICT" }] } } }
             """;
 
         Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(before)));
@@ -1032,27 +1050,31 @@ public class MigrationApplyTests
         await using var fixture = await Fixture.CreateAsync();
         const string before = """
             { "tables": {
-              "a_parent": { "primaryKey": ["a", "b"], "columns": {
+              "a_parent": { "primaryKey": { "columns": ["a", "b"] }, "columns": {
                 "a": { "type": "integer", "nullable": false },
                 "b": { "type": "integer", "nullable": false } } },
               "z_child": {
                 "columns": {
                   "a": { "type": "integer", "nullable": false },
                   "b": { "type": "integer", "nullable": false } },
-                "foreignKeys": { "z_child_fkey": {
-                  "columns": ["a", "b"], "references": "a_parent", "referenceColumns": ["a", "b"] } } } } }
+                "foreignKeys": [{
+                  "name": "z_child_fkey",
+                  "columns": ["a", "b"],
+                  "references": { "table": "a_parent", "columns": ["a", "b"] } }] } } }
             """;
         const string after = """
             { "tables": {
-              "a_parent": { "primaryKey": ["a"], "columns": {
+              "a_parent": { "primaryKey": { "columns": ["a"] }, "columns": {
                 "a": { "type": "integer", "nullable": false },
                 "b": { "type": "integer", "nullable": false } } },
               "z_child": {
                 "columns": {
                   "a": { "type": "integer", "nullable": false },
                   "b": { "type": "integer", "nullable": false } },
-                "foreignKeys": { "z_child_fkey": {
-                  "columns": ["a"], "references": "a_parent", "referenceColumns": ["a"] } } } } }
+                "foreignKeys": [{
+                  "name": "z_child_fkey",
+                  "columns": ["a"],
+                  "references": { "table": "a_parent", "columns": ["a"] } }] } } }
             """;
 
         Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(before)));
@@ -1081,11 +1103,13 @@ public class MigrationApplyTests
         await using var fixture = await Fixture.CreateAsync();
         const string before = """
             { "tables": {
-              "a_parent": { "primaryKey": ["id"], "columns": { "id": { "type": "integer", "nullable": false } } },
+              "a_parent": { "primaryKey": { "columns": ["id"] }, "columns": { "id": { "type": "integer", "nullable": false } } },
               "z_child": {
                 "columns": { "parent_id": { "type": "integer", "nullable": false } },
-                "foreignKeys": { "z_child_fkey": {
-                  "columns": ["parent_id"], "references": "a_parent", "referenceColumns": ["id"] } } },
+                "foreignKeys": [{
+                  "name": "z_child_fkey",
+                  "columns": ["parent_id"],
+                  "references": { "table": "a_parent", "columns": ["id"] } }] },
               "keep": { "columns": { "id": { "type": "integer", "nullable": false } } } } }
             """;
         const string after = """
@@ -1111,15 +1135,19 @@ public class MigrationApplyTests
         const string before = """
             { "tables": {
               "p": {
-                "primaryKey": ["id"],
+                "primaryKey": { "columns": ["id"] },
                 "columns": { "id": { "type": "integer", "nullable": false } },
-                "foreignKeys": { "p_c_fkey": {
-                  "columns": ["id"], "references": "c", "referenceColumns": ["id"] } } },
+                "foreignKeys": [{
+                  "name": "p_c_fkey",
+                  "columns": ["id"],
+                  "references": { "table": "c", "columns": ["id"] } }] },
               "c": {
-                "primaryKey": ["id"],
+                "primaryKey": { "columns": ["id"] },
                 "columns": { "id": { "type": "integer", "nullable": false } },
-                "foreignKeys": { "c_p_fkey": {
-                  "columns": ["id"], "references": "p", "referenceColumns": ["id"] } } },
+                "foreignKeys": [{
+                  "name": "c_p_fkey",
+                  "columns": ["id"],
+                  "references": { "table": "p", "columns": ["id"] } }] },
               "keep": { "columns": { "id": { "type": "integer", "nullable": false } } } } }
             """;
         const string after = """
@@ -1410,17 +1438,19 @@ public class MigrationApplyTests
         await using var fixture = await Fixture.CreateAsync();
         const string before = """
             { "tables": {
-              "parent": { "primaryKey": ["id"], "columns": {
+              "parent": { "primaryKey": { "columns": ["id"] }, "columns": {
                 "id": { "type": "integer", "nullable": false },
                 "name": { "type": "text", "nullable": false } } },
               "child": {
                 "columns": { "parent_id": { "type": "integer", "nullable": false } },
-                "foreignKeys": { "child_fkey": {
-                  "columns": ["parent_id"], "references": "parent", "referenceColumns": ["id"] } } } } }
+                "foreignKeys": [{
+                  "name": "child_fkey",
+                  "columns": ["parent_id"],
+                  "references": { "table": "parent", "columns": ["id"] } }] } } }
             """;
         const string after = """
             { "tables": {
-              "parent": { "primaryKey": ["name"], "columns": {
+              "parent": { "primaryKey": { "columns": ["name"] }, "columns": {
                 "id": { "type": "integer", "nullable": false },
                 "name": { "type": "text", "nullable": false } } } } }
             """;
@@ -1446,11 +1476,13 @@ public class MigrationApplyTests
         await using var fixture = await Fixture.CreateAsync();
         const string schema = """
             { "tables": {
-              "parent": { "indexes": { "parent_a_idx": { "columns": ["a"], "unique": true } },
+              "parent": { "indexes": [{ "name": "parent_a_idx", "keys": [{ "column": "a" }], "unique": true }],
                 "columns": { "a": { "type": "integer", "nullable": false } } },
               "child": { "columns": { "a": { "type": "integer", "nullable": false } },
-                "foreignKeys": { "child_fkey": {
-                  "columns": ["a"], "references": "parent", "referenceColumns": ["a"] } } } } }
+                "foreignKeys": [{
+                  "name": "child_fkey",
+                  "columns": ["a"],
+                  "references": { "table": "parent", "columns": ["a"] } }] } } }
             """;
 
         // Was a rollback before the fix: the foreign key was added before the index it needs.
@@ -1484,8 +1516,10 @@ public class MigrationApplyTests
               "parent": { "columns": { "a": { "type": "integer", "nullable": false } } },
               "child": {
                 "columns": { "a": { "type": "integer", "nullable": false } },
-                "foreignKeys": { "child_fkey": {
-                  "columns": ["a"], "references": "parent", "referenceColumns": ["a"] } } } } }
+                "foreignKeys": [{
+                  "name": "child_fkey",
+                  "columns": ["a"],
+                  "references": { "table": "parent", "columns": ["a"] } }] } } }
             """;
         var refused = new StringWriter();
         Assert.Equal(1, await fixture.Runner(refused).ApplyAsync(fixture.Parse(declared)));
@@ -1519,7 +1553,7 @@ public class MigrationApplyTests
 
         // Adopting the table while the plan is refused: the baseline is recorded, nothing runs.
         const string blocked = """
-            { "tables": { "t": { "columns": { "n": { "type": "integer", "default": "5" } } } } }
+            { "tables": { "t": { "columns": { "n": { "type": "integer", "default": 5 } } } } }
             """;
         Assert.Equal(1, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(blocked)));
         Assert.Equal(0, await fixture.CountAsync(
@@ -1528,7 +1562,7 @@ public class MigrationApplyTests
         // The default was never applied, so it must still be applied on the next run.
         const string keepingX = """
             { "tables": { "t": { "columns": {
-              "n": { "type": "integer", "default": "5" },
+              "n": { "type": "integer", "default": 5 },
               "x": { "type": "text" } } } } }
             """;
         var output = new StringWriter();
@@ -1584,7 +1618,7 @@ public class MigrationApplyTests
         await using var fixture = await Fixture.CreateAsync();
         const string schema = """
             { "tables": { "users": {
-              "primaryKey": ["id"],
+              "primaryKey": { "columns": ["id"] },
               "columns": { "id": { "type": "integer", "nullable": false } } } } }
             """;
 
@@ -1615,7 +1649,7 @@ public class MigrationApplyTests
         const string withCast = """
             { "tables": { "t": { "columns": {
               "id": { "type": "integer", "nullable": false },
-              "at": { "type": "timestamp", "default": "'2020-01-01 10:00'::date" } } } } }
+              "at": { "type": "timestamp", "default": { "sql": "'2020-01-01 10:00'::date" } } } } } }
             """;
 
         Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(withCast)));
@@ -1646,8 +1680,8 @@ public class MigrationApplyTests
         const string schema = """
             { "tables": { "t": { "columns": {
               "id": { "type": "integer", "nullable": false },
-              "note": { "type": "text", "default": "'a  b'" },
-              "at": { "type": "timestamp", "default": "'2020-01-01 10:00'::date" } } } } }
+              "note": { "type": "text", "default": "a  b" },
+              "at": { "type": "timestamp", "default": { "sql": "'2020-01-01 10:00'::date" } } } } } }
             """;
 
         Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(schema)));
@@ -1672,11 +1706,11 @@ public class MigrationApplyTests
         const string schema = """
             { "tables": {
               "tenants": {
-                "primaryKey": ["id"],
+                "primaryKey": { "columns": ["id"] },
                 "columns": { "id": { "type": "integer", "nullable": false } } },
               "users": {
-                "primaryKey": ["tenant_id", "id"],
-                "unique": [["tenant_id", "email"]],
+                "primaryKey": { "columns": ["tenant_id", "id"] },
+                "unique": [{ "columns": ["tenant_id", "email"] }],
                 "columns": {
                   "tenant_id": { "type": "integer", "nullable": false },
                   "id": { "type": "integer", "nullable": false },
@@ -1686,13 +1720,12 @@ public class MigrationApplyTests
                   "id": { "type": "integer", "nullable": false },
                   "tenant_id": { "type": "integer", "nullable": false },
                   "author_id": { "type": "integer", "nullable": false } },
-                "foreignKeys": {
-                  "posts_author_fkey": {
+                "foreignKeys": [
+                  { "name": "posts_author_fkey",
                     "columns": ["tenant_id", "author_id"],
-                    "references": "users",
-                    "referenceColumns": ["tenant_id", "id"],
-                    "onDelete": "cascade",
-                    "onUpdate": "restrict" } } } } }
+                    "references": { "table": "users", "columns": ["tenant_id", "id"] },
+                    "onDelete": "CASCADE",
+                    "onUpdate": "RESTRICT" } ] } } }
             """;
 
         Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(schema)));
@@ -1710,7 +1743,7 @@ public class MigrationApplyTests
         Assert.Contains("in sync", settled.ToString(), StringComparison.Ordinal);
         Assert.Equal(1, await fixture.CountAsync("SELECT count(*) FROM chetah.migrations"));
 
-        var changed = schema.Replace("\"onDelete\": \"cascade\"", "\"onDelete\": \"restrict\"", StringComparison.Ordinal);
+        var changed = schema.Replace("\"onDelete\": \"CASCADE\"", "\"onDelete\": \"RESTRICT\"", StringComparison.Ordinal);
         Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(changed)));
         Assert.Equal(1, await fixture.CountAsync(
             "SELECT count(*) FROM pg_constraint WHERE conname = 'posts_author_fkey' AND confdeltype = 'r'"));
@@ -1731,7 +1764,7 @@ public class MigrationApplyTests
 
         const string withIndex = """
             { "tables": { "t": {
-              "indexes": { "t_a_b_idx": { "columns": ["a", "b"], "unique": true } },
+              "indexes": [{ "name": "t_a_b_idx", "keys": [{ "column": "a" }, { "column": "b" }], "unique": true }],
               "columns": {
                 "a": { "type": "integer", "nullable": false },
                 "b": { "type": "integer", "nullable": false } } } } }
@@ -1797,16 +1830,20 @@ public class MigrationApplyTests
         const string schema = """
             { "tables": {
               "roles": {
-                "primaryKey": ["id"],
+                "primaryKey": { "columns": ["id"] },
                 "columns": { "id": { "type": "integer", "nullable": false, "identity": true } } },
               "users": {
-                "primaryKey": ["id"],
-                "indexes": { "users_email_idx": { "columns": ["email"], "unique": true } },
+                "primaryKey": { "columns": ["id"] },
+                "indexes": [{ "name": "users_email_idx", "keys": [{ "column": "email" }], "unique": true }],
                 "columns": {
                   "id": { "type": "bigint", "nullable": false, "identity": true },
                   "email": { "type": "text", "nullable": false, "unique": true },
-                  "role_id": { "type": "integer", "references": "roles.id" },
-                  "created_at": { "type": "timestamp", "nullable": false, "default": "now()" } } } } }
+                  "role_id": { "type": "integer" },
+                  "created_at": { "type": "timestamp", "nullable": false, "default": { "sql": "now()" } } },
+                "foreignKeys": [{
+                  "name": "users_role_id_fkey",
+                  "columns": ["role_id"],
+                  "references": { "table": "roles", "columns": ["id"] } }] } } }
             """;
 
         Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(schema)));
@@ -1839,30 +1876,34 @@ public class MigrationApplyTests
         const string before = """
             { "tables": {
               "roles": {
-                "primaryKey": ["id"],
+                "primaryKey": { "columns": ["id"] },
                 "columns": { "id": { "type": "integer", "nullable": false } } },
               "users": {
-                "primaryKey": ["id"],
-                "indexes": { "users_email_idx": { "columns": ["email"] } },
+                "primaryKey": { "columns": ["id"] },
+                "indexes": [{ "name": "users_email_idx", "keys": [{ "column": "email" }] }],
                 "columns": {
                   "id": { "type": "integer", "nullable": false },
                   "email": { "type": "text", "nullable": false, "unique": true },
-                  "role_id": { "type": "integer", "references": "roles.id" },
-                  "state": { "type": "text", "nullable": false, "default": "'new'" } } } } }
+                  "role_id": { "type": "integer" },
+                  "state": { "type": "text", "nullable": false, "default": "new" } },
+                "foreignKeys": [{
+                  "name": "users_role_id_fkey",
+                  "columns": ["role_id"],
+                  "references": { "table": "roles", "columns": ["id"] } }] } } }
             """;
         const string after = """
             { "tables": {
               "roles": {
-                "primaryKey": ["id"],
+                "primaryKey": { "columns": ["id"] },
                 "columns": { "id": { "type": "integer", "nullable": false } } },
               "users": {
-                "primaryKey": ["id", "email"],
-                "indexes": { "users_role_idx": { "columns": ["role_id"] } },
+                "primaryKey": { "columns": ["id", "email"] },
+                "indexes": [{ "name": "users_role_idx", "keys": [{ "column": "role_id" }] }],
                 "columns": {
                   "id": { "type": "integer", "nullable": false },
                   "email": { "type": "text", "nullable": false },
                   "role_id": { "type": "integer", "nullable": false },
-                  "state": { "type": "text", "nullable": false, "default": "'active'" } } } } }
+                  "state": { "type": "text", "nullable": false, "default": "active" } } } } }
             """;
 
         Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(before)));
@@ -2124,8 +2165,8 @@ public class MigrationApplyTests
         const string schema = """
             { "tables": { "t": { "columns": {
               "id": { "type": "integer", "nullable": false },
-              "half": { "type": "integer", "default": "1 + 1" },
-              "stamp": { "type": "timestamp", "default": "pg_catalog.now()" } } } } }
+              "half": { "type": "integer", "default": { "sql": "1 + 1" } },
+              "stamp": { "type": "timestamp", "default": { "sql": "pg_catalog.now()" } } } } } }
             """;
 
         Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(schema)));
@@ -2153,7 +2194,7 @@ public class MigrationApplyTests
         const string schema = """
             { "tables": { "t": { "columns": {
               "id": { "type": "integer", "nullable": false },
-              "half": { "type": "integer", "default": "1 + 1" } } } } }
+              "half": { "type": "integer", "default": { "sql": "1 + 1" } } } } } }
             """;
 
         Assert.Equal(0, await fixture.Runner(new StringWriter()).ApplyAsync(fixture.Parse(schema)));

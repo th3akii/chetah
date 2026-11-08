@@ -179,13 +179,13 @@ public class SchemaDiffTests
         var plan = await SchemaDiff.ComputeAsync(
             Desired("""
                 { "tables": { "t": {
-                  "primaryKey": ["a", "b"],
+                  "primaryKey": { "columns": ["a", "b"] },
                   "columns": {
                     "a": { "type": "integer", "nullable": false },
                     "b": { "type": "integer", "nullable": false },
                     "c": { "type": "text", "unique": true },
                     "d": { "type": "bigint", "nullable": false, "identity": true },
-                    "e": { "type": "timestamp", "default": "now()" } } } } }
+                    "e": { "type": "timestamp", "default": { "sql": "now()" } } } } } }
                 """),
             new CatalogState([]),
             NoNulls);
@@ -209,12 +209,13 @@ public class SchemaDiffTests
     {
         var desired = Desired("""
             { "tables": {
-              "roles": { "primaryKey": ["id"], "columns": { "id": { "type": "integer", "nullable": false } } },
+              "roles": { "primaryKey": { "columns": ["id"] }, "columns": { "id": { "type": "integer", "nullable": false } } },
               "users": {
-                "indexes": { "users_role_idx": { "columns": ["role_id"] } },
+                "indexes": [{ "name": "users_role_idx", "keys": [{ "column": "role_id" }] }],
                 "columns": {
                   "id": { "type": "integer", "nullable": false },
-                  "role_id": { "type": "integer", "references": "roles.id" } } } } }
+                  "role_id": { "type": "integer" } },
+                "foreignKeys": [{ "name": "users_role_id_fkey", "columns": ["role_id"], "references": { "table": "roles", "columns": ["id"] } }] } } }
             """);
         var live = Live(
             Table("roles", ("id", "int4", true)),
@@ -251,7 +252,7 @@ public class SchemaDiffTests
     {
         var desired = Desired("""
             { "tables": { "t": { "columns": {
-              "a": { "type": "text", "default": "'active'" },
+              "a": { "type": "text", "default": "active" },
               "b": { "type": "integer", "nullable": false, "identity": true } } } } }
             """);
         var live = Live(Table("t", ("a", "text", false), ("b", "int4", true))) with
@@ -282,8 +283,8 @@ public class SchemaDiffTests
     {
         var desired = Desired("""
             { "tables": { "accounts": {
-              "primaryKey": ["id"],
-              "indexes": { "users_code_idx": { "columns": ["code"] } },
+              "primaryKey": { "columns": ["id"] },
+              "indexes": [{ "name": "users_code_idx", "keys": [{ "column": "code" }] }],
               "columns": {
                 "id": { "type": "integer", "nullable": false },
                 "code": { "type": "text", "nullable": false, "unique": true } } } } }
@@ -351,15 +352,14 @@ public class SchemaDiffTests
         // The order must come from the dependency, not from the alphabet.
         var desired = Desired($$"""
             { "tables": {
-              "{{parent}}": { "primaryKey": ["b"], "columns": {
+              "{{parent}}": { "primaryKey": { "columns": ["b"] }, "columns": {
                 "a": { "type": "integer", "nullable": false },
                 "b": { "type": "integer", "nullable": false } } },
               "{{child}}": {
                 "columns": {
                   "a": { "type": "integer", "nullable": false },
                   "b": { "type": "integer", "nullable": false } },
-                "foreignKeys": { "{{child}}_fkey": {
-                  "columns": ["b"], "references": "{{parent}}", "referenceColumns": ["b"] } } } } }
+                "foreignKeys": [{ "name": "{{child}}_fkey", "columns": ["b"], "references": { "table": "{{parent}}", "columns": ["b"] } }] } } }
             """);
         var live = Live(
             Table(parent, ("a", "int4", true), ("b", "int4", true)),
@@ -448,7 +448,7 @@ public class SchemaDiffTests
         // same plan. The explicit DROP INDEX must run before the column takes the index with it.
         var desired = Desired("""
             { "tables": { "t": {
-              "unique": ["a"],
+              "unique": [{ "columns": ["a"] }],
               "columns": {
                 "a": { "type": "integer", "nullable": false } } } } }
             """);
@@ -470,13 +470,12 @@ public class SchemaDiffTests
     {
         var desired = Desired("""
             { "tables": {
-              "parent": { "primaryKey": ["name"], "columns": {
+              "parent": { "primaryKey": { "columns": ["name"] }, "columns": {
                 "id": { "type": "integer", "nullable": false },
                 "name": { "type": "text", "nullable": false } } },
               "child": {
                 "columns": { "parent_id": { "type": "integer", "nullable": false } },
-                "foreignKeys": { "child_fkey": {
-                  "columns": ["parent_id"], "references": "parent", "referenceColumns": ["id"] } } } } }
+                "foreignKeys": [{ "name": "child_fkey", "columns": ["parent_id"], "references": { "table": "parent", "columns": ["id"] } }] } } }
             """);
         var live = Live(
             Table("parent", ("id", "int4", true), ("name", "text", true)),
@@ -505,11 +504,10 @@ public class SchemaDiffTests
     {
         var desired = Desired("""
             { "tables": {
-              "parent": { "unique": ["a"], "columns": { "a": { "type": "integer", "nullable": false } } },
+              "parent": { "unique": [{ "columns": ["a"] }], "columns": { "a": { "type": "integer", "nullable": false } } },
               "child": {
                 "columns": { "a": { "type": "integer", "nullable": false } },
-                "foreignKeys": { "child_fkey": {
-                  "columns": ["a"], "references": "parent", "referenceColumns": ["a"] } } } } }
+                "foreignKeys": [{ "name": "child_fkey", "columns": ["a"], "references": { "table": "parent", "columns": ["a"] } }] } } }
             """);
         var live = Live(
             Table("parent", ("a", "int4", true)),
@@ -574,12 +572,11 @@ public class SchemaDiffTests
         // on the index, not the order, so the key still cannot be dropped first.
         var desired = Desired("""
             { "tables": {
-              "parent": { "primaryKey": ["a"], "columns": {
+              "parent": { "primaryKey": { "columns": ["a"] }, "columns": {
                 "a": { "type": "integer", "nullable": false }, "b": { "type": "integer", "nullable": false } } },
               "child": { "columns": {
                 "pa": { "type": "integer", "nullable": false }, "pb": { "type": "integer", "nullable": false } },
-                "foreignKeys": { "child_fkey": {
-                  "columns": ["pa", "pb"], "references": "parent", "referenceColumns": ["a", "b"] } } } } }
+                "foreignKeys": [{ "name": "child_fkey", "columns": ["pa", "pb"], "references": { "table": "parent", "columns": ["a", "b"] } }] } } }
             """);
         var live = Live(
             Table("parent", ("a", "int4", true), ("b", "int4", true)),
@@ -613,8 +610,7 @@ public class SchemaDiffTests
               "parent": { "columns": { "a": { "type": "integer", "nullable": false } } },
               "child": {
                 "columns": { "a": { "type": "integer", "nullable": false } },
-                "foreignKeys": { "child_fkey": {
-                  "columns": ["a"], "references": "parent", "referenceColumns": ["a"] } } } } }
+                "foreignKeys": [{ "name": "child_fkey", "columns": ["a"], "references": { "table": "parent", "columns": ["a"] } }] } } }
             """);
         var live = Live(
             Table("parent", ("a", "int4", true)),
@@ -688,8 +684,7 @@ public class SchemaDiffTests
         var desired = Desired("""
             { "tables": { "child": {
               "columns": { "parent_id": { "type": "integer", "nullable": false } },
-              "foreignKeys": { "child_fkey": {
-                "columns": ["parent_id"], "references": "parent", "referenceColumns": ["id"] } } } } }
+              "foreignKeys": [{ "name": "child_fkey", "columns": ["parent_id"], "references": { "table": "parent", "columns": ["id"] } }] } } }
             """);
         var live = Live(
             Table("parent", ("id", "int4", true)),
@@ -770,12 +765,12 @@ public class SchemaDiffTests
             ]),
         ]);
 
-        var same = Desired("""{ "tables": { "t": { "columns": { "at": { "type": "timestamp", "default": "'2020-01-01 10:00'::date" } } } } }""");
+        var same = Desired("""{ "tables": { "t": { "columns": { "at": { "type": "timestamp", "default": { "sql": "'2020-01-01 10:00'::date" } } } } } }""");
         Assert.True((await SchemaDiff.ComputeAsync(same, live, NoNulls, identities)).IsEmpty);
 
         // Same normalized text, different value: the cast truncates the time, so dropping it must
         // not be invisible just because normalization strips casts.
-        var withoutCast = Desired("""{ "tables": { "t": { "columns": { "at": { "type": "timestamp", "default": "'2020-01-01 10:00'" } } } } }""");
+        var withoutCast = Desired("""{ "tables": { "t": { "columns": { "at": { "type": "timestamp", "default": "2020-01-01 10:00" } } } } }""");
         var plan = await SchemaDiff.ComputeAsync(withoutCast, live, NoNulls, identities);
         Assert.Equal(
             "ALTER TABLE \"t\" ALTER COLUMN \"at\" SET DEFAULT '2020-01-01 10:00'",
@@ -787,8 +782,8 @@ public class SchemaDiffTests
     {
         var desired = Desired("""
             { "tables": { "t": { "columns": {
-              "note": { "type": "text", "default": "'a  b'" },
-              "at": { "type": "timestamp", "default": "'2020-01-01 10:00'::date" } } } } }
+              "note": { "type": "text", "default": "a  b" },
+              "at": { "type": "timestamp", "default": { "sql": "'2020-01-01 10:00'::date" } } } } } }
             """);
 
         var plan = await SchemaDiff.ComputeAsync(desired, new CatalogState([]), NoNulls);
@@ -801,7 +796,7 @@ public class SchemaDiffTests
         var live = Live(Table("t", ("note", "text", false), ("at", "timestamp", false)));
         var altered = Desired("""
             { "tables": { "t": { "columns": {
-              "note": { "type": "text", "default": "'a  b'" },
+              "note": { "type": "text", "default": "a  b" },
               "at": { "type": "timestamp", "nullable": false } } } } }
             """);
         var statements = (await SchemaDiff.ComputeAsync(altered, live, NoNulls)).Operations
@@ -813,7 +808,7 @@ public class SchemaDiffTests
     [Fact]
     public async Task RecordedDefault_IsNotRegeneratedWhenPostgresRewritesIt()
     {
-        var desired = Desired("""{ "tables": { "t": { "columns": { "a": { "type": "integer", "default": "pg_catalog.now()" } } } } }""");
+        var desired = Desired("""{ "tables": { "t": { "columns": { "a": { "type": "integer", "default": { "sql": "pg_catalog.now()" } } } } } }""");
         var live = new CatalogState([
             new TableState("t", [new ColumnState("a", "int4", false, "now()")]),
         ]);
@@ -829,7 +824,7 @@ public class SchemaDiffTests
         Assert.True(plan.IsEmpty);
 
         // Changing the declaration is still a change.
-        var changed = Desired("""{ "tables": { "t": { "columns": { "a": { "type": "integer", "default": "now()" } } } } }""");
+        var changed = Desired("""{ "tables": { "t": { "columns": { "a": { "type": "integer", "default": { "sql": "now()" } } } } } }""");
         var rewrite = await SchemaDiff.ComputeAsync(changed, live, NoNulls, identities);
         var operation = Assert.Single(rewrite.Operations);
         Assert.Equal("ALTER TABLE \"t\" ALTER COLUMN \"a\" SET DEFAULT now()", operation.Statement);
@@ -846,7 +841,7 @@ public class SchemaDiffTests
     public async Task DefaultThatOnlyDiffersByCasts_IsNotChanged()
     {
         // PostgreSQL prints 'active' back as 'active'::text; that is the same default.
-        var desired = Desired("""{ "tables": { "t": { "columns": { "a": { "type": "text", "default": "'active'" } } } } }""");
+        var desired = Desired("""{ "tables": { "t": { "columns": { "a": { "type": "text", "default": "active" } } } } }""");
         var live = new CatalogState([
             new TableState("t", [new ColumnState("a", "text", false, Defaults.Normalize("'active'::text"))]),
         ]);
@@ -882,7 +877,10 @@ public class SchemaDiffTests
         Assert.Empty(plan.Blocked);
     }
 
-    private static CatalogState Desired(string json) => SchemaCatalog.FromSchema(SchemaParser.Parse(json).Schema!);
+    // Diff behaviour is tested against shapes PostgreSQL itself would reject later (an FK to a
+    // non-unique key, an FK to a table the file omits); structure-only parsing keeps those tests
+    // focused on the diff instead of the semantic validator.
+    private static CatalogState Desired(string json) => SchemaCatalog.FromSchema(SchemaParser.ParseStructure(json).Schema!);
 
     private static CatalogState Live(params TableState[] tables) => new(tables);
 

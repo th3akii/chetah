@@ -22,6 +22,16 @@ public class GuideExamplesTests
         }
     }
 
+    [Fact]
+    public void TheUniversityExampleParses()
+    {
+        var path = Path.Combine(FindRepositoryRoot(), "examples", "NewExample", "chetah-schema.json");
+        var result = SchemaParser.Parse(File.ReadAllText(path));
+
+        Assert.True(result.Error is null, result.Error);
+        Assert.Contains(result.Schema!.Tables, table => table.Name == "grades");
+    }
+
     /// <summary>The parser cannot know whether a foreign key's column type matches the column it
     /// references — PostgreSQL decides that at apply time. An example that would be rejected by the
     /// server is still wrong, so the complete examples are checked here.</summary>
@@ -30,12 +40,6 @@ public class GuideExamplesTests
         foreach (var table in schema.Tables)
         {
             var columns = table.Columns.ToDictionary(column => column.Name, StringComparer.Ordinal);
-
-            foreach (var column in table.Columns.Where(column => column.References is not null))
-            {
-                var target = column.References!.Split('.');
-                AssertCompatible(schema, table, column.Name, column.Type, target[^2], target[^1]);
-            }
 
             foreach (var foreignKey in table.ForeignKeys ?? [])
             {
@@ -53,7 +57,7 @@ public class GuideExamplesTests
         Schema schema,
         TableSchema table,
         string column,
-        ClrType type,
+        ColumnType type,
         string targetTable,
         string targetColumn)
     {
@@ -66,14 +70,12 @@ public class GuideExamplesTests
             throw new InvalidOperationException(
                 $"{table.Name}.{column} references {targetTable}.{targetColumn}, which the example does not declare.");
 
-        // ClrType is a record, not an enum: compare the instances. Integer and bigint are the one
-        // pair PostgreSQL accepts across (an equality operator exists between them).
-        var compatible = target.Type == type
-            || (type == ClrType.Integer && target.Type == ClrType.BigInt)
-            || (type == ClrType.BigInt && target.Type == ClrType.Integer);
+        // PostgreSQL accepts the integer/bigint pair across an equality comparison.
+        var compatible = target.Type.SqlType == type.SqlType
+            || (type.SqlType, target.Type.SqlType) is ("int4", "int8") or ("int8", "int4");
         Assert.True(
             compatible,
-            $"{table.Name}.{column} is {type} but references {targetTable}.{targetColumn}, which is {target.Type}.");
+            $"{table.Name}.{column} is {type.SqlType} but references {targetTable}.{targetColumn}, which is {target.Type.SqlType}.");
     }
 
     /// <summary>Fenced <c>```jsonc</c> blocks that declare a top-level <c>"tables"</c>. The guide also
