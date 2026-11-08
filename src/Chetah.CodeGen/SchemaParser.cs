@@ -1316,14 +1316,13 @@ public static class SchemaValidator
                     Report($"{tablePath}.columns",
                         $"Only one primary key is allowed per table; {columnKeys.Length} columns declare \"primaryKey\": true.");
 
-                if (columnKeys.Length > 0 && table.PrimaryKey is not null)
-                    Report($"{tablePath}.primaryKey",
-                        "A table-level \"primaryKey\" cannot be combined with column-level \"primaryKey\": true.");
+                if (columnKeys.Length > 0 && table.PrimaryKey is null)
+                    Check($"{table.Name}_pkey", $"{tablePath}.columns.{columnKeys[0].Name}.primaryKey");
 
                 if (table.PrimaryKey is { } primaryKey)
                 {
                     if (columnKeys.Length > 0)
-                        Report($"{tablePath}.primaryKey", "A table-level \"primaryKey\" cannot be combined with column-level declarations.");
+                        Report($"{tablePath}.primaryKey", "A table-level \"primaryKey\" cannot be combined with column-level \"primaryKey\": true.");
 
                     Check(primaryKey.Name, $"{tablePath}.primaryKey.name");
 
@@ -1341,10 +1340,6 @@ public static class SchemaValidator
                         if (declared.Nullable)
                             Report($"{tablePath}.columns.{column}.nullable", "A primary key column cannot be nullable.");
                     }
-                }
-                else if (columnKeys.Length == 1)
-                {
-                    Check($"{table.Name}_pkey", $"{tablePath}.columns.{columnKeys[0].Name}.primaryKey");
                 }
 
                 var uniqueKeys = new List<IReadOnlyList<string>>();
@@ -1477,7 +1472,6 @@ public static class SchemaValidator
                 return;
             }
 
-            var referencedPath = $"tables.{referenced.Name}";
 
             foreach (var column in foreignKey.RefColumns.Where(column =>
                 referenced.Columns.All(candidate => candidate.Name != column)))
@@ -1503,7 +1497,6 @@ public static class SchemaValidator
                         + $"'{referenced.Name}.{remote.Name}', which is {remote.Type.SqlType}.");
             }
 
-            _ = referencedPath;
         }
 
         private static bool IsUniqueKey(TableSchema table, IReadOnlyList<string> columns)
