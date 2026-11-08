@@ -1,3 +1,4 @@
+using Chetah;
 using Chetah.CodeGen;
 using Chetah.Postgres;
 
@@ -74,6 +75,12 @@ public class GeneratedSourceTests
         Assert.Equal(typeof(bool), typeof(TestWidgets).GetProperty(nameof(TestWidgets.Active))!.PropertyType);
         Assert.Equal(typeof(Guid?), typeof(TestWidgets).GetProperty(nameof(TestWidgets.Token))!.PropertyType);
         Assert.Equal(typeof(DateTime), typeof(TestWidgets).GetProperty(nameof(TestWidgets.Created))!.PropertyType);
+
+        // Write-side metadata used by INSERT.
+        Assert.True(StudentsTable.Id.HasDefault);
+        Assert.False(StudentsTable.FirstName.IsNullable);
+        Assert.Equal(ColumnGeneration.Computed, StudentsTable.Display.Generation);
+        Assert.True(StudentsTable.Nickname.HasDefault);
     }
 
     // ---- Binding behavior checks (the checked-in generated fixture is compiled by the parent build) ----

@@ -16,6 +16,8 @@ public static partial class ChetahSchema
             [typeof(TestWidgets)] = TestWidgetsBinding,
             [typeof(Stage2User)] = Stage2UserBinding,
             [typeof(Stage2Order)] = Stage2OrderBinding,
+            [typeof(Student)] = StudentBinding,
+            [typeof(Note)] = NoteBinding,
         };
     }
 

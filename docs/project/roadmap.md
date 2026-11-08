@@ -63,12 +63,12 @@ Delivered shape: `db.Select<T>()` chains into an immutable query pipeline transl
 
 ### Stage 3 — Write Operations
 
-**Status:** Candidate
+**Status:** Partially delivered 2026-11-08 — `INSERT` (single-row, multi-row, `DEFAULT VALUES`, identity/default/computed metadata, `ON CONFLICT DO NOTHING` and `DO UPDATE … EXCLUDED`, shared `RETURNING` projections). `UPDATE` and `DELETE` remain candidates and reuse the same returning infrastructure when built. See [`writing-data.md`](../guide/writing-data.md) and [`decisions.md`](decisions.md) D011.
 **Goal:** Support `INSERT`, `UPDATE`, and `DELETE` with predictable, safe behavior.
 
 Roughly: single-row and multi-row inserts, updates and deletes with mandatory scoping so an unrestricted modification cannot happen by accident, and returning results where the database supports it.
 
-**Gating question:** how are writes expressed without the "safe by default" principle becoming cumbersome?
+**Gating question:** how are writes expressed without the "safe by default" principle becoming cumbersome? Answered for INSERT: model-bound `Values` objects, generated column metadata honoured before I/O, and a typed conflict/`RETURNING` chain. The same shape is the open question for scoped UPDATE/DELETE.
 
 ### Stage 4 — Schema Source of Truth and Typing
 

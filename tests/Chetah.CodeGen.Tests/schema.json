@@ -1,4 +1,5 @@
 {
+  "$schema": "../../chetah.schema.json",
   // Comments are allowed: the parser reads JSONC.
   "enums": {
     "user_status": ["active", "inactive", "banned", "line\nbreak", "carriage\rreturn", "tab\there", "control\u0001"]
@@ -29,6 +30,27 @@
         "user_id": { "type": "integer", "nullable": false },
         "amount": { "type": "integer", "nullable": false },
         "note": { "type": "text" }
+      }
+    },
+    "students": {
+      "model": "Student",
+      "columns": {
+        "id": { "type": "integer", "nullable": false, "identity": true, "primaryKey": true },
+        "first_name": { "type": "text", "nullable": false, "unique": true },
+        "age": { "type": "integer" },
+        "nickname": { "type": "text", "default": "anon" },
+        "display": {
+          "type": "text",
+          "nullable": false,
+          "generated": { "expression": "first_name || '!'" }
+        }
+      }
+    },
+    "notes": {
+      "model": "Note",
+      "columns": {
+        "id": { "type": "integer", "nullable": false, "identity": true },
+        "body": { "type": "text" }
       }
     }
   }

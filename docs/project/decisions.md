@@ -513,3 +513,59 @@ the same public generated API (`UsersTable`, `User`, `ChetahSchema.UserBinding`,
   fail before any output is written.
 - Enums get a label-list type (`Values`) but columns still map to `string`, so
   model properties and query behavior do not change.
+
+## D011 — INSERT is an immutable Core query, with generated write metadata and shared RETURNING
+
+**Date:** 2026-11-08 (Stage 3, INSERT)
+
+**Decision:** INSERT is modelled in `Chetah.Core` as an immutable `InsertQuery`
+(table, rows, conflict, returning), compiled by `PostgresInsertCompiler`, and
+executed through the existing `PostgresDb` parameter/reader path. The fluent
+typed builder lives in `Chetah.Postgres` and reuses the generated binding.
+
+**Details:**
+
+- A row is a `Dictionary<string, SqlExpression>` snapshot. A column absent from
+  the dictionary is omitted from the SQL column list (database default or NULL);
+  `SqlValue(null, …)` is an explicit NULL parameter; `SqlDefault` renders
+  `DEFAULT`; omitted identity columns use their sequence. Rows in one statement
+  must share a column set, enforced before rendering.
+- Generated `Column<T>` metadata now carries `IsNullable`, `HasDefault` and
+  `ColumnGeneration` (`Always` for identity ALWAYS, `Computed` for generated
+  columns). The compiler rejects supplying those columns, explicit NULL on a
+  NOT NULL column, and omitting a NOT NULL column that has no default. This is
+  metadata-driven, not a PostgreSQL round trip.
+- `Values` reads public readable properties and resolves each through the
+  generated `PropertyColumns` map (raw column names also work). It snapshots
+  values immediately; a second `Values`/`DefaultValues` call on the same query
+  is refused rather than silently replacing the first.
+- `RETURNING` is `ReturningClause`, a Core record holding `SelectItem`s that
+  future UPDATE/DELETE can reuse. INSERT only chooses the source-0 bare rendering
+  mode (`"id"` rather than `"t0"."id"`); projection translation, validation,
+  parameterization and compiled mapping are the SELECT machinery.
+- Parameter rendering is not reimplemented: `PostgresCompiler.Compilation`
+  exposes fragment hooks (`ValidateValueFragment`, `RenderValueFragment`,
+  `RenderProjectionFragment`) used by the INSERT compiler with one shared slot
+  list. Slots follow SQL order: VALUES, conflict assignments, RETURNING.
+- Conflict handling is typed: target columns come from generated properties
+  (or an anonymous object of them); `DO UPDATE` assignments are `Set`,
+  `SetExcluded` (same-column `EXCLUDED`) and `SetDefault`. No SQL fragment API
+  exists.
+
+**Unsupported, deliberately:** partial conflict targets (`ON CONFLICT … WHERE`),
+expression conflict targets, arbitrary `EXCLUDED` expressions, `OVERRIDING
+SYSTEM VALUE`, UPDATE/DELETE, and transaction APIs. Each is a separate feature,
+not an inference from this one.
+
+**Consequences:**
+
+- Affected-row counts come from `ExecuteNonQueryAsync`; RETURNING uses the
+  existing reader mapping and its terminal operators judge zero/one/many rows.
+- Generated metadata became larger by one object initializer per constrained
+  column; defaults are omitted when they match `Column`'s initial values.
+- The same `InsertQuery`/`ReturningClause` shape is the starting point for
+  UPDATE and DELETE; no redesign should be needed to add their WHERE/assignment
+  clauses.
+- Revisit trigger: if partial-index conflict targets become necessary, extend
+  `InsertConflict` with a validated predicate expression rather than adding a
+  raw SQL escape hatch.

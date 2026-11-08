@@ -131,12 +131,17 @@ One accessor class, one record and the table binding per table. In the default
 ```csharp
 public static class UsersTable
 {
-    // Typed column metadata.
-    public static readonly Chetah.Column<int> Id = new("id");
+    // Typed column metadata. Non-default write rules are emitted only when set:
+    // IsNullable = false, HasDefault = true, Generation = ….
+    public static readonly Chetah.Column<int> Id = new("id") { IsNullable = false, HasDefault = true };
+    public static readonly Chetah.Column<string> Name = new("name") { IsNullable = false };
     public static readonly Chetah.Column<int?> Age = new("age");
+    public static readonly Chetah.Column<string> Display =
+        new("display") { IsNullable = false, Generation = Chetah.ColumnGeneration.Computed };
 
     // Table metadata handed to the query objects (schema order = output order).
-    public static readonly Chetah.Table Table = new("users", Id.Name, Name.Name, Age.Name);
+    public static readonly Chetah.Table Table =
+        new("users", new Chetah.Column[] { Id, Name, Age, Display });
 
     // Explicit property-name → raw column-name snapshot, Ordinal comparison.
     public static readonly IReadOnlyDictionary<string, string> PropertyColumns =
@@ -145,6 +150,7 @@ public static class UsersTable
             [nameof(User.Id)] = "id",
             [nameof(User.Name)] = "name",
             [nameof(User.Age)] = "age",
+            [nameof(User.Display)] = "display",
         };
 
     // Hand-written (generated) row mappers — no reflection.
@@ -152,7 +158,7 @@ public static class UsersTable
     public static User MapAt(NpgsqlDataReader reader, int offset) { … } // ordinal offset; joined/partial slots
 }
 
-public sealed record User(int Id, string Name, int? Age);
+public sealed record User(int Id, string Name, int? Age, string Display);
 
 // The same file also contributes its binding to the shared registry type.
 public static partial class ChetahSchema
@@ -161,6 +167,10 @@ public static partial class ChetahSchema
         new(UsersTable.Table, UsersTable.Map, UsersTable.MapAt, UsersTable.PropertyColumns);
 }
 ```
+
+`Column` metadata is also what INSERT validates against: nullability, database
+defaults, identity generation and computed columns. Descriptions of the write
+surface are in [`../guide/writing-data.md`](../guide/writing-data.md).
 
 `Chetah.Schema.g.cs` holds the rest of the registry, so the public API is
 unchanged whether you use `split` or `single`:
@@ -358,10 +368,11 @@ Backward compatibility of milestone 001 is covered by the unchanged
 
 ## Deliberate limits
 
-Not implemented, not hidden: writes (`INSERT`/`UPDATE`/`DELETE`), SQL Server,
-Roslyn source generators, automatic relationship management,
-RIGHT/FULL/CROSS joins. Schema-to-database tooling and catalog introspection
-live in `src/Chetah.Db` instead — see [`schema-tooling.md`](schema-tooling.md).
+Not implemented, not hidden: `UPDATE`/`DELETE` (INSERT is documented in
+[`../guide/writing-data.md`](../guide/writing-data.md)), SQL Server, Roslyn
+source generators, automatic relationship management, RIGHT/FULL/CROSS joins.
+Schema-to-database tooling and catalog introspection live in `src/Chetah.Db`
+instead — see [`schema-tooling.md`](schema-tooling.md).
 Query lambdas outside the
 frozen translator surface fail explicitly (no evaluation fallback). The
 `timestamp with time zone` type and other PostgreSQL types are not in

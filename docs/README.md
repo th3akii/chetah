@@ -20,6 +20,7 @@ docs/
 |---|---|
 | write or change `chetah-schema.json` | [guide/writing-a-schema.md](guide/writing-a-schema.md) |
 | read rows (filter, project, order, page, join, group, count) | [guide/querying.md](guide/querying.md) |
+| insert rows, use defaults, upsert and return inserted rows | [guide/writing-data.md](guide/writing-data.md) |
 | understand the diff/apply workflow, ids, gates and history | [reference/schema-tooling.md](reference/schema-tooling.md) |
 | use the generated models and the query API | [reference/typed-models.md](reference/typed-models.md), [reference/basic-select.md](reference/basic-select.md) |
 | know what the project is for | [project/spec.md](project/spec.md) |
@@ -35,7 +36,9 @@ author needs (the complete property reference, rules, cookbook, common mistakes)
 is in [guide/writing-a-schema.md](guide/writing-a-schema.md), which is also the
 file to hand an AI assistant: it ends with an explicit rule set and a template.
 Reading and querying rows (terminals, filters, projections, ordering, paging,
-joins, grouping) is [guide/querying.md](guide/querying.md).
+joins, grouping) is [guide/querying.md](guide/querying.md); writing rows
+(inserts, defaults, conflicts, `RETURNING`) is
+[guide/writing-data.md](guide/writing-data.md).
 
 **`reference/`** — behaviour that is already implemented, described precisely:
 the migration tool (diff, identities, history, safety gates), the generated
