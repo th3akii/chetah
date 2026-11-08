@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "layout": "split",
+  "namespace": "Chetah.Generated",
+  "files": [
+    "Chetah.Schema.g.cs",
+    "Tables/course_offerings.g.cs",
+    "Tables/courses.g.cs",
+    "Tables/departments.g.cs",
+    "Tables/enrollments.g.cs",
+    "Tables/grades.g.cs",
+    "Tables/instructors.g.cs",
+    "Tables/semesters.g.cs",
+    "Tables/students.g.cs"
+  ]
+}

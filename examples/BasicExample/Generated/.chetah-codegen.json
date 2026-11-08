@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "layout": "split",
+  "namespace": "Chetah.Generated",
+  "files": [
+    "Chetah.Schema.g.cs",
+    "Tables/orders.g.cs",
+    "Tables/users.g.cs"
+  ]
+}

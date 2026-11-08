@@ -5,13 +5,17 @@ typed `User` records — generated from [`chetah-schema.json`](chetah-schema.jso
 
 ## Generating the model
 
-The generated file [`Generated/Chetah.Schema.g.cs`](Generated/Chetah.Schema.g.cs)
-is committed; regenerate after changing the schema (overwrites only that file).
-Run from this directory (`examples/BasicExample/`):
+The generated files are committed: one per table under
+[`Generated/Tables/`](Generated/Tables/), plus the shared registry
+[`Generated/Chetah.Schema.g.cs`](Generated/Chetah.Schema.g.cs). Regenerate after
+changing the schema; the generator removes obsolete generated files and leaves
+other files alone. Run from this directory (`examples/BasicExample/`):
 
 ```sh
 dotnet run --project ../../src/Chetah.CodeGen -- --schema chetah-schema.json --out Generated --namespace Chetah.Generated
 ```
+
+`Generated/.chetah-codegen.json` is the ownership manifest for that directory.
 
 ## Database setup
 

@@ -5,104 +5,19 @@
 
 #nullable enable
 
-using Npgsql;
-
 namespace Chetah.Generated;
 
-public static class UsersTable
+public static partial class ChetahSchema
 {
-    public static readonly Chetah.Column<int> Id = new("id");
-    public static readonly Chetah.Column<string> Name = new("name");
-    public static readonly Chetah.Column<int?> Age = new("age");
-
-    public static readonly Chetah.Table Table = new("users", Id.Name, Name.Name, Age.Name);
-
-    public static readonly System.Collections.Generic.IReadOnlyDictionary<string, string> PropertyColumns =
-        new System.Collections.Generic.Dictionary<string, string>(System.StringComparer.Ordinal)
-        {
-            [nameof(User.Id)] = "id",
-            [nameof(User.Name)] = "name",
-            [nameof(User.Age)] = "age",
-        };
-
-    public static User Map(NpgsqlDataReader reader)
+    static ChetahSchema()
     {
-        var ageOrdinal = reader.GetOrdinal("age");
-
-        return new User(
-            reader.GetInt32(reader.GetOrdinal("id")),
-            reader.GetString(reader.GetOrdinal("name")),
-            reader.IsDBNull(ageOrdinal) ? null : reader.GetInt32(ageOrdinal)
-        );
-    }
-
-    public static User MapAt(NpgsqlDataReader reader, int offset)
-    {
-        return new User(
-            reader.GetInt32(offset + 0),
-            reader.GetString(offset + 1),
-            reader.IsDBNull(offset + 2) ? null : reader.GetInt32(offset + 2)
-        );
-    }
-
-}
-
-public sealed record User(int Id, string Name, int? Age);
-
-public static class OrdersTable
-{
-    public static readonly Chetah.Column<int> Id = new("id");
-    public static readonly Chetah.Column<int> UserId = new("user_id");
-    public static readonly Chetah.Column<int> Amount = new("amount");
-    public static readonly Chetah.Column<string?> Note = new("note");
-
-    public static readonly Chetah.Table Table = new("orders", Id.Name, UserId.Name, Amount.Name, Note.Name);
-
-    public static readonly System.Collections.Generic.IReadOnlyDictionary<string, string> PropertyColumns =
-        new System.Collections.Generic.Dictionary<string, string>(System.StringComparer.Ordinal)
-        {
-            [nameof(Order.Id)] = "id",
-            [nameof(Order.UserId)] = "user_id",
-            [nameof(Order.Amount)] = "amount",
-            [nameof(Order.Note)] = "note",
-        };
-
-    public static Order Map(NpgsqlDataReader reader)
-    {
-        var noteOrdinal = reader.GetOrdinal("note");
-
-        return new Order(
-            reader.GetInt32(reader.GetOrdinal("id")),
-            reader.GetInt32(reader.GetOrdinal("user_id")),
-            reader.GetInt32(reader.GetOrdinal("amount")),
-            reader.IsDBNull(noteOrdinal) ? null : reader.GetString(noteOrdinal)
-        );
-    }
-
-    public static Order MapAt(NpgsqlDataReader reader, int offset)
-    {
-        return new Order(
-            reader.GetInt32(offset + 0),
-            reader.GetInt32(offset + 1),
-            reader.GetInt32(offset + 2),
-            reader.IsDBNull(offset + 3) ? null : reader.GetString(offset + 3)
-        );
-    }
-
-}
-
-public sealed record Order(int Id, int UserId, int Amount, string? Note);
-
-public static class ChetahSchema
-{
-    public static readonly Chetah.Postgres.TableBinding<User> UserBinding = new(UsersTable.Table, UsersTable.Map, UsersTable.MapAt, UsersTable.PropertyColumns);
-    public static readonly Chetah.Postgres.TableBinding<Order> OrderBinding = new(OrdersTable.Table, OrdersTable.Map, OrdersTable.MapAt, OrdersTable.PropertyColumns);
-
-    public static readonly System.Collections.Generic.IReadOnlyDictionary<System.Type, Chetah.Postgres.ITableBinding> Bindings =
-        new System.Collections.Generic.Dictionary<System.Type, Chetah.Postgres.ITableBinding>
+        Bindings = new System.Collections.Generic.Dictionary<System.Type, Chetah.Postgres.ITableBinding>
         {
             [typeof(User)] = UserBinding,
             [typeof(Order)] = OrderBinding,
         };
+    }
+
+    public static readonly System.Collections.Generic.IReadOnlyDictionary<System.Type, Chetah.Postgres.ITableBinding> Bindings;
 }
 

@@ -38,11 +38,12 @@ PostgreSQL names them (`CASCADE`, `RESTRICT`, `SET NULL`).
 
 ## What runs today
 
-The schema validates, and the generator produces models for it:
+The schema validates, and the generator produces models for it (the default
+`split` layout: one file per table plus the shared registry):
 
 ```sh
 dotnet run --project src/Chetah.CodeGen -- \
-  --schema examples/NewExample/chetah-schema.json --out Generated --namespace University
+  --schema examples/NewExample/chetah-schema.json --out examples/NewExample/Generated --namespace Chetah.Generated
 ```
 
 `chetah-db diff` will refuse this particular file because `grades` declares a
