@@ -81,6 +81,9 @@ public class GeneratedSourceTests
         Assert.False(StudentsTable.FirstName.IsNullable);
         Assert.Equal(ColumnGeneration.Computed, StudentsTable.Display.Generation);
         Assert.True(StudentsTable.Nickname.HasDefault);
+        Assert.False(StudentsTable.Status.IsNullable);
+        Assert.True(StudentsTable.Status.HasDefault);
+        Assert.Equal(ColumnGeneration.Always, AlwaysNotesTable.Id.Generation);
     }
 
     // ---- Binding behavior checks (the checked-in generated fixture is compiled by the parent build) ----

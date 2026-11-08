@@ -26,6 +26,7 @@ public class PostgresInsertCompilerTests
         Column("first_name", typeof(string), nullable: false),
         Column("age", typeof(int?)),
         Column("nickname", typeof(string), hasDefault: true),
+        Column("status", typeof(string), nullable: false, hasDefault: true),
         Column("display", typeof(string), nullable: false, generation: ColumnGeneration.Computed),
     });
 
@@ -171,6 +172,27 @@ public class PostgresInsertCompilerTests
                 Students, Row(("nickname", new SqlValue("M", typeof(string)))))));
     }
 
+    [Fact]
+    public void OmittingANotNullColumnWithDefaultUsesTheDefault()
+    {
+        var compiled = PostgresInsertCompiler.Compile(Insert(
+            Students, Row(("first_name", new SqlValue("Marko", typeof(string))))));
+
+        Assert.Equal("""INSERT INTO "students" ("first_name") VALUES ($1)""", compiled.Sql);
+    }
+
+    [Fact]
+    public void GeneratedByDefaultIdentityAcceptsAnExplicitValue()
+    {
+        var compiled = PostgresInsertCompiler.Compile(Insert(
+            Students,
+            Row(("id", new SqlValue(9001, typeof(int))), ("first_name", new SqlValue("Marko", typeof(string))))));
+
+        Assert.Equal(
+            """INSERT INTO "students" ("id", "first_name") VALUES ($1, $2)""",
+            compiled.Sql);
+    }
+
     // ---------- identity and generated columns ----------
 
     [Fact]
@@ -185,6 +207,25 @@ public class PostgresInsertCompilerTests
             () => PostgresInsertCompiler.Compile(Insert(
                 AlwaysIdentity,
                 Row(("id", new SqlValue(1, typeof(int))), ("label", new SqlValue("x", typeof(string)))))));
+    }
+
+    [Fact]
+    public void ComputedColumnsRejectDefaultToo()
+    {
+        Assert.Throws<InvalidOperationException>(
+            () => PostgresInsertCompiler.Compile(Insert(
+                Students,
+                Row(("first_name", new SqlValue("Marko", typeof(string))), ("display", new SqlDefault(typeof(string)))))));
+    }
+
+    [Fact]
+    public void MultiRowValidationAppliesToEveryLaterRow()
+    {
+        Assert.Throws<InvalidOperationException>(
+            () => PostgresInsertCompiler.Compile(Insert(
+                Students,
+                Row(("first_name", new SqlValue("Marko", typeof(string)))),
+                Row(("first_name", new SqlValue(null, typeof(string)))))));
     }
 
     [Fact]
@@ -359,7 +400,7 @@ public class PostgresInsertCompilerTests
             with { Returning = new ReturningClause(items) });
 
         Assert.Equal(
-            "INSERT INTO \"students\" (\"first_name\") VALUES ($1) RETURNING \"id\" AS \"c0\", \"first_name\" AS \"c1\", \"age\" AS \"c2\", \"nickname\" AS \"c3\", \"display\" AS \"c4\"",
+            "INSERT INTO \"students\" (\"first_name\") VALUES ($1) RETURNING \"id\" AS \"c0\", \"first_name\" AS \"c1\", \"age\" AS \"c2\", \"nickname\" AS \"c3\", \"status\" AS \"c4\", \"display\" AS \"c5\"",
             compiled.Sql);
     }
 

@@ -15,9 +15,10 @@ public static class StudentsTable
     public static readonly Chetah.Column<string> FirstName = new("first_name") { IsNullable = false };
     public static readonly Chetah.Column<int?> Age = new("age");
     public static readonly Chetah.Column<string?> Nickname = new("nickname") { HasDefault = true };
+    public static readonly Chetah.Column<string> Status = new("status") { IsNullable = false, HasDefault = true };
     public static readonly Chetah.Column<string> Display = new("display") { IsNullable = false, Generation = Chetah.ColumnGeneration.Computed };
 
-    public static readonly Chetah.Table Table = new("students", new Chetah.Column[] { Id, FirstName, Age, Nickname, Display });
+    public static readonly Chetah.Table Table = new("students", new Chetah.Column[] { Id, FirstName, Age, Nickname, Status, Display });
 
     public static readonly System.Collections.Generic.IReadOnlyDictionary<string, string> PropertyColumns =
         new System.Collections.Generic.Dictionary<string, string>(System.StringComparer.Ordinal)
@@ -26,6 +27,7 @@ public static class StudentsTable
             [nameof(Student.FirstName)] = "first_name",
             [nameof(Student.Age)] = "age",
             [nameof(Student.Nickname)] = "nickname",
+            [nameof(Student.Status)] = "status",
             [nameof(Student.Display)] = "display",
         };
 
@@ -39,6 +41,7 @@ public static class StudentsTable
             reader.GetString(reader.GetOrdinal("first_name")),
             reader.IsDBNull(ageOrdinal) ? null : reader.GetInt32(ageOrdinal),
             reader.IsDBNull(nicknameOrdinal) ? null : reader.GetString(nicknameOrdinal),
+            reader.GetString(reader.GetOrdinal("status")),
             reader.GetString(reader.GetOrdinal("display"))
         );
     }
@@ -50,13 +53,14 @@ public static class StudentsTable
             reader.GetString(offset + 1),
             reader.IsDBNull(offset + 2) ? null : reader.GetInt32(offset + 2),
             reader.IsDBNull(offset + 3) ? null : reader.GetString(offset + 3),
-            reader.GetString(offset + 4)
+            reader.GetString(offset + 4),
+            reader.GetString(offset + 5)
         );
     }
 
 }
 
-public sealed record Student(int Id, string FirstName, int? Age, string? Nickname, string Display);
+public sealed record Student(int Id, string FirstName, int? Age, string? Nickname, string Status, string Display);
 
 public static partial class ChetahSchema
 {

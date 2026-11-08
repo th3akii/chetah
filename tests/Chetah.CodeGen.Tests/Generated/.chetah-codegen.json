@@ -5,6 +5,7 @@
   "files": [
     "Chetah.Schema.g.cs",
     "Enums/UserStatus.g.cs",
+    "Tables/AlwaysNote.g.cs",
     "Tables/Note.g.cs",
     "Tables/Stage2Order.g.cs",
     "Tables/Stage2User.g.cs",

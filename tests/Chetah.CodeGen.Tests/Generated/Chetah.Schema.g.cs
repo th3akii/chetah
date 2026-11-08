@@ -18,6 +18,7 @@ public static partial class ChetahSchema
             [typeof(Stage2Order)] = Stage2OrderBinding,
             [typeof(Student)] = StudentBinding,
             [typeof(Note)] = NoteBinding,
+            [typeof(AlwaysNote)] = AlwaysNoteBinding,
         };
     }
 

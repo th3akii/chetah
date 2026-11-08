@@ -39,6 +39,7 @@
         "first_name": { "type": "text", "nullable": false, "unique": true },
         "age": { "type": "integer" },
         "nickname": { "type": "text", "default": "anon" },
+        "status": { "type": "text", "nullable": false, "default": "active" },
         "display": {
           "type": "text",
           "nullable": false,
@@ -50,6 +51,17 @@
       "model": "Note",
       "columns": {
         "id": { "type": "integer", "nullable": false, "identity": true },
+        "body": { "type": "text" }
+      }
+    },
+    "always_notes": {
+      "model": "AlwaysNote",
+      "columns": {
+        "id": {
+          "type": "integer",
+          "nullable": false,
+          "identity": { "generation": "ALWAYS" }
+        },
         "body": { "type": "text" }
       }
     }
