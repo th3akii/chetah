@@ -1522,7 +1522,7 @@ public class MigrationApplyTests
                   "references": { "table": "parent", "columns": ["a"] } }] } } }
             """;
         var refused = new StringWriter();
-        Assert.Equal(1, await fixture.Runner(refused).ApplyAsync(fixture.Parse(declared)));
+        Assert.Equal(1, await fixture.Runner(refused).ApplyAsync(fixture.ParseUnchecked(declared)));
         Assert.Contains("Refusing to apply", refused.ToString(), StringComparison.Ordinal);
         Assert.Contains("declared foreign key", refused.ToString(), StringComparison.Ordinal);
         Assert.Equal(1, await fixture.CountAsync(
@@ -2336,6 +2336,17 @@ public class MigrationApplyTests
             await using var command = new NpgsqlCommand($"CREATE DATABASE \"{fixture._database}\"", connection);
             await command.ExecuteNonQueryAsync();
             return fixture;
+        }
+
+        /// <summary>Parses a fixture that is structurally valid but semantically incomplete on
+        /// purpose — a database can hold a unique index the file does not declare, and the diff's
+        /// refusal is the behaviour under test.</summary>
+        internal Schema ParseUnchecked(string json)
+        {
+            File.WriteAllText(SchemaPath, json);
+            var parsed = SchemaParser.ParseStructure(json);
+            Assert.Null(parsed.Error);
+            return parsed.Schema!;
         }
 
         /// <summary>The registry as (id, kind, name), for comparing two databases.</summary>
