@@ -196,6 +196,19 @@ public class PostgresInsertCompilerTests
         Assert.Equal("""INSERT INTO "always_identity" ("label") VALUES ($1)""", compiled.Sql);
     }
 
+    [Fact]
+    public void AlwaysIdentityAcceptsAnExplicitDefaultCell()
+    {
+        var compiled = PostgresInsertCompiler.Compile(Insert(
+            AlwaysIdentity,
+            Row(("id", new SqlDefault(typeof(int))), ("label", new SqlValue("x", typeof(string))))));
+
+        Assert.Equal(
+            """INSERT INTO "always_identity" ("id", "label") VALUES (DEFAULT, $1)""",
+            compiled.Sql);
+        Assert.Single(compiled.Parameters);
+    }
+
     // ---------- validation ----------
 
     [Fact]

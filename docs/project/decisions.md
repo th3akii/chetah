@@ -532,9 +532,10 @@ typed builder lives in `Chetah.Postgres` and reuses the generated binding.
   must share a column set, enforced before rendering.
 - Generated `Column<T>` metadata now carries `IsNullable`, `HasDefault` and
   `ColumnGeneration` (`Always` for identity ALWAYS, `Computed` for generated
-  columns). The compiler rejects supplying those columns, explicit NULL on a
-  NOT NULL column, and omitting a NOT NULL column that has no default. This is
-  metadata-driven, not a PostgreSQL round trip.
+  columns). The compiler rejects supplying those columns (except `DEFAULT` for an
+  identity ALWAYS column), explicit NULL on a NOT NULL column, and omitting a
+  NOT NULL column that has no default. This is metadata-driven, not a PostgreSQL
+  round trip.
 - `Values` reads public readable properties and resolves each through the
   generated `PropertyColumns` map (raw column names also work). It snapshots
   values immediately; a second `Values`/`DefaultValues` call on the same query

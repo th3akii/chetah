@@ -10,6 +10,8 @@ public class TypedInsertQueryTests
 
     private sealed record Note(int Id, string? Body);
 
+    private sealed record AlwaysRecord(int Id, string Label);
+
     private static Column Column(
         string name,
         Type type,
@@ -39,6 +41,12 @@ public class TypedInsertQueryTests
         Column("body", typeof(string)),
     });
 
+    private static readonly Table AlwaysTable = new("always_records", new[]
+    {
+        Column("id", typeof(int), nullable: false, hasDefault: true, generation: ColumnGeneration.Always),
+        Column("label", typeof(string), nullable: false),
+    });
+
     private static readonly PostgresDb Db = CreateDb();
 
     private static PostgresDb CreateDb()
@@ -64,6 +72,15 @@ public class TypedInsertQueryTests
                 [nameof(Note.Id)] = "id",
                 [nameof(Note.Body)] = "body",
             });
+        var always = new TableBinding<AlwaysRecord>(
+            AlwaysTable,
+            _ => throw new NotSupportedException("Compile-only binding."),
+            (_, _) => throw new NotSupportedException("Compile-only binding."),
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [nameof(AlwaysRecord.Id)] = "id",
+                [nameof(AlwaysRecord.Label)] = "label",
+            });
 
         return new PostgresDb(
             "Host=localhost;Database=chetah-tests;Username=chetah",
@@ -71,6 +88,7 @@ public class TypedInsertQueryTests
             {
                 [typeof(Student)] = students,
                 [typeof(Note)] = notes,
+                [typeof(AlwaysRecord)] = always,
             });
     }
 
@@ -178,6 +196,21 @@ public class TypedInsertQueryTests
         Assert.Equal(
             """INSERT INTO "students" ("first_name", "nickname") VALUES ($1, DEFAULT)""",
             compiled.Sql);
+    }
+
+    [Fact]
+    public void DefaultValueIsAcceptedForAlwaysIdentityWhileExplicitValueIsNot()
+    {
+        var compiled = Db.Insert<AlwaysRecord>()
+            .Values(new { Id = DefaultValue.Value, Label = "x" })
+            .Compile();
+
+        Assert.Equal(
+            """INSERT INTO "always_records" ("id", "label") VALUES (DEFAULT, $1)""",
+            compiled.Sql);
+
+        Assert.Throws<InvalidOperationException>(
+            () => Db.Insert<AlwaysRecord>().Values(new { Id = 7, Label = "x" }).Compile());
     }
 
     [Fact]

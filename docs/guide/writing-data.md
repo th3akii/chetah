@@ -61,9 +61,10 @@ before execution. Omitting a `NOT NULL` column that has no default is rejected t
 PostgreSQL would fail the statement, but the compiler names the column instead.
 
 Generated metadata carries the write-side rules: `IsNullable`, `HasDefault`,
-`Generation.Always` (a `GENERATED ALWAYS AS IDENTITY` column cannot be supplied)
-and `Generation.Computed` (a generated column can never be inserted). Identity
-`BY DEFAULT` columns may be supplied when you need a specific id.
+`Generation.Always` (a `GENERATED ALWAYS AS IDENTITY` column accepts `DEFAULT`
+but not an explicit value) and `Generation.Computed` (a generated column can
+never be inserted). Identity `BY DEFAULT` columns may be supplied when you need
+a specific id.
 
 ## Insert several rows
 
@@ -152,7 +153,7 @@ VALUES first, then conflict assignments, then RETURNING expressions.
 | conflict targets that are expressions rather than columns | only generated column metadata is validated |
 | arbitrary SQL fragments in `DO UPDATE` | use `Set`, `SetExcluded`, `SetDefault` |
 | `OVERRIDING SYSTEM VALUE` for `GENERATED ALWAYS` identity columns | supply a `BY DEFAULT` identity column instead |
-| unknown, non-readable, generated or identity-always columns | they cannot be inserted safely |
+| values for generated columns, or non-`DEFAULT` values for `GENERATED ALWAYS` identity columns | generated values are read-only; identity `ALWAYS` only accepts `DEFAULT` |
 | rows with different column sets in one statement | split the statement or supply every column |
 | unsupported CLR parameter types | only `int`, `long`, `decimal`, `string`, `bool`, `Guid` and `DateTime` are supported today |
 | `UPDATE` and `DELETE` | not implemented yet; the shared `RETURNING` model is ready for them |
