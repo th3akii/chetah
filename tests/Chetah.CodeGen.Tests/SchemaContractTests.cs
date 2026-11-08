@@ -2,10 +2,9 @@ using System.Text.Json;
 
 namespace Chetah.CodeGen.Tests;
 
-/// <summary>Keeps the published JSON Schema contract and the parser in step. Without a JSON Schema
-/// validator dependency, the contract is checked structurally: every property the parser accepts is
-/// declared, every object rejects unknown properties, required lists match, and the example files
-/// point at a contract that exists.</summary>
+/// <summary>Keeps the published JSON Schema contract and the parser in step. Acceptance and
+/// rejection are exercised with a real validator in <see cref="JsonSchemaValidationTests"/>; this
+/// test checks the structural synchronization that a validator cannot infer from the parser.</summary>
 public class SchemaContractTests
 {
     private static readonly string Root = FindRepositoryRoot();

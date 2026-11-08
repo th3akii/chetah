@@ -12,6 +12,31 @@
     { "required": ["views"] },
     { "required": ["materializedViews"] }
   ],
+  "allOf": [
+    {
+      "$comment": "A string default is the schema-v1 opt-in: without \"$schema\" it is ambiguous with the previous raw-SQL format, so only non-string defaults are allowed.",
+      "if": { "not": { "required": ["$schema"] } },
+      "then": {
+        "properties": {
+          "tables": {
+            "type": "object",
+            "additionalProperties": {
+              "properties": {
+                "columns": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "properties": {
+                      "default": { "not": { "type": "string" } }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
   "properties": {
     "$schema": {
       "type": "string",
