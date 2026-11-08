@@ -1,3 +1,4 @@
+using System.Linq.Expressions;
 using System.Reflection;
 
 namespace Chetah.Postgres;
@@ -71,6 +72,34 @@ public sealed class TypedInsertQuery<T>
     }
 
     public CompiledQuery Compile() => PostgresInsertCompiler.Compile(_query);
+
+    /// <summary>
+    /// Adds a typed RETURNING projection and returns the query's reading half. The projection is
+    /// translated by the same lambda surface as SELECT and mapped by the same compiled mapper.
+    /// </summary>
+    public TypedInsertReturningQuery<T, TResult> Returning<TResult>(
+        Expression<Func<T, TResult>> projection)
+    {
+        ArgumentNullException.ThrowIfNull(projection);
+
+        var shape = new EntityShape(typeof(T), _binding, 0);
+        var translator = new QueryExpressionTranslator(
+            new Dictionary<ParameterExpression, QueryShape>
+            {
+                [projection.Parameters[0]] = shape,
+            },
+            allowAggregates: false);
+        var output = translator.Translate(projection.Body);
+        var plan = ProjectionMapper.Plan(output);
+
+        return new TypedInsertReturningQuery<T, TResult>(
+            _db,
+            _query with { Returning = new ReturningClause(plan.Items) },
+            plan);
+    }
+
+    /// <summary>Returns the complete inserted row.</summary>
+    public TypedInsertReturningQuery<T, T> ReturningAll() => Returning(value => value);
 
     /// <summary>Executes the INSERT and returns the affected row count.</summary>
     public Task<int> ExecuteAsync(CancellationToken cancellationToken = default) =>

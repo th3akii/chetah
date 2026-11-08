@@ -190,4 +190,55 @@ public class TypedInsertQueryTests
         Assert.Equal("""INSERT INTO "students" ("first_name") VALUES ($1)""", withValues.Compile().Sql);
         Assert.Throws<InvalidOperationException>(() => withValues.Values(new { FirstName = "Ana" }));
     }
+
+    // ---------- RETURNING ----------
+
+    [Fact]
+    public void ReturningSelectedColumnsUsesBareTargetColumns()
+    {
+        var compiled = Db.Insert<Student>()
+            .Values(new { FirstName = "Marko" })
+            .Returning(student => new { student.Id, student.FirstName })
+            .Compile();
+
+        Assert.Equal(
+            "INSERT INTO \"students\" (\"first_name\") VALUES ($1) RETURNING \"id\" AS \"c0\", \"first_name\" AS \"c1\"",
+            compiled.Sql);
+    }
+
+    [Fact]
+    public void ReturningAllSelectsEveryColumnInTableOrder()
+    {
+        var compiled = Db.Insert<Student>()
+            .Values(new { FirstName = "Marko" })
+            .ReturningAll()
+            .Compile();
+
+        Assert.Equal(
+            "INSERT INTO \"students\" (\"first_name\") VALUES ($1) RETURNING \"id\" AS \"c0\", \"first_name\" AS \"c1\", \"age\" AS \"c2\", \"nickname\" AS \"c3\", \"display\" AS \"c4\"",
+            compiled.Sql);
+    }
+
+    [Fact]
+    public void ReturningExpressionsParameterizeCapturedValuesAfterInsertValues()
+    {
+        var compiled = Db.Insert<Student>()
+            .Values(new { FirstName = "Marko" })
+            .Returning(student => new { student.Id, Tag = "created" })
+            .Compile();
+
+        Assert.Equal(
+            "INSERT INTO \"students\" (\"first_name\") VALUES ($1) RETURNING \"id\" AS \"c0\", $2 AS \"c1\"",
+            compiled.Sql);
+        Assert.Equal(new object?[] { "Marko", "created" }, compiled.Parameters.Select(parameter => parameter.Value));
+    }
+
+    [Fact]
+    public void ReturningRejectsAggregates()
+    {
+        Assert.Throws<NotSupportedException>(
+            () => Db.Insert<Student>()
+                .Values(new { FirstName = "Marko" })
+                .Returning(student => Sql.Count(student.Id)));
+    }
 }
