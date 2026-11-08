@@ -41,12 +41,12 @@ starts. Nothing here is built in advance of a phase.
 {
   "tables": {
     "users": {
-      "primaryKey": ["id"],
+      "primaryKey": { "columns": ["id"] },
       "columns": {
         "id": { "type": "integer", "nullable": false },
         "email": { "type": "text", "nullable": false }
       },
-      "unique": [["email"]]
+      "unique": [{ "columns": ["email"] }]
     },
     "orders": {
       "columns": {
@@ -58,7 +58,7 @@ starts. Nothing here is built in advance of a phase.
         {
           "columns": ["user_id"],
           "references": { "table": "users", "columns": ["id"] },
-          "onDelete": "cascade"
+          "onDelete": "CASCADE"
         }
       ],
       "checks": [{ "name": "amount_positive", "expression": "amount > 0" }]
@@ -72,8 +72,8 @@ and column:
 
 - Every referenced column exists in its table; `primaryKey`, `unique` and
   `foreignKeys[].columns` name declared columns, never duplicates.
-- `primaryKey` columns must be `"nullable": false` (PostgreSQL would force it
-  silently otherwise).
+- `primaryKey` columns are implicitly `NOT NULL`; declaring one nullable is an
+  error.
 - `foreignKeys[].columns` and `references.columns` have equal, non-zero length;
   the referenced table must be declared in the same schema file.
 - `checks[].name` is a plain identifier; the expression is passed through

@@ -1,4 +1,5 @@
 {
+  "$schema": "../../chetah.schema.json",
   "tables": {
     "users": {
       "$id": 1,

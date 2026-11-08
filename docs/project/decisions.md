@@ -345,3 +345,77 @@ what was applied can, for any expression.
 - Revisit trigger: a change made outside Chetah and reverted between two runs is
   invisible to the record. The resulting state is identical, so this is accepted
   rather than solved.
+
+## D008 — Schema format v1: one canonical shape, execution reported honestly
+
+**Date:** 2026-11-08
+
+**Decision:** `chetah-schema.json` has one canonical representation per object,
+published as a JSON Schema contract (`chetah.schema.json`). The internal model
+(`Schema`, `TableSchema`, `ColumnSchema`, …) is JSON-independent, and a
+dedicated semantic validator reports cross-object problems with the declaration's
+JSON path. The migration engine executes the same feature set as before, plus
+foreign-key `MATCH`/deferrability and explicit constraint names; everything else
+in the format is refused explicitly with its path instead of being ignored.
+
+**Format decisions:**
+
+- Root collections are `tables` (required), `enums`, `sequences`, `views` and
+  `materializedViews`; `public` is the default namespace, and any table or other
+  object may set `"schema"`.
+- `nullable` omitted means nullable (PostgreSQL's default). Primary key columns
+  are implicitly `NOT NULL`; declaring one nullable is an error.
+- Defaults follow one rule: a JSON scalar is a SQL literal, `{ "sql": "..." }` is
+  an expression. Strings are quoted and escaped, never parsed as SQL — the old
+  "everything is raw SQL" convention silently changed meaning when copied.
+- Primary keys: `true` on a single column, or a table-level object with `name`
+  and `columns`. Column-level and table-level declarations cannot coexist.
+- Unique constraints: `true` on a single column, or table-level objects with
+  `name`, `columns` and `nullsNotDistinct`.
+- Foreign keys: exactly one structure — an array of objects with `columns` and a
+  nested `references` object — with optional `name`, actions, `match`,
+  `deferrable` and `initiallyDeferred`. There is no column-level string
+  shorthand and no object-keyed alternative.
+- Indexes: an array of objects with a single ordered `keys` representation
+  (column or expression, direction, nulls, operator class) plus `unique`,
+  `method`, `where`, `include` and `nullsNotDistinct`. Separate `columns` and
+  `expressions` arrays were rejected as two ways to say one thing.
+- Checks, generated columns, identity options and the PostgreSQL-only objects
+  are part of the contract from the start. A schema that uses what the engine
+  cannot apply is refused by `diff`/`apply` with the offending paths, rather than
+  silently approximated. This is the explicit ceiling the redesigned task allowed:
+  the schema foundation is complete, execution is incremental.
+
+**Why:**
+
+- v1 grew piecemeal (object-keyed indexes and foreign keys, array primary keys,
+  raw-SQL defaults, a 7-type whitelist). Every new feature had to invent a second
+  shape, and authors had to remember which collection used which.
+- Keeping the id system, catalog introspection, diff, journal, retry/repair and
+  replay untouched was a hard constraint. Format work is reversible; migration
+  history is not. Extending the internal model and translating it into the same
+  `CatalogState` achieves the redesign without rewriting the engine.
+- A published JSON Schema keeps the documentation, the editor and the parser
+  honest. Unknown properties are rejected in all three, and a contract test fails
+  when a parser property is missing from the schema.
+- Literal defaults close a real footgun: `"default": "now()"` used to work and
+  now means the text. The conversion table in the guide makes the change
+  explicit; no file is reinterpreted silently.
+
+**Consequences:**
+
+- Old schema files must be converted (guide: "Converting an older file"). The
+  tool does not accept both formats: two competing syntaxes for the same feature
+  was the problem being solved.
+- Default booleans are emitted as `true`/`false`, which is what the catalog
+  prints; conversion of a file that used `"true"` therefore produces the same
+  stored default.
+- The migration engine refuses generated columns, checks, enums, sequences,
+  views, non-public schemas, arrays, types outside the executable set, and the
+  advanced index/identity options. The refusal names every declaration. Reports
+  and tests cover these paths so the limitation is visible, not folklore.
+- Foreign keys gained `match`, `deferrable` and `initiallyDeferred`, and
+  constraint names became explicit in the file (still defaulting to the old
+  synthesized names), so existing databases see no churn.
+- Revisit trigger: when one of the refused features is needed end to end, extend
+  `SchemaCatalog`/`SchemaDiff` for that feature and remove only its refusal.

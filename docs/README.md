@@ -39,7 +39,7 @@ the migration tool (diff, identities, history, safety gates), the generated
 models, and the query API.
 
 **`project/`** — the why and the when: the original specification, the roadmap
-with its delivery status, and the decision log (D001…D007) with rationale and
+with its delivery status, and the decision log (D001…D008) with rationale and
 revisit triggers.
 
 **`notes/`** — working documents: the register of known limitations and bugs

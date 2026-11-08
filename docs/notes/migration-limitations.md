@@ -74,16 +74,16 @@ Also fixed by the ordering pass:
 
 | # | Severity | Area | Issue |
 |---|---|---|---|
-| 1 | Medium | Types | Types outside the vocabulary (`jsonb`, `numeric`, `timestamptz`, enums, domains) cannot be declared; an adopted column of such a type is reported as a gated type change, and omitting the table from the file means `DROP TABLE` |
-| 2 | Medium | Constraints | CHECK and EXCLUSION constraints cannot be declared (their dependent drops are refused) |
-| 3 | Medium | Indexes | Index features cannot be *declared* (expression, partial, `INCLUDE`, non-btree, opclass, sort order — all detected and protected); `COLLATE`, `NULLS NOT DISTINCT` and storage options are not even detected |
+| 1 | Medium | Types | Types outside the executable set (`jsonb`, `numeric`, `timestamptz`, enums, domains, arrays) can be declared, validated and generated, but `diff`/`apply` refuse the file. An adopted column of such a type that the file omits is still reported as a gated change or column drop, and omitting its table means `DROP TABLE` |
+| 2 | Medium | Constraints | CHECK constraints can be declared and are validated, but are not executed (the run refuses); EXCLUSION constraints cannot be declared. Existing ones are protected from removal |
+| 3 | Medium | Indexes | Index features can be declared and are validated (expression, partial, `INCLUDE`, non-btree, opclass, sort order) but are not executed (the run refuses); `COLLATE`, `NULLS NOT DISTINCT` and storage options are not compared |
 | 4 | Medium | Operations | `CREATE INDEX` is not `CONCURRENTLY`: a migration holds `ACCESS EXCLUSIVE` on the table |
-| 5 | Low | Defaults | `default` is not validated: a `;` produces a recorded statement that fails at apply with a raw syntax error |
+| 5 | Low | Defaults | SQL defaults (`{ "sql": ... }`) are not validated: a `;` produces a recorded statement that fails at apply with a raw syntax error. Literal defaults are quoted and escaped |
 | 6 | Low | Defaults | A hand edit that only changes casts *in the database* is invisible (the applied side is compared normalized) |
 | 7 | Low | Defaults | Records written by an older build store the normalized declaration, so a cast edit made before upgrading is invisible until the default changes again |
 | 8 | Low | Types | `varchar(n)` → `varchar` (unlimited) is gated although it is widening; so is `text` → `varchar(n)` |
 | 9 | Low | Constraints | A declared unique index satisfied by a live unique constraint is skipped silently (no line in `diff` output) |
-| 10 | Low | Constraints | `DEFERRABLE`, `INITIALLY DEFERRED`, `MATCH`, `NOT VALID` are not expressible; constraint renames are drop+create |
+| 10 | Low | Constraints | `NOT VALID` is not expressible, and constraint renames are drop+create. `MATCH`, `DEFERRABLE` and `INITIALLY DEFERRED` are expressible and executed |
 | 11 | Low | Identity | No `adopt`/renumber command: an id conflict is fixed by editing the schema file |
 | 12 | Low | Identity | Ids are per file, not coordinated across branches; two independently built databases can hold different id sets for the same logical schema |
 | 13 | Low | CLI | `diff` (without `--check`) exits 0 even when a plan is pending or blocked |
@@ -101,11 +101,14 @@ Also fixed by the ordering pass:
 
 ## Details
 
-### 1. Types outside the vocabulary — Medium
+### 1. Types outside the executable set — Medium
 
-The vocabulary is `integer`, `bigint`, `text`, `boolean`, `uuid`, `timestamp`,
-`varchar` with modifiers. An adopted database that uses anything else cannot be
-described truthfully.
+The executable set is `integer`, `bigint`, `text`, `boolean`, `uuid`, `timestamp`,
+`varchar` with modifiers. Since schema format v1 the file can *declare* any
+PostgreSQL type (and generate a CLR model for most of them), but `diff`/`apply`
+refuse a declaration outside the set instead of planning the change. An adopted
+database that uses anything else still cannot be described truthfully for
+migration purposes.
 
 **Reproduced:**
 
@@ -132,20 +135,30 @@ every object owned by it). The safe options are to convert the column, or to
 keep the tool off that database until the type exists in the vocabulary. Do not
 "exclude" a table by deleting it from `chetah-schema.json`.
 
-**Fix:** widen `SchemaParser.Types` and `Generator` mappings (`numeric`,
-`jsonb`, `timestamptz`, `int2`, `date`, `time`) and map the unmatched ones to a
-permissive CLR type, or add an escape hatch (`"type": "jsonb"` → `string`) that
-the generator passes through.
+**Fix:** extend `SchemaCatalog`/`SchemaDiff` for the type (catalog type
+comparison incl. modifiers) and remove its entry from `SchemaCapabilities`.
+Declarations and CLR mappings already exist.
 
 ### 2. CHECK / EXCLUSION constraints — Medium, by design
 
-Read from `pg_constraint` as protected objects: never created, matched or
+CHECK constraints can now be declared (`"checks": [{ "name", "expression" }]`)
+and are validated, but the migration engine does not create or drop them: a file
+that declares one is refused by `diff`/`apply` with its path. Existing checks are
+read from `pg_constraint` as protected objects: never created, matched or
 dropped, and a statement that would remove one is refused with its name.
+EXCLUSION constraints cannot be declared.
 
-**Fix (when wanted):** table-level `"checks": { name: expression }` plus catalog
-read of `contype = 'c'` and `pg_get_constraintdef`.
+**Fix (when wanted):** read `contype = 'c'` with `pg_get_constraintdef`, add the
+check to the desired constraint set, emit `ADD CONSTRAINT ... CHECK (...)`, and
+remove the refusal — while deciding explicitly whether undeclared live checks
+become droppable or stay protected.
 
 ### 3. Index features beyond a btree column list — Medium, partly by design
+
+Since schema format v1 these features can be declared and validated
+(`keys[].expression`, `direction`, `nulls`, `opclass`, plus `where`, `include`,
+`method`, `nullsNotDistinct`), but the migration engine does not execute them:
+the run refuses the file with each offending index named.
 
 **Detected and protected** (never matched, removal refused): expression
 indexes, partial indexes (`WHERE`), covering indexes (`INCLUDE`), non-btree

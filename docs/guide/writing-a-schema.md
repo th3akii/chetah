@@ -1,35 +1,38 @@
 # Writing a schema for Chetah
 
-`chetah-schema.json` is the single source of truth for the shape of the database:
-the same file generates the C# models and drives the migrations (a diff between
-the file and the live catalog). One file, two consumers:
+`chetah-schema.json` is the single source of truth for the shape of the database.
+One file feeds two consumers:
 
 ```text
 chetah-schema.json ──► Chetah.CodeGen ──► C# models and table bindings
                    └─► chetah-db diff / apply ──► SQL migrations
 ```
 
-The file is JSON with comments allowed (`//` and `/* */`), so annotate it freely.
-Unknown properties are rejected — a typo fails loudly instead of being ignored.
+The file is JSON with comments allowed (`//` and `/* */`). Unknown properties are
+rejected, so a typo fails loudly instead of being ignored. [`chetah.schema.json`](../../chetah.schema.json)
+at the repository root is the machine-readable contract: point `"$schema"` at it and
+VS Code gives completion, hover descriptions and structural validation with no extension.
 
-This guide is written for both people and AI assistants. It is complete: the
-"reference" sections below list every accepted property and every rule the
-parser enforces. For why things work this way, see
-[`decisions.md`](../project/decisions.md) D002 and D006.
+Structural validation covers shape, required properties and enum values. References
+between objects — does this table exist, is that column unique — are checked by the
+semantic validator and reported with the path of the declaration that caused them.
+
+> **Format version.** This is schema format v1. Files written for the older format must be
+> converted; see [Converting an older file](#converting-an-older-file) and
+> [`decisions.md`](../project/decisions.md) D008.
 
 ---
 
 ## Quick start
 
-The smallest useful file:
-
 ```jsonc
 {
+  "$schema": "./chetah.schema.json",
   "tables": {
     "users": {
       "model": "User",
       "columns": {
-        "id": { "type": "integer", "nullable": false },
+        "id": { "type": "integer", "primaryKey": true, "identity": true },
         "name": { "type": "text", "nullable": false },
         "age": { "type": "integer" }
       }
@@ -58,57 +61,32 @@ dotnet run --project src/Chetah.CodeGen -- \
   --schema chetah-schema.json --out Generated --namespace Chetah.Generated
 ```
 
-A working example lives in [`../../examples/BasicExample/`](../../examples/BasicExample/).
+A complete, migration-clean example lives in
+[`examples/BasicExample/`](../../examples/BasicExample/); the university example in
+[`examples/NewExample/`](../../examples/NewExample/) shows composite keys, composite
+foreign keys, checks and indexes.
 
 ---
 
-## A file with everything
+## Root
 
-Every property is shown below; the sections that follow explain each one.
-
-```jsonc
+```json
 {
-  "tables": {
-    "roles": {
-      "model": "Role",
-      // "id" is written by the tool. Never edit it by hand.
-      "$id": 1,
-      "primaryKey": ["id"],
-      "columns": {
-        "id": { "$id": 1, "type": "integer", "nullable": false, "identity": true },
-        "code": { "$id": 2, "type": "varchar(32)", "nullable": false, "unique": true }
-      }
-    },
-
-    "users": {
-      "model": "User",
-      "$id": 2,
-      "primaryKey": ["tenant_id", "id"],          // composite primary key
-      "unique": [["tenant_id", "email"]],          // composite UNIQUE constraint
-      "indexes": {
-        "users_state_idx": { "columns": ["state"] } // CREATE INDEX
-      },
-      "foreignKeys": {
-        "users_role_fkey": {
-          "columns": ["role_id"],
-          "references": "roles",
-          "referenceColumns": ["id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "columns": {
-        "tenant_id": { "$id": 1, "type": "integer", "nullable": false },
-        "id": { "$id": 2, "type": "bigint", "nullable": false, "identity": true },
-        "email": { "$id": 3, "type": "text", "nullable": false },
-        "role_id": { "$id": 4, "type": "integer", "nullable": false },
-        "state": { "$id": 5, "type": "text", "nullable": false, "default": "'new'" },
-        "created_at": { "$id": 6, "type": "timestamp(3)", "nullable": false, "default": "now()" }
-      }
-    }
-  }
+  "$schema": "./chetah.schema.json",   // optional; editor contract
+  "tables": { ... },                   // required; at least one table
+  "enums": { ... },                    // optional
+  "sequences": { ... },                // optional
+  "views": { ... },                    // optional
+  "materializedViews": { ... }         // optional
 }
 ```
+
+Every collection is optional except `tables`, and a table is required for a reason:
+an empty file would describe a database with no tables, which `diff` reads as
+"drop everything". PostgreSQL's `public` is the default namespace; any object may
+set `"schema"` to another namespace.
+
+`$schema` is ignored by both tools. It exists for editors.
 
 ---
 
@@ -116,24 +94,25 @@ Every property is shown below; the sections that follow explain each one.
 
 ```jsonc
 "users": {
+  "schema": "public",              // optional; the default
   "model": "User",                 // optional; default = PascalCase("users") = "Users"
   "$id": 2,                        // written by the tool; see "Identities"
   "columns": { ... },              // required, at least one
-  "primaryKey": ["id"],            // optional; the column list, in constraint order
-  "unique": ["email", ["a", "b"]], // optional; one UNIQUE constraint per entry
-  "indexes": { ... },              // optional; standalone indexes
-  "foreignKeys": { ... }           // optional; foreign keys, including composite ones
+  "primaryKey": { ... },           // optional; composite or named key
+  "unique": [ ... ],               // optional; table-level UNIQUE constraints
+  "foreignKeys": [ ... ],          // optional; one array of objects
+  "checks": [ ... ],               // optional; table-level CHECK constraints
+  "indexes": [ ... ]               // optional; standalone indexes
 }
 ```
 
 | Rule | What happens |
 |---|---|
-| At least one table | the file is rejected |
-| Table names are unique | rejected (`is defined more than once`) |
 | `columns` required, at least one column | rejected |
+| Table names are unique | rejected |
 | Table name must produce a valid C# accessor (`PascalCase + "Table"`) | rejected |
-| `model` and accessor names must be unique across tables | rejected (set an explicit `"model"`) |
-| Use letters, digits and underscores in table names | hyphens are PascalCased for C#, but underscores are the safe choice |
+| `model` and accessor names are unique across tables | rejected (set an explicit `"model"`) |
+| Table, sequence, view and materialized view names share PostgreSQL's relation namespace | duplicate names rejected |
 
 `model` also decides the generated class name, so set it when the table name is
 plural: `"model": "User"` for `users`.
@@ -142,422 +121,463 @@ plural: `"model": "User"` for `users`.
 
 ## Columns
 
-`type` is required; the rest are optional. This complete example shows the
-shapes a column can take:
-
 ```jsonc
-{
-  "tables": {
-    "roles": {
-      "primaryKey": ["id"],
-      "columns": {
-        "id": { "type": "integer", "nullable": false, "identity": true }
-      }
-    },
-    "users": {
-      "columns": {
-        "email": { "type": "text", "nullable": false, "unique": true, "default": "'pending'" },
-        "role_id": { "type": "integer", "references": "roles.id" }
-      }
-    }
+"columns": {
+  "id": {
+    "type": "integer",
+    "primaryKey": true,
+    "identity": true
+  },
+  "username": {
+    "type": "varchar(100)",
+    "nullable": false,
+    "unique": true
+  },
+  "status": {
+    "type": "text",
+    "default": "pending"
+  },
+  "created_at": {
+    "type": "timestamptz",
+    "default": { "sql": "now()" }
   }
 }
 ```
 
-A foreign key needs a matching type on both sides — `text` cannot reference an
-`integer` (PostgreSQL refuses at apply), and the referenced column must be
-unique. An identity column is integer or bigint and cannot also have a `default`.
+| Property | Meaning |
+|---|---|
+| `type` | Required. Any PostgreSQL type expression (see [Types](#types)). |
+| `nullable` | Omitted means nullable, PostgreSQL's default. `false` produces `NOT NULL`. A primary key column is never nullable. |
+| `default` | Literal scalar, or `{ "sql": "..." }` for an expression. See [Defaults](#defaults). |
+| `identity` | `true`, or `{ "generation", "start", "increment" }`. Integer and bigint only. |
+| `generated` | `{ "expression": "...", "stored": true }`. |
+| `primaryKey` | `true` for a single-column primary key. |
+| `unique` | `true` for a single-column UNIQUE constraint. |
+| `$id` | Tool-maintained identity. |
 
 | Rule | What happens |
 |---|---|
-| Column names must be valid C# identifiers (letters, digits, `_`; not starting with a digit) | rejected |
-| Generated C# property names must be unique per table (`user_id` vs `userId` collide) | rejected |
-| `nullable` omitted means **nullable** | the column is created without `NOT NULL` |
+| Column names must be valid C# identifiers | rejected |
+| Generated C# property names must be unique per table (`user_id` vs `userId`) | rejected |
 | `identity` requires `integer` or `bigint` | rejected |
-| `identity` and `default` on the same column | rejected |
-| `default` is raw SQL | emitted verbatim |
+| `identity` and `default` on one column | rejected |
+| `generated` and `default`, or `generated` and `identity` | rejected |
+| `"primaryKey": true` with `"nullable": true` | rejected |
+
+### Defaults
+
+One rule, everywhere: a JSON scalar is a literal, an object is an explicit SQL
+expression.
+
+```jsonc
+"default": "pending"                        // 'pending'
+"default": "it's"                           // 'it''s'  (quoted and escaped)
+"default": 0                                // 0
+"default": true                             // true
+"default": null                             // NULL
+"default": { "sql": "gen_random_uuid()" }   // gen_random_uuid()
+```
+
+Strings are never interpreted as SQL. If you mean `now()`, write
+`{ "sql": "now()" }`; writing `"now()"` stores the four-letter text `now()`.
+
+A literal is emitted with its JSON kind: strings as quoted SQL literals,
+numbers and booleans verbatim, `null` as `NULL`. PostgreSQL then coerces it to the
+column type, so `"default": "pending"` works for a text, enum or uuid column.
+
+### Identity
+
+```jsonc
+"id": { "type": "integer", "identity": true }
+```
+
+is shorthand for PostgreSQL's documented default:
+
+```jsonc
+"id": {
+  "type": "integer",
+  "identity": { "generation": "BY DEFAULT", "start": 1, "increment": 1 }
+}
+```
+
+`"generation": "ALWAYS"` is accepted and validated. The migration engine currently
+executes only the shorthand (`BY DEFAULT`); `ALWAYS`, `start` and `increment` are
+refused explicitly rather than approximated.
+
+### Generated columns
+
+```jsonc
+"total": {
+  "type": "integer",
+  "generated": { "expression": "price * quantity", "stored": true }
+}
+```
+
+`stored` defaults to `true`. PostgreSQL 16 (this project's validation baseline)
+supports stored generated columns only; `"stored": false` is rejected until the
+baseline moves to PostgreSQL 18. Generated columns are validated and generated as
+model properties, but cannot be created or altered by the migration engine yet.
 
 ---
 
 ## Types
 
-| Declared `type` | PostgreSQL | Generated C# | Notes |
-|---|---|---|---|
-| `integer`, `int4` | `integer` | `int` | |
-| `bigint`, `int8` | `bigint` | `long` | |
-| `text` | `text` | `string` | |
-| `varchar`, `character varying` | `varchar` | `string` | unlimited unless a length is given |
-| `varchar(100)` | `character varying(100)` | `string` | length 1–10485760 |
-| `boolean`, `bool` | `boolean` | `bool` | |
-| `uuid` | `uuid` | `Guid` | |
-| `timestamp` | `timestamp` | `DateTime` | |
-| `timestamp(3)` | `timestamp(3)` | `DateTime` | precision 0–6 |
+`type` accepts any PostgreSQL type expression:
 
-Types are compared with their modifier, so `timestamp(3)` and `timestamp` are
-different. A larger modifier (`varchar(100)` → `varchar(200)`) is a widening and
-applies without a prompt; a smaller one, a dropped modifier or a different base
-type is destructive-gated.
+- built-in names and their aliases: `integer`/`int4`, `bigint`/`int8`,
+  `boolean`/`bool`, `varchar`/`character varying`, `timestamp`, `timestamptz`,
+  `numeric`/`decimal`, `jsonb`, `bytea`, …
+- modifiers where PostgreSQL allows one: `varchar(100)`, `timestamp(3)`,
+  `numeric(12, 2)`
+- arrays: `text[]`, `integer[][]`
+- schema-qualified names: `app.money`
+- an enum declared in the same file: `user_status` or `app.user_status`
 
-Anything else (`jsonb`, `numeric`, `timestamptz`, `date`, `int2`, enums,
-domains) cannot be declared yet. Do **not** "exclude" such a table by removing
-it from the file: an omitted live table is planned as `DROP TABLE`. See
-[`migration-limitations.md`](../notes/migration-limitations.md) item 1.
+The parser canonicalizes built-in names (`integer` → `int4`) so the schema and the
+live catalog compare equal.
+
+| Declared `type` | Generated C# |
+|---|---|
+| `integer`, `int4` | `int` |
+| `bigint`, `int8` | `long` |
+| `smallint`, `int2` | `short` |
+| `real`, `float4` | `float` |
+| `double precision`, `float8` | `double` |
+| `numeric`, `decimal` | `decimal` |
+| `text`, `varchar(n)`, `char(n)` | `string` |
+| `boolean`, `bool` | `bool` |
+| `uuid` | `Guid` |
+| `date` | `DateOnly` |
+| `time` | `TimeOnly` |
+| `timetz` | `DateTimeOffset` |
+| `timestamp`, `timestamptz` | `DateTime` |
+| `interval` | `TimeSpan` |
+| `json`, `jsonb` | `string` |
+| `bytea` | `byte[]` |
+| an enum declared in this file | `string` |
+| `T[]` | `T[]` (of a mapped `T`) |
+
+A type with no CLR mapping — a domain, a composite, an unknown user-defined type —
+is still a valid declaration for the schema and validator. Code generation refuses
+it with the column named, because inventing a CLR type would silently read the
+wrong data.
+
+The migration engine executes a smaller set: `int4`, `int8`, `text`, `varchar`,
+`bool`, `uuid`, `timestamp`, with modifiers. Anything else is refused by
+`diff`/`apply` with its path (see [What the migration engine executes](#what-the-migration-engine-executes)).
 
 ---
 
-## Constraints
+## Primary keys
 
-### Primary key
+Single column:
 
 ```jsonc
-"primaryKey": ["tenant_id", "id"]     // composite; omit for no primary key
+"id": { "type": "integer", "primaryKey": true }
 ```
 
-Generates `CONSTRAINT "users_pkey" PRIMARY KEY ("tenant_id", "id")`. Columns must
-be declared in the same table.
-
-### Unique constraints
-
-Two forms, same guarantee:
+Composite or explicitly named:
 
 ```jsonc
-"email": { "type": "text", "unique": true }        // single column, column-level
-"unique": ["email", ["tenant_id", "email"]]        // table-level list
-```
-
-A string entry is one column; an array entry is a composite key. Names are
-synthesized: `{table}_{column}_key` / `{table}_{columns joined by _}_key`.
-Declaring the same key twice (column flag *and* list entry) is rejected.
-
-### Foreign keys
-
-Single column, with the shorthand:
-
-```jsonc
-"role_id": { "type": "integer", "references": "roles.id" }
-```
-
-Composite keys, or any non-default action, use the table-level object keyed by
-constraint name:
-
-```jsonc
-"foreignKeys": {
-  "users_role_fkey": {
-    "columns": ["tenant_id", "role_id"],
-    "references": "roles",                    // or "other_schema.roles"
-    "referenceColumns": ["tenant_id", "id"],
-    "onDelete": "cascade",
-    "onUpdate": "restrict"
-  }
+"primaryKey": {
+  "name": "pk_enrollments",
+  "columns": ["student_id", "course_id"]
 }
 ```
+
+`name` defaults to `<table>_pkey`. Rules, all rejected when violated:
+
+- one primary key per table;
+- column-level and table-level declarations cannot coexist;
+- multiple column-level `primaryKey: true` declarations are invalid;
+- primary key columns cannot be nullable;
+- every listed column must be declared.
+
+---
+
+## Unique constraints
+
+Single column:
+
+```jsonc
+"email": { "type": "text", "unique": true }
+```
+
+Table level, one object per key:
+
+```jsonc
+"unique": [
+  { "name": "uq_student_course", "columns": ["student_id", "course_id"] },
+  { "columns": ["email", "role"], "nullsNotDistinct": true }
+]
+```
+
+`name` defaults to `<table>_<columns joined by _>_key`. `nullsNotDistinct` requires
+PostgreSQL 15 and is validated; the migration engine refuses it rather than
+pretending.
+
+Declaring the same key twice (column flag and list entry, or two identical entries)
+is rejected. A unique constraint is not a unique index: the constraint is part of
+the table's definition, an index is a physical access path ([Indexes](#indexes)).
+
+---
+
+## Foreign keys
+
+One structure, always an array of objects:
+
+```jsonc
+"foreignKeys": [
+  {
+    "columns": ["department_id"],
+    "references": { "table": "departments", "columns": ["id"] },
+    "onDelete": "SET NULL",
+    "onUpdate": "CASCADE"
+  }
+]
+```
+
+Composite keys use exactly the same shape:
+
+```jsonc
+"foreignKeys": [
+  {
+    "columns": ["course_id", "semester_id"],
+    "references": { "table": "course_offerings", "columns": ["course_id", "semester_id"] },
+    "onDelete": "CASCADE"
+  }
+]
+```
+
+Optional properties: `name`, `onDelete`, `onUpdate`, `match`
+(`SIMPLE`/`FULL`/`PARTIAL`), `deferrable`, `initiallyDeferred`.
 
 | Rule | What happens |
 |---|---|
 | `columns` must be declared in this table | rejected |
-| `referenceColumns` must have the same number of entries as `columns` | rejected |
-| Actions: `no action` (default), `restrict`, `cascade`, `set null`, `set default`; case-insensitive, `_`/`-` accepted | anything else is rejected |
-| The referenced columns must be unique in the target (primary key, unique constraint or unique index) | PostgreSQL refuses at apply; the migration rolls back |
-| `set null` needs nullable columns; `set default` needs a default | PostgreSQL refuses at apply |
-| Declared names must not collide with a generated name (`{t}_pkey`, `{t}_{col}_key`, `{t}_{col}_fkey`) | rejected |
+| `references.table` is `table` or `schema.table`; `references.columns` is required | rejected |
+| Local and referenced counts must match | rejected |
+| An unqualified target must be declared in this file | rejected |
+| Referenced columns must be unique there (primary key, unique constraint or unique index) | rejected |
+| Column types must be compatible (same type, or integer/bigint) | rejected |
+| `initiallyDeferred` without `deferrable` | rejected |
+| `match: "PARTIAL"` | rejected (PostgreSQL accepts the syntax but does not implement it) |
 
-Actions are part of the definition: changing one drops and re-creates the
-constraint.
+`onDelete`/`onUpdate` are uppercase SQL actions: `NO ACTION` (the default),
+`RESTRICT`, `CASCADE`, `SET NULL`, `SET DEFAULT`. Actions are part of the
+definition: changing one drops and re-creates the constraint.
 
-### CHECK and EXCLUSION constraints
+A qualified reference such as `other_schema.roles` describes a table outside this
+file; the server validates it at apply time.
 
-Not expressible. They are read from the catalog and protected: a plan that would
-remove one is refused with its name. See
-[`migration-limitations.md`](../notes/migration-limitations.md) item 2.
+---
+
+## Check constraints
+
+```jsonc
+"checks": [
+  { "name": "chk_valid_grade", "expression": "grade BETWEEN 5 AND 10" }
+]
+```
+
+`name` and `expression` are required; the expression is emitted verbatim. The
+parser does not parse SQL. Check constraints are validated and recorded, but the
+migration engine cannot create or remove them yet — a schema that declares one is
+refused by `diff`/`apply` with the constraint named. Existing checks in the
+database stay protected from removal.
 
 ---
 
 ## Indexes
 
 ```jsonc
-"indexes": {
-  "users_state_idx": { "columns": ["state"] },
-  "users_email_lower_idx": { "columns": ["email"], "unique": true }
-}
+"indexes": [
+  {
+    "name": "idx_students_name",
+    "keys": [{ "column": "last_name" }, { "column": "first_name" }]
+  },
+  {
+    "name": "idx_students_active",
+    "keys": [{ "column": "created_at" }],
+    "where": "deleted_at IS NULL"
+  },
+  {
+    "name": "idx_students_email_lower",
+    "keys": [{ "expression": "lower(email)" }],
+    "method": "btree"
+  }
+]
 ```
+
+`keys` is the single ordered representation, and mixed column/expression keys are
+allowed. Each key is an object with exactly one of `column` or `expression`, and
+optionally `direction` (`asc`/`desc`), `nulls` (`first`/`last`) and `opclass`.
+
+Optional index properties: `unique`, `method` (default `btree`), `where`,
+`include`, `nullsNotDistinct`.
 
 | Rule | What happens |
 |---|---|
-| Key = index name, a plain identifier | rejected otherwise |
-| Index names are unique across the whole file (PostgreSQL keeps indexes in one namespace) | rejected |
-| `columns` non-empty, all declared in this table | rejected |
-| `unique` optional, default `false` | |
+| `name` required, a plain identifier, unique across the schema | rejected |
+| `keys` non-empty; column keys must name declared columns | rejected |
+| `include` entries must be declared columns, listed once | rejected |
+| `direction`/`nulls`/`method`/`opclass` validated against PostgreSQL's vocabulary | rejected |
 
-Indexes are matched by **definition** (columns + uniqueness), not by name, so a
-hand-named equivalent is left alone. Renaming an index in the file does not
-rename it in the database.
+Indexes are matched by **definition** (keys + uniqueness), not by name, so a
+hand-named equivalent is left alone. Renaming an index in the file does not rename
+it in the database. The migration engine executes plain btree column indexes only;
+expressions, ordering, operator classes, other access methods, `where`, `include`
+and `nullsNotDistinct` are validated and refused explicitly.
 
-Expression, partial (`WHERE`), covering (`INCLUDE`) and non-btree indexes cannot
-be declared; they are detected and protected from removal.
+Existing expression, partial and covering indexes in the database are detected and
+protected from removal.
 
 ---
 
-## Identity columns
+## Enums
+
+A label array, or an object when the type needs a namespace:
 
 ```jsonc
-"id": { "type": "bigint", "nullable": false, "identity": true }
+"enums": {
+  "user_status": ["active", "inactive", "banned"],
+  "kind": { "values": ["a", "b"], "schema": "app" }
+}
 ```
 
-Generates `"id" bigint NOT NULL GENERATED BY DEFAULT AS IDENTITY`. Integer or
-bigint only, cannot have a `default`, and is implicitly `NOT NULL` whether or not
-`nullable` is stated. An existing `GENERATED ALWAYS` column is recognised as an
-identity and left as it is.
+Labels must be non-empty and unique. A column whose `type` matches a declared enum
+generates a `string` property and is validated as a reference. Enum DDL is not
+executed yet: a schema that declares one is refused by `diff`/`apply` with the enum
+named, never silently ignored.
 
----
-
-## Defaults
+## Sequences
 
 ```jsonc
-"created_at": { "type": "timestamp", "default": "now()" },
-"state": { "type": "text", "default": "'active'" },
-"payload": { "type": "uuid", "default": "gen_random_uuid()" }
+"sequences": {
+  "invoice_numbers": { "start": 1000, "increment": 1 }
+}
 ```
 
-- The expression is raw SQL, emitted **verbatim** (`'a  b'` keeps its spaces,
-  `'2020-01-01 10:00'::date` keeps its cast).
-- It cannot contain `;` or the migration breakpoint marker; such a default
-  produces a migration that fails at apply.
-- PostgreSQL rewrites some expressions when it stores them (`pg_catalog.now()` →
-  `now()`). The tool records both what you declared and what the column holds, so
-  an unchanged declaration never regenerates the same migration.
-- To remove a default, delete the property.
+Optional: `schema`, `start`, `increment`, `minValue`, `maxValue`, `cycle`, `cache`.
+`cache` must be positive. Sequences are validated; creation is not executed yet.
 
----
-
-## Identities (`$id`) — read this before editing the file
-
-Every table and column carries a persistent number. It is how the tool tells a
-**rename** (same id, new name) from a **replacement** (new id, `DROP` + `ADD`).
-You never assign these; the tool writes them.
-
-| Property | Scope |
-|---|---|
-| Table `$id` | unique among tables |
-| Column `$id` | unique **within its table**; the same number can name a column in two tables |
-
-Rules, in practice:
-
-- **Do not edit, invent or copy `$id` values.** They are tool-owned. The tool
-  refuses duplicates, ids of deleted objects, ids that contradict the database,
-  and ids it never issued. A hand-written id that happens to match an existing
-  object is indistinguishable from a rename, so it renames that object.
-- **Renaming a table or column is just renaming the key** and keeping the `$id`
-  inside it. The tool then emits `ALTER TABLE … RENAME …` and keeps the data.
-- **Removing the `$id`** (or using a different one) makes the object look new.
-  Deleting a column and adding an unrelated one in the same table in one change
-  is ambiguous and is refused: keep the `$id` for a rename, or pass
-  `--drop-add table.column` to say "this is a real drop plus add".
-- **A deleted object's id is never reused.** The database remembers it, so a new
-  object always gets a higher number in its table.
-- **Adoption**: a file without `$id`s adopts the ids the database already has for
-  those names, so you can start from a hand-written declaration.
-- **Portability**: the file carries the ids, so development, staging and
-  production apply the same identities. Two branches adding columns to
-  *different* tables never collide.
-
-Ids are internal. They are not used for ordering, sorting, display or foreign
-keys in your tables.
-
----
-
-## Validation and errors
-
-The parser is strict; these are the messages you will meet:
-
-| Message | Cause |
-|---|---|
-| `Unknown top-level property 'x'. The schema contains only "tables".` | typo at the root |
-| `Table 'x': unknown property 'y'` | typo inside a table, column, index or foreign key |
-| `Table 'x' must contain a "columns" object` | columns missing |
-| `Table 'x' must define at least one column` | empty `columns` |
-| `Table 'x' is defined more than once` | duplicate key |
-| `column 'y' has unsupported type 'z'` | type outside the table above |
-| `... "$id" must be a positive integer` | id is not a positive whole number |
-| `... "$id" N is already used by another column in table 'x'` | duplicate inside a scope |
-| `... "primaryKey" names column 'y', which is not declared` | typo in a key list |
-| `... index 'y' names column 'z', which is not declared` | typo in an index |
-| `... "unique" lists column 'y', which already declares "unique": true` | the same key twice |
-| `... foreign key 'y' maps 2 column(s) onto 1 reference column(s)` | arity mismatch |
-| `... foreign key 'y' collides with the name Chetah generates ...` | declared name clashes with `{t}_pkey` / `{t}_{col}_key` |
-
-Runtime refusals (not parse errors) come from `diff`/`apply`: ambiguous
-identity, ids the tool never issued, edited applied migrations, divergent
-history, and destructive changes without confirmation. All are reported with the
-object names and say what to do.
-
----
-
-## Workflow
-
-1. **Edit** `chetah-schema.json`.
-2. **`diff`** — prints the SQL a plan would run. It writes no DDL; it does record
-   any missing `$id`s into the file, because identity has to be recorded when it
-   is decided. `diff --check` writes nothing at all (no file, no DDL, no lock) and
-   exits `1` when a migration is pending.
-3. **`apply`** — writes the migration file(s), then executes in one transaction:
-   the DDL, the applied-state row, and the identity registry update. A failure
-   rolls everything back and records the failure. The next interactive `apply`
-   offers Retry, Repair, or Cancel; non-interactive apply refuses. `repair`
-   re-plans the failed entry from the corrected schema, verifies the database
-   still matches the previous snapshot, archives the failed SQL, and applies
-   the replacement.
-4. **Regenerate the models** if the shape the code sees changed.
-5. **Commit** the schema file and the generated `migrations/` files together.
-
-What `apply` creates on disk, next to the schema file by default:
-
-```text
-migrations/
-  20261106230743_create_users_plus_1/
-    20261106230743_create_users_plus_1.sql     -- the statements, in order
-    meta/20261106230743_create_users_plus_1_snapshot.json
-  _journal.json                                -- ids, hashes, operation metadata
-```
-
-On the database side, in its own `chetah` schema: `chetah.migrations` (what ran,
-with hashes) and `chetah.objects` (the identity registry). Never edit a migration
-that has run — it is history, and the tool refuses to replay one whose file no
-longer matches.
-
-Destructive changes ask for confirmation: `DROP TABLE`, `DROP COLUMN`,
-`DROP INDEX`, `DROP CONSTRAINT`, narrowing a type, and `SET NOT NULL` on a column
-that already holds NULLs. A non-interactive run refuses instead of assuming
-"yes".
-
----
-
-## Cookbook
-
-Add a table:
+## Views and materialized views
 
 ```jsonc
-"posts": {
-  "model": "Post",
+"views": {
+  "active_students": { "query": "SELECT * FROM students WHERE active = true" }
+},
+"materializedViews": {
+  "student_counts": { "query": "SELECT count(*) FROM students", "withData": true }
+}
+```
+
+Both take a required `query` and optional `schema`; a materialized view also takes
+`withData` (default `true`). Queries are emitted verbatim — Chetah does not parse
+SQL. Views and materialized views are validated; creation is not executed yet.
+
+---
+
+## Identities and renames
+
+Every table and column carries a tool-maintained `"$id"`. It is the only reliable
+signal that separates a rename (same id, new name) from a drop plus an add (the
+value would be lost). Keep the id when renaming:
+
+```jsonc
+"users": {
+  "$id": 3,
   "columns": {
-    "id": { "type": "bigint", "nullable": false, "identity": true },
-    "user_id": { "type": "bigint", "nullable": false, "references": "users.id" },
-    "title": { "type": "text", "nullable": false }
+    "id": { "$id": 1, "type": "integer" },
+    "display_name": { "$id": 7, "type": "text" }   // renamed from "name"
   }
 }
 ```
 
-Add a nullable column: add the entry; nothing else is needed.
+- `diff` records missing `"$id"` members; you never assign them.
+- Ids are never reused; a dropped object's id stays tombstoned in the database.
+- A brand-new id next to a tracked object that vanished is refused, not guessed:
+  for a real replacement run with `--drop-add users.display_name`, which still
+  passes the destructive gate.
+- Ids are scoped: table ids are unique among tables, column ids are numbered per
+  table, so branches touching different tables merge without id conflicts.
 
-Rename a column: rename the key, keep its `$id`:
-
-```jsonc
-"username": { "$id": 3, "type": "text" }   →   "display_name": { "$id": 3, "type": "text" }
-```
-
-Replace a column (real drop + add), two steps or one explicit flag:
-
-```sh
-# remove the old column, apply, then add the new one — or, in one migration:
-dotnet run --project src/Chetah.Db -- apply --drop-add users.address --schema chetah-schema.json
-```
-
-Change a type: widen freely (`integer` → `bigint`, `varchar(100)` →
-`varchar(200)`); narrowing prompts for confirmation.
-
-Make a column `NOT NULL` on a populated table: only if it has no NULLs and, if
-rows exist, a `default`; otherwise the statement fails and rolls back.
-
-Add a unique constraint: `"unique": true` on the column, or a table-level list
-entry for a composite.
-
-Add an index: an entry under `indexes`.
-
-Drop a column or a table: delete the entry; the plan is destructive-gated. The
-confirmation names what disappears — except triggers and policies attached to a
-dropped table, which PostgreSQL removes silently (see
-[`migration-limitations.md`](../notes/migration-limitations.md) item 18).
+Enums, sequences and views do not carry ids yet: nothing migrates them, so no
+identity is needed.
 
 ---
 
-## Common mistakes
+## Commands
 
-| Mistake | What happens |
+| Command | What it does |
 |---|---|
-| Removing a table from the file to "leave it alone" | it is planned as `DROP TABLE` (gated). Never use omission to exclude a table. |
-| Editing `$id` values | refused, or treated as a rename. Treat them as read-only. |
-| Editing a migration that already ran | the next run refuses (`no longer matches what the database ran`) |
-| Assuming `"nullable": false` is the default | omitted means **nullable** |
-| A foreign key to a non-unique column | PostgreSQL refuses at apply; the migration rolls back |
-| `identity` plus `default` | rejected |
-| Two indexes with the same name in different tables | rejected (PostgreSQL keeps one namespace) |
-| A `default` containing `;` | the migration fails at apply and rolls back |
-| Expecting `jsonb`/`numeric`/`timestamptz` | not expressible yet; a declared `text` against such a column is a gated type change |
+| `chetah-db diff` | Prints the DDL the catalog comparison produced. Writes no DDL, records missing ids. |
+| `chetah-db diff --check` | Strict read-only: no file write, no DDL, no lock. Exit 1 when a migration is pending. |
+| `chetah-db apply` | Replays pending migrations, then generates and applies new ones. A failed migration is offered as Retry, Repair or Cancel. |
+| `chetah-db repair` | Replaces the single pending migration with a fresh plan from the current schema and applies it. |
+| `chetah-db apply --drop-add <object>` | Declares an object new so a vanished one becomes a real drop plus add. |
+
+Destructive statements require an interactive `yes`; non-interactive runs refuse.
+Migrations, recovery and repair are described in
+[`schema-tooling.md`](../reference/schema-tooling.md) and
+[`migration-limitations.md`](../notes/migration-limitations.md).
 
 ---
 
-## For AI assistants
+## What the migration engine executes
 
-When generating or editing a `chetah-schema.json`:
+The format describes more than the engine can apply. That gap is always reported,
+never silently ignored. `diff`, `apply` and `repair` refuse the whole run when the
+file contains any of:
 
-1. Emit only the properties listed in this guide. The parser rejects unknown
-   ones, so guessing a property name fails the whole file.
-2. Never write `$id` unless you are copying the file verbatim; if you are adding
-   an object, leave `$id` out and let the tool assign it.
-3. A rename is "same `$id`, new key". If you do not have the existing id, do not
-   rename — output a removal and an addition as separate steps, or say that
-   `--drop-add` is required.
-4. State `"nullable"` explicitly. Omitting it means nullable.
-5. Foreign keys need the referenced columns to be unique in the target table.
-6. Keep column names to `[A-Za-z_][A-Za-z0-9_]*`; table names may use `_`.
-7. After editing, the verification command is
-   `diff --check` (exit `0` = in sync, `1` = pending or unsafe). Do not claim a
-   schema is valid without it.
-8. Do not remove a table from the file to "ignore" it.
+- a non-`public` table `schema`;
+- a column type outside `int4`, `int8`, `text`, `varchar`, `bool`, `uuid`,
+  `timestamp` (modifiers allowed) — arrays, enums, domains, `numeric`,
+  `timestamptz`, `jsonb`, … included;
+- generated columns;
+- identity options beyond `"identity": true`;
+- check constraints;
+- `nullsNotDistinct` on a unique constraint;
+- index expressions, ordering, operator classes, non-btree methods, `where`,
+  `include`, `nullsNotDistinct`;
+- any enum, sequence, view or materialized view.
 
-Template to fill in (it parses as written — rename and extend it):
-
-```jsonc
-{
-  "tables": {
-    "tenants": {
-      "model": "Tenant",
-      "primaryKey": ["id"],
-      "columns": {
-        "id": { "type": "bigint", "nullable": false, "identity": true }
-      }
-    },
-    "widgets": {
-      "model": "Widget",
-      "primaryKey": ["id"],
-      "unique": [["tenant_id", "name"]],
-      "indexes": { "widgets_name_idx": { "columns": ["name"] } },
-      "foreignKeys": {
-        "widgets_tenant_fkey": {
-          "columns": ["tenant_id"],
-          "references": "tenants",
-          "referenceColumns": ["id"],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "columns": {
-        "id": { "type": "bigint", "nullable": false, "identity": true },
-        "tenant_id": { "type": "bigint", "nullable": false },
-        "name": { "type": "text", "nullable": false }
-      }
-    }
-  }
-}
-```
+The refusal names every offending declaration and its path. Everything else —
+tables, columns, literal and SQL defaults, nullability, primary keys, unique
+constraints, foreign keys (including composite keys, actions, `match` and
+deferrability) and plain indexes — is executed and compared against the live
+catalog.
 
 ---
 
-## Where the rest is
+## Converting an older file
 
-| I want to… | Read |
+The format was redesigned before v1 shipped. Convert once, deliberately; the tool
+does not reinterpret old files.
+
+| Old | New |
 |---|---|
-| understand how the diff, ids, history and gates work | [`schema-tooling.md`](../reference/schema-tooling.md) |
-| know why a decision was made | [`decisions.md`](../project/decisions.md) |
-| query data with the generated models | [`typed-models.md`](../reference/typed-models.md), [`basic-select.md`](../reference/basic-select.md) |
-| see what is not supported, and whether it is safe to ignore | [`migration-limitations.md`](../notes/migration-limitations.md) |
-| see the plan for upcoming work | [`roadmap.md`](../project/roadmap.md) |
+| `"primaryKey": ["a", "b"]` | `"primaryKey": { "columns": ["a", "b"] }`, or `"primaryKey": true` on a single column |
+| `"unique": ["email", ["a", "b"]]` | `"unique": [{ "columns": ["a", "b"] }]`; keep `"unique": true` on a single column |
+| `"indexes": { "name": { "columns": [...] } }` | `"indexes": [{ "name": "name", "keys": [{ "column": "..." }] }]` |
+| `"foreignKeys": { "name": { "columns", "references": "t", "referenceColumns": [...] } }` | `"foreignKeys": [{ "name", "columns", "references": { "table": "t", "columns": [...] } }]` |
+| column `"references": "t.c"` | a table-level `foreignKeys` entry |
+| `"default": "now()"` | `"default": { "sql": "now()" }` |
+| `"default": "'pending'"` | `"default": "pending"` |
+| `"default": "true"` / `"5"` | `"default": true` / `"default": 5` |
+| referential actions `"cascade"` | `"CASCADE"` (case-sensitive, uppercase) |
+| table `"checks"` / new objects | read the sections above |
+
+Constraint names that used to be implicit keep their generated names, so an
+existing database does not see churn. Only the default booleans changed spelling:
+the tool emits `true`/`false`, which is what the catalog stores.
+
+---
+
+## Related reading
+
+- [Schema tooling and migrations](../reference/schema-tooling.md)
+- [Generated typed models](../reference/typed-models.md)
+- [Migration limitations](../notes/migration-limitations.md)
+- [Decision log](../project/decisions.md) — D002, D005–D008
+- [Roadmap](../project/roadmap.md)

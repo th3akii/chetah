@@ -118,7 +118,15 @@ The gating question is answered by the plan: primary keys and foreign keys first
 
 ### Stage 7.6 — Schema Format Ergonomics (delivered as a refactor)
 
-**Status:** Delivered 2026-11-06 — tables and columns are now keyed objects instead of arrays of `{ "name": … }` entries, and the file accepts JSONC comments. Column entries stay objects (no string shorthand): [`typed-models.md`](../reference/typed-models.md) documents the current format.
+**Status:** Delivered 2026-11-06 — tables and columns are keyed objects instead of
+arrays of `{ "name": … }` entries, and the file accepts JSONC comments. Reopened
+and delivered again 2026-11-08 as schema format v1: one canonical representation
+for every object, structured primary/unique/foreign keys, checks and indexes,
+literal-vs-SQL defaults, identity and generated columns, enums/sequences/views,
+a published JSON Schema contract and a semantic validator. Execution keeps its
+previous feature set and refuses the rest explicitly; see
+[`decisions.md`](decisions.md) D008 and
+[`writing-a-schema.md`](../guide/writing-a-schema.md).
 **Goal:** Reduce the verbosity of the JSON schema (repeated `"name": …` keys per column).
 
 The gating question answered itself once real schemas existed: keying by name

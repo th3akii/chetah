@@ -50,19 +50,26 @@ Rules:
   are rejected with that reason in the error.
 - `model` — optional C# model name. Default: PascalCase of the table name.
   Model and accessor names must be unique across the whole schema.
-- A key in `columns` — one of `integer`, `bigint`, `text`, `boolean`, `uuid`,
-  `timestamp`, with `type` naming it. Anything else is rejected with the
-  supported list in the error.
+- A key in `columns` — a PostgreSQL type expression: `integer`, `bigint`,
+  `text`, `boolean`, `uuid`, `timestamp`, `timestamptz`, `date`, `time`,
+  `numeric`, `jsonb`, `bytea`, `T[]`, a declared enum, and so on. The CLR
+  mapping is listed in
+  [`writing-a-schema.md`](../guide/writing-a-schema.md#types). A type with no
+  CLR mapping (a domain, a composite) is a valid declaration but code generation
+  refuses it with the column named.
 - `nullable` — optional. **Omitted means nullable**, matching PostgreSQL's own
   default. `"nullable": false` marks a NOT NULL column.
 - `$id` — maintained by `chetah-db`, not by hand: the tool writes a persistent
   identity onto every table and column and uses it to tell a rename from a drop
   plus an add ([`schema-tooling.md`](schema-tooling.md), D006).
-- Properties only the migration tool reads — `primaryKey`, `unique` (also
-  composite), `indexes`, `foreignKeys`, per-column `unique`, `references`,
-  `default`, `identity` — are accepted and ignored by the generator, which maps
-  columns to CLR types regardless. Vocabulary and semantics:
-  [`schema-tooling.md`](schema-tooling.md).
+- Constraints — `primaryKey` (column flag or table object), `unique` (column
+  flag or table objects), `foreignKeys`, `checks`, `indexes`, `default`,
+  `identity`, `generated` — are accepted and validated. The generator maps every
+  column to a CLR type regardless; SQL semantics live in the migration tool.
+  Vocabulary: [`writing-a-schema.md`](../guide/writing-a-schema.md).
+- `default` accepts a JSON literal (`"pending"`, `0`, `true`) or an explicit SQL
+  expression (`{ "sql": "now()" }`). A string is never interpreted as SQL, so
+  `"default": "now()"` would default to the text `now()`.
 - `type` accepts a PostgreSQL modifier where one exists: `varchar(100)` maps to
   `string` like `text`, `timestamp(3)` to `DateTime`. The modifier is part of the
   migrated type.
