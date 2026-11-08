@@ -355,10 +355,10 @@ skipped ones.
   re-apply; a larger modifier is not gated, a smaller one and a dropped modifier
   are; the parser rejects modifiers PostgreSQL would not accept.
 - **Composite keys and actions** — composite UNIQUE and composite FOREIGN KEY
-  with `ON DELETE cascade`/`ON UPDATE restrict` are created, are a no-op on
-  re-apply, and are replaced when an action changes; the parser rejects a
-  missing `referenceColumns`, an arity mismatch, an unknown action and an
-  undeclared column.
+  with `ON DELETE CASCADE`/`ON UPDATE RESTRICT` are created, are a no-op on
+  re-apply, and are replaced when an action, match type or deferrability changes;
+  the parser rejects a missing `references.columns`, an arity mismatch, an
+  unknown action and an undeclared column.
 - **Unsupported objects** — an expression index and a partial index survive,
   are never proposed for removal and block the column drop; a foreign key from
   another schema blocks the table drop with its name; a declared unique index

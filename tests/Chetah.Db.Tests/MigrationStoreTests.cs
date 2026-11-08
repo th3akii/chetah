@@ -81,6 +81,41 @@ public class MigrationStoreTests : IDisposable
         Assert.Equal(expected, MigrationStore.IsBaseline(id));
     }
 
+    [Fact]
+    public void ReadSnapshot_AcceptsRecordsWrittenBeforeForeignKeyOptions()
+    {
+        // History is never rewritten. A snapshot written before MATCH/deferrability were tracked has
+        // no fields for them; reading it must yield PostgreSQL's defaults, not fail.
+        const string id = "20260101000000_baseline";
+        var path = _store.SnapshotPath(id);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, """
+            {
+              "tables": [{ "name": "child", "columns": [{ "name": "parent_id", "type": "int4", "notNull": true }] }],
+              "constraints": [{
+                "name": "child_fkey",
+                "kind": "f",
+                "table": "child",
+                "columns": ["parent_id"],
+                "refTable": "parent",
+                "refColumns": ["id"],
+                "onDelete": "cascade",
+                "onUpdate": "no action"
+              }],
+              "indexes": []
+            }
+            """);
+
+        var snapshot = _store.ReadSnapshot(id);
+
+        Assert.NotNull(snapshot);
+        var constraint = Assert.Single(snapshot!.ScopedConstraints);
+        Assert.Equal("simple", constraint.Match);
+        Assert.False(constraint.Deferrable);
+        Assert.False(constraint.InitiallyDeferred);
+        Assert.Equal("cascade", constraint.OnDelete);
+    }
+
     private static Operation Statement(string sql) =>
         new(sql, "test", null, Target: new OperationTarget("statement", "t", null));
 }

@@ -381,7 +381,7 @@ file; the server validates it at apply time.
 ```
 
 `name` and `expression` are required; the expression is emitted verbatim. The
-parser does not parse SQL. Check constraints are validated and recorded, but the
+parser does not parse SQL. Check constraints are validated, but the
 migration engine cannot create or remove them yet — a schema that declares one is
 refused by `diff`/`apply` with the constraint named. Existing checks in the
 database stay protected from removal.
