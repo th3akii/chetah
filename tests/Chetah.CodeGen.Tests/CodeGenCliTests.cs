@@ -44,19 +44,19 @@ public class CodeGenCliTests
             [
                 ".chetah-codegen.json",
                 "Chetah.Schema.g.cs",
-                "Enums/app_kind.g.cs",
-                "Enums/user_status.g.cs",
-                "Tables/orders.g.cs",
-                "Tables/users.g.cs",
+                "Enums/AppKind.g.cs",
+                "Enums/UserStatus.g.cs",
+                "Tables/Order.g.cs",
+                "Tables/User.g.cs",
             ],
             FilesUnder(output));
 
-        var users = File.ReadAllText(temp.Combine("Generated", "Tables", "users.g.cs"));
+        var users = File.ReadAllText(temp.Combine("Generated", "Tables", "User.g.cs"));
         Assert.Contains("public sealed record User(int Id, string Status);", users, StringComparison.Ordinal);
         Assert.Contains("public static readonly Chetah.Postgres.TableBinding<User> UserBinding", users, StringComparison.Ordinal);
         Assert.DoesNotContain("record Order", users, StringComparison.Ordinal);
 
-        var orders = File.ReadAllText(temp.Combine("Generated", "Tables", "orders.g.cs"));
+        var orders = File.ReadAllText(temp.Combine("Generated", "Tables", "Order.g.cs"));
         Assert.Contains("public sealed record Order(int Id);", orders, StringComparison.Ordinal);
         Assert.DoesNotContain("record User", orders, StringComparison.Ordinal);
 
@@ -65,7 +65,7 @@ public class CodeGenCliTests
         Assert.Contains("[typeof(User)] = UserBinding", shared, StringComparison.Ordinal);
         Assert.DoesNotContain("record User", shared, StringComparison.Ordinal);
 
-        var status = File.ReadAllText(temp.Combine("Generated", "Enums", "user_status.g.cs"));
+        var status = File.ReadAllText(temp.Combine("Generated", "Enums", "UserStatus.g.cs"));
         Assert.Contains("public static class UserStatus", status, StringComparison.Ordinal);
         Assert.Contains("\"inactive\"", status, StringComparison.Ordinal);
         Assert.Contains("\"line\\nbreak\"", status, StringComparison.Ordinal);
@@ -73,9 +73,9 @@ public class CodeGenCliTests
         Assert.Contains("\"tab\\there\"", status, StringComparison.Ordinal);
         Assert.Contains("\"control\\u0001\"", status, StringComparison.Ordinal);
 
-        var kind = File.ReadAllText(temp.Combine("Generated", "Enums", "app_kind.g.cs"));
+        var kind = File.ReadAllText(temp.Combine("Generated", "Enums", "AppKind.g.cs"));
         Assert.Contains("public static class AppKind", kind, StringComparison.Ordinal);
-        Assert.Contains("public.user_status", File.ReadAllText(temp.Combine("Generated", "Enums", "user_status.g.cs")),
+        Assert.Contains("public.user_status", File.ReadAllText(temp.Combine("Generated", "Enums", "UserStatus.g.cs")),
             StringComparison.Ordinal);
     }
 
@@ -141,12 +141,11 @@ public class CodeGenCliTests
 
         Assert.Equal(0, result.Exit);
         Assert.Equal(
-            ["Chetah.Schema.g.cs", "Tables/people.g.cs"],
+            ["Chetah.Schema.g.cs", "Tables/User.g.cs"],
             Snapshot(output).Keys);
         Assert.Contains("Removed", result.Output, StringComparison.Ordinal);
-        Assert.False(File.Exists(temp.Combine("Generated", "Tables", "users.g.cs")));
-        Assert.False(File.Exists(temp.Combine("Generated", "Tables", "orders.g.cs")));
-        Assert.False(File.Exists(temp.Combine("Generated", "Enums", "user_status.g.cs")));
+        Assert.False(File.Exists(temp.Combine("Generated", "Tables", "Order.g.cs")));
+        Assert.False(File.Exists(temp.Combine("Generated", "Enums", "UserStatus.g.cs")));
     }
 
     [Fact]
@@ -170,10 +169,10 @@ public class CodeGenCliTests
             [
                 ".chetah-codegen.json",
                 "Chetah.Schema.g.cs",
-                "Enums/app_kind.g.cs",
-                "Enums/user_status.g.cs",
-                "Tables/orders.g.cs",
-                "Tables/users.g.cs",
+                "Enums/AppKind.g.cs",
+                "Enums/UserStatus.g.cs",
+                "Tables/Order.g.cs",
+                "Tables/User.g.cs",
             ],
             FilesUnder(output));
 
@@ -215,7 +214,7 @@ public class CodeGenCliTests
         var schema = temp.Write("schema.json", MultiSchema);
         var output = temp.Combine("Generated");
         Directory.CreateDirectory(temp.Combine("Generated", "Tables"));
-        var target = temp.Write(Path.Combine("Generated", "Tables", "users.g.cs"), "// mine\n");
+        var target = temp.Write(Path.Combine("Generated", "Tables", "User.g.cs"), "// mine\n");
 
         var result = await Run("--schema", schema, "--out", output);
 
@@ -225,7 +224,7 @@ public class CodeGenCliTests
 
         // Validation happens before staging, so no other output was produced.
         Assert.False(File.Exists(temp.Combine("Generated", "Chetah.Schema.g.cs")));
-        Assert.False(File.Exists(temp.Combine("Generated", "Tables", "orders.g.cs")));
+        Assert.False(File.Exists(temp.Combine("Generated", "Tables", "Order.g.cs")));
         Assert.False(File.Exists(temp.Combine("Generated", ".chetah-codegen.json")));
     }
 
@@ -238,7 +237,7 @@ public class CodeGenCliTests
 
         Assert.Equal(0, (await Run("--schema", schema, "--out", output)).Exit);
 
-        var replaced = temp.Write(Path.Combine("Generated", "Tables", "users.g.cs"), "// mine now\n");
+        var replaced = temp.Write(Path.Combine("Generated", "Tables", "User.g.cs"), "// mine now\n");
         File.WriteAllText(schema, """
             {
               "tables": {
@@ -255,7 +254,7 @@ public class CodeGenCliTests
         Assert.Equal(0, result.Exit);
         Assert.Equal("// mine now\n", File.ReadAllText(replaced));
         Assert.Contains("Preserved", result.Error, StringComparison.Ordinal);
-        Assert.DoesNotContain("Tables/users.g.cs", ManifestFiles(output));
+        Assert.DoesNotContain("Tables/User.g.cs", ManifestFiles(output));
     }
 
     [Fact]

@@ -4,9 +4,9 @@
   "namespace": "Chetah.CodeGen.Tests",
   "files": [
     "Chetah.Schema.g.cs",
-    "Enums/user_status.g.cs",
-    "Tables/orders.g.cs",
-    "Tables/test_widgets.g.cs",
-    "Tables/users.g.cs"
+    "Enums/UserStatus.g.cs",
+    "Tables/Stage2Order.g.cs",
+    "Tables/Stage2User.g.cs",
+    "Tables/TestWidgets.g.cs"
   ]
 }

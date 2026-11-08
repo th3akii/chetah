@@ -35,10 +35,10 @@ public static class GeneratedSource
         };
 
         foreach (var table in schema.Tables)
-            files.Add(new GeneratedFile($"Tables/{table.Name}.g.cs", RenderTableFile(table, @namespace)));
+            files.Add(new GeneratedFile($"Tables/{table.ModelName}.g.cs", RenderTableFile(table, @namespace)));
 
         foreach (var @enum in schema.Enums ?? [])
-            files.Add(new GeneratedFile($"Enums/{EnumFileStem(@enum)}.g.cs", RenderEnumFile(@enum, @namespace)));
+            files.Add(new GeneratedFile($"Enums/{EnumTypeName(@enum)}.g.cs", RenderEnumFile(@enum, @namespace)));
 
         return files;
     }
@@ -278,7 +278,7 @@ public static class GeneratedSource
         {
             Reserve(types, table.ModelName, $"table '{table.Name}' model");
             Reserve(types, table.AccessorName, $"table '{table.Name}' accessor");
-            Reserve(files, $"Tables/{table.Name}.g.cs", $"table '{table.Name}'");
+            Reserve(files, $"Tables/{table.ModelName}.g.cs", $"table '{table.Name}'");
         }
 
         foreach (var @enum in schema.Enums ?? [])
@@ -289,7 +289,7 @@ public static class GeneratedSource
                     $"Enum '{QualifiedEnumName(@enum)}' cannot produce a valid C# type name ('{typeName}'). Rename the enum.");
 
             Reserve(types, typeName, $"enum '{QualifiedEnumName(@enum)}'");
-            Reserve(files, $"Enums/{EnumFileStem(@enum)}.g.cs", $"enum '{QualifiedEnumName(@enum)}'");
+            Reserve(files, $"Enums/{EnumTypeName(@enum)}.g.cs", $"enum '{QualifiedEnumName(@enum)}'");
         }
     }
 
@@ -307,9 +307,6 @@ public static class GeneratedSource
 
     private static string EnumTypeName(EnumSchema @enum) =>
         SchemaParser.PascalCase(@enum.Schema == "public" ? @enum.Name : $"{@enum.Schema}_{@enum.Name}");
-
-    private static string EnumFileStem(EnumSchema @enum) =>
-        @enum.Schema == "public" ? @enum.Name : $"{@enum.Schema}_{@enum.Name}";
 
     private static string QualifiedEnumName(EnumSchema @enum) =>
         @enum.Schema == "public" ? @enum.Name : $"{@enum.Schema}.{@enum.Name}";
