@@ -109,6 +109,34 @@ public static class PostgresCompiler
 
         internal CompiledQuery Materialize() => new(_sql.ToString(), _parameters.ToArray());
 
+        /// <summary>
+        /// Prepares this compilation for rendering an expression fragment (INSERT values or a
+        /// RETURNING projection) instead of a SELECT: sources and any configured projection are
+        /// validated, but no statement is rendered.
+        /// </summary>
+        internal void PrepareFragments()
+        {
+            ValidateSources();
+            ValidateClauses();
+        }
+
+        /// <summary>Renders a value as a positional parameter, adding it to the shared slot list.</summary>
+        internal string RenderValueFragment(SqlValue value) => RenderValue(value);
+
+        internal void ValidateValueFragment(SqlValue value) => ValidateValue(value);
+
+        /// <summary>Renders a projection item (expression plus alias) for RETURNING.</summary>
+        internal string RenderProjectionFragment(SelectItem item, int slot) => RenderSelectItem(item, slot);
+
+        internal IReadOnlyList<CompiledParameter> ParameterSnapshot() => _parameters.ToArray();
+
+        /// <summary>
+        /// When true, source 0 columns render bare (quoted without a <c>"t0"</c> alias). INSERT …
+        /// RETURNING has no aliased target source, so the shared expression renderer switches modes
+        /// instead of duplicating projection rendering.
+        /// </summary>
+        internal bool RenderSourceZeroBare { get; set; }
+
         // ---------- validation ----------
 
         private void ValidateSources()
@@ -964,7 +992,9 @@ public static class PostgresCompiler
         };
 
         private string RenderColumn(SqlColumn column) =>
-            $"\"t{column.SourceId}\".{QuoteIdentifier(column.Name)}";
+            RenderSourceZeroBare && column.SourceId == 0
+                ? QuoteIdentifier(column.Name)
+                : $"\"t{column.SourceId}\".{QuoteIdentifier(column.Name)}";
 
         private string RenderPresence(SqlPresence presence) =>
             $"\"t{presence.SourceId}\".{QuoteIdentifier(_presenceMarkers[presence.SourceId])}";
