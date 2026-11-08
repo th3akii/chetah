@@ -97,8 +97,9 @@ dotnet run --project src/Chetah.CodeGen -- --help
 - `--out` (default `.`): directory that receives the generated files.
 - `--namespace` (default `Chetah.Generated`): namespace of generated code.
 - `--layout` (default `split`): output organization.
-  - `split` — one file per table (`Tables/<table>.g.cs`), one per enum
-    (`Enums/<enum>.g.cs`), and a small shared `Chetah.Schema.g.cs` registry.
+  - `split` — one file per table (`Tables/<Model>.g.cs`), one per enum
+    (`Enums/<EnumType>.g.cs`), and a small shared `Chetah.Schema.g.cs` registry.
+    Files are named after the generated C# type.
   - `single` — the original layout: every generated type in
     `Chetah.Schema.g.cs`.
 - `--help`: usage, option defaults and examples.
@@ -125,7 +126,7 @@ Guarantees:
 
 One accessor class, one record and the table binding per table. In the default
 `split` layout, each table file is self-contained
-([example](../../examples/BasicExample/Generated/Tables/users.g.cs)):
+([example](../../examples/BasicExample/Generated/Tables/User.g.cs)):
 
 ```csharp
 public static class UsersTable
@@ -178,17 +179,17 @@ The `split` directory for two tables and an enum looks like:
 Generated/
   Chetah.Schema.g.cs        registry + Bindings
   Tables/
-    orders.g.cs             OrdersTable, Order record, OrderBinding
-    users.g.cs              UsersTable, User record, UserBinding
+    Order.g.cs              OrdersTable, Order record, OrderBinding
+    User.g.cs               UsersTable, User record, UserBinding
   Enums/
-    user_status.g.cs        UserStatus.Values (labels in declaration order)
+    UserStatus.g.cs         UserStatus.Values (labels in declaration order)
   .chetah-codegen.json      ownership manifest
 ```
 
 Enum files expose the declared labels as `Values`; enum columns still map to
 `string`, exactly as in the `single` layout. An enum outside the default
 schema is qualified in both its type and file name (`app.kind` →
-`Enums/app_kind.g.cs`, class `AppKind`) so two schemas can declare the same
+`Enums/AppKind.g.cs`, class `AppKind`) so two schemas can declare the same
 enum name. `single` emits the same types in one `Chetah.Schema.g.cs`.
 
 Naming: accessor class = PascalCase(table name) + `"Table"` (`users` →

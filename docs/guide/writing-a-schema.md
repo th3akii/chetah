@@ -55,8 +55,8 @@ dotnet run --project src/Chetah.Db -- diff --check --schema chetah-schema.json
 ```
 
 Regenerate the C# models after changing the file (the default `split` layout
-writes one file per table under `Generated/Tables/`, one per enum under
-`Generated/Enums/`, and a shared registry; obsolete generated files are removed):
+writes `Generated/Tables/<Model>.g.cs` per table, `Generated/Enums/<EnumType>.g.cs`
+per enum, and a shared registry; obsolete generated files are removed):
 
 ```sh
 dotnet run --project src/Chetah.CodeGen -- \
@@ -466,7 +466,7 @@ A label array, or an object when the type needs a namespace:
 
 Labels must be non-empty and unique. A column whose `type` matches a declared enum
 generates a `string` property and is validated as a reference. Each enum also gets
-a generated label-list type (`Enums/<enum>.g.cs` in the default layout) exposing
+a generated label-list type (`Enums/UserStatus.g.cs` for `user_status` in the default layout) exposing
 its labels as `Values`. Enum DDL is not
 executed yet: a schema that declares one is refused by `diff`/`apply` with the enum
 named, never silently ignored.

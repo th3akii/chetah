@@ -486,8 +486,9 @@ expression nodes, no client-side evaluation.
 
 **Decision:** `Chetah.CodeGen` defaults to `--layout split`: one file per table
 under `Generated/Tables/`, one per enum under `Generated/Enums/`, and a small
-shared `Generated/Chetah.Schema.g.cs` holding the `Bindings` registry. Each
-table file carries its accessor class, record, mappers and registry binding
+shared `Generated/Chetah.Schema.g.cs` holding the `Bindings` registry. Files are
+named after the generated C# type (`Tables/User.g.cs`, `Enums/UserStatus.g.cs`).
+Each table file carries its accessor class, record, mappers and registry binding
 field. `--layout single` keeps the previous one-file output. Both layouts expose
 the same public generated API (`UsersTable`, `User`, `ChetahSchema.UserBinding`,
 `ChetahSchema.Bindings`).
