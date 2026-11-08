@@ -127,6 +127,34 @@ public class PostgresInsertCompilerTests
     }
 
     [Fact]
+    public void MultiRowDefaultCellsStayPositionalAcrossRows()
+    {
+        var compiled = PostgresInsertCompiler.Compile(Insert(
+            Students,
+            Row(("first_name", new SqlValue("Marko", typeof(string))), ("nickname", new SqlDefault(typeof(string)))),
+            Row(("first_name", new SqlValue("Ana", typeof(string))), ("nickname", new SqlValue("A", typeof(string))))));
+
+        Assert.Equal(
+            """INSERT INTO "students" ("first_name", "nickname") VALUES ($1, DEFAULT), ($2, $3)""",
+            compiled.Sql);
+        Assert.Equal(new object?[] { "Marko", "Ana", "A" }, compiled.Parameters.Select(parameter => parameter.Value));
+    }
+
+    [Fact]
+    public void DefaultValuesCanReturnTheInsertedRow()
+    {
+        var compiled = PostgresInsertCompiler.Compile(new InsertQuery(Notes)
+        {
+            IsDefaultValues = true,
+            Returning = new ReturningClause([Item("id", typeof(int), false, 0)]),
+        });
+
+        Assert.Equal(
+            "INSERT INTO \"notes\" DEFAULT VALUES RETURNING \"id\" AS \"c0\"",
+            compiled.Sql);
+    }
+
+    [Fact]
     public void ExplicitNullOnANotNullColumnIsRejected()
     {
         Assert.Throws<InvalidOperationException>(
