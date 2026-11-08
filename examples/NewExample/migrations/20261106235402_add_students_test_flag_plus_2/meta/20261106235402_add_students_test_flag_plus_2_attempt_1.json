@@ -1,0 +1,37 @@
+{
+  "entry": {
+    "id": "20261106235402_add_students_test_flag_plus_2",
+    "slug": "add_students_test_flag_plus_2",
+    "hash": "64bd3102d758ff4d271421a51e06b2f6844d99492a8c91358338093239fc90c4",
+    "statements": 3,
+    "operations": [
+      {
+        "kind": "add_column",
+        "table": "students",
+        "column": "test_flag",
+        "destructive": false,
+        "statement": "ALTER TABLE \"students\" ADD COLUMN \"test_flag\" boolean"
+      },
+      {
+        "kind": "add_column",
+        "table": "students",
+        "column": "invalid_reference",
+        "destructive": false,
+        "statement": "ALTER TABLE \"students\" ADD COLUMN \"invalid_reference\" integer"
+      },
+      {
+        "kind": "add_constraint",
+        "table": "students",
+        "column": "invalid_reference",
+        "destructive": false,
+        "statement": "ALTER TABLE \"students\" ADD CONSTRAINT \"students_invalid_reference_fkey\" FOREIGN KEY (\"invalid_reference\") REFERENCES \"departments\" (\"nonexistent_column\")"
+      }
+    ]
+  },
+  "failure": {
+    "hash": "64bd3102d758ff4d271421a51e06b2f6844d99492a8c91358338093239fc90c4",
+    "error": "42703: column \"nonexistent_column\" referenced in foreign key constraint does not exist",
+    "failedAt": "2026-11-07T22:59:30.665535+00:00"
+  },
+  "archivedAt": "2026-11-07T23:01:13.6946677+00:00"
+}

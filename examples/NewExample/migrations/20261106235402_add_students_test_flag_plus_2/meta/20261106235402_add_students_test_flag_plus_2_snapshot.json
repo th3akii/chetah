@@ -443,7 +443,7 @@
       ],
       "refTable": "departments",
       "refColumns": [
-        "nonexistent_column"
+        "id"
       ],
       "onDelete": "no action",
       "onUpdate": "no action"

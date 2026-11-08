@@ -379,7 +379,7 @@
     {
       "id": "20261106235402_add_students_test_flag_plus_2",
       "slug": "add_students_test_flag_plus_2",
-      "hash": "64bd3102d758ff4d271421a51e06b2f6844d99492a8c91358338093239fc90c4",
+      "hash": "18589f86e55eb2993d99352af475df91d9f6c5add2993cad8a6a0f16b990bde4",
       "statements": 3,
       "operations": [
         {
@@ -401,7 +401,7 @@
           "table": "students",
           "column": "invalid_reference",
           "destructive": false,
-          "statement": "ALTER TABLE \"students\" ADD CONSTRAINT \"students_invalid_reference_fkey\" FOREIGN KEY (\"invalid_reference\") REFERENCES \"departments\" (\"nonexistent_column\")"
+          "statement": "ALTER TABLE \"students\" ADD CONSTRAINT \"students_invalid_reference_fkey\" FOREIGN KEY (\"invalid_reference\") REFERENCES \"departments\" (\"id\")"
         }
       ]
     }

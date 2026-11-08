@@ -6,4 +6,4 @@ ALTER TABLE "students" ADD COLUMN "invalid_reference" integer
 
 --> statement-breakpoint
 
-ALTER TABLE "students" ADD CONSTRAINT "students_invalid_reference_fkey" FOREIGN KEY ("invalid_reference") REFERENCES "departments" ("nonexistent_column")
+ALTER TABLE "students" ADD CONSTRAINT "students_invalid_reference_fkey" FOREIGN KEY ("invalid_reference") REFERENCES "departments" ("id")
