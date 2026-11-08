@@ -8,11 +8,52 @@ public class GeneratedSourceTests
     private static readonly string TestSchemaJson = File.ReadAllText("schema.json");
 
     [Fact]
-    public void RenderingIsDeterministic()
+    public void RenderingIsDeterministicInBothLayouts()
     {
         var schema = SchemaParser.Parse(TestSchemaJson).Schema!;
 
         Assert.Equal(GeneratedSource.Render(schema, "N"), GeneratedSource.Render(schema, "N"));
+
+        foreach (var layout in Enum.GetValues<GeneratedLayout>())
+        {
+            var first = GeneratedSource.RenderFiles(schema, "N", layout);
+            var second = GeneratedSource.RenderFiles(schema, "N", layout);
+            Assert.Equal(first.Select(file => file.RelativePath), second.Select(file => file.RelativePath));
+            Assert.Equal(first.Select(file => file.Content), second.Select(file => file.Content));
+        }
+    }
+
+    [Fact]
+    public void CheckedInGeneratedFilesMatchFreshRender()
+    {
+        var schema = SchemaParser.Parse(TestSchemaJson).Schema!;
+        var fresh = GeneratedSource.RenderFiles(schema, "Chetah.CodeGen.Tests", GeneratedLayout.Split);
+
+        foreach (var file in fresh)
+        {
+            var path = Path.Combine("Generated", file.RelativePath.Replace('/', Path.DirectorySeparatorChar));
+            Assert.True(File.Exists(path), $"Missing checked-in generated file: {path}");
+            Assert.Equal(file.Content, File.ReadAllText(path));
+        }
+
+        // Nothing stale may linger next to the files the schema actually generates.
+        var onDisk = Directory.EnumerateFiles("Generated", "*.g.cs", SearchOption.AllDirectories)
+            .Select(path => Path.GetRelativePath("Generated", path).Replace('\\', '/'))
+            .Order(StringComparer.Ordinal);
+        Assert.Equal(fresh.Select(file => file.RelativePath).Order(StringComparer.Ordinal), onDisk);
+
+        Assert.Equal(
+            fresh.Select(file => file.RelativePath).Order(StringComparer.Ordinal),
+            GeneratedOutputManifestFiles(Path.Combine("Generated", GeneratedOutput.ManifestFileName)));
+    }
+
+    private static IEnumerable<string> GeneratedOutputManifestFiles(string manifestPath)
+    {
+        using var document = System.Text.Json.JsonDocument.Parse(File.ReadAllText(manifestPath));
+        return document.RootElement.GetProperty("files").EnumerateArray()
+            .Select(element => element.GetString()!)
+            .Order(StringComparer.Ordinal)
+            .ToList();
     }
 
     [Fact]
@@ -33,16 +74,6 @@ public class GeneratedSourceTests
         Assert.Equal(typeof(bool), typeof(TestWidgets).GetProperty(nameof(TestWidgets.Active))!.PropertyType);
         Assert.Equal(typeof(Guid?), typeof(TestWidgets).GetProperty(nameof(TestWidgets.Token))!.PropertyType);
         Assert.Equal(typeof(DateTime), typeof(TestWidgets).GetProperty(nameof(TestWidgets.Created))!.PropertyType);
-    }
-
-    [Fact]
-    public void CheckedInGeneratedFileMatchesFreshRender()
-    {
-        var checkedIn = File.ReadAllText(Path.Combine("Generated", "Chetah.Schema.g.cs"));
-        var fresh = GeneratedSource.Render(SchemaParser.Parse(TestSchemaJson).Schema!, "Chetah.CodeGen.Tests");
-
-        // The checked-in file must never drift from what the schema actually generates.
-        Assert.Equal(fresh, checkedIn);
     }
 
     // ---- Binding behavior checks (the checked-in generated fixture is compiled by the parent build) ----

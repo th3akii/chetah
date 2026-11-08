@@ -25,7 +25,8 @@
 
   <ItemGroup>
     <None Include="schema.json" CopyToOutputDirectory="PreserveNewest" />
-    <None Include="Generated\Chetah.Schema.g.cs" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Generated\**\*.g.cs" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Generated\.chetah-codegen.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

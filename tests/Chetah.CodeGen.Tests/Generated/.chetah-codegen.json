@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "layout": "split",
+  "namespace": "Chetah.CodeGen.Tests",
+  "files": [
+    "Chetah.Schema.g.cs",
+    "Enums/user_status.g.cs",
+    "Tables/orders.g.cs",
+    "Tables/test_widgets.g.cs",
+    "Tables/users.g.cs"
+  ]
+}
