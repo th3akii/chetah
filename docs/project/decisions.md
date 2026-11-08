@@ -73,8 +73,8 @@ basic-SELECT milestone only.
   table name (`User` set explicitly in the example). Generated names are
   validated globally unique because future `db.Select<User>()` (D001) needs an
   unambiguous `T`→table resolution.
-- Output is one deterministic `Chetah.Schema.g.cs` in a configurable directory
-  and namespace; only that file is ever written.
+- Output is deterministic in a configurable directory and namespace; the file
+  layout is revisited in D010 (split by default, single still available).
 
 **Consequences:**
 
@@ -82,8 +82,9 @@ basic-SELECT milestone only.
   column metadata; with Stage 2 the generated `Table`/`PropertyColumns`
   metadata itself feeds the fluent chains, so `Where(...)` now consumes it
   directly.
-- `examples`, `tests`, and generated files: `examples/BasicExample/{chetah-schema.json,Generated/Chetah.Schema.g.cs}`;
-  `tests/Chetah.CodeGen.Tests/{schema.json,Generated/Chetah.Schema.g.cs}`.
+- `examples`, `tests`, and generated files live beside their schema:
+  `examples/BasicExample/{chetah-schema.json,Generated/}`;
+  `tests/Chetah.CodeGen.Tests/{schema.json,Generated/}`.
 - Revisit trigger: if hand-maintained alternatives or richer type needs appear
   (timestamptz, arrays), expect the type map and possibly the format to grow.
 
@@ -478,3 +479,36 @@ expression nodes, no client-side evaluation.
 - Revision (2026-11-08): an earlier cut refused `DISTINCT` and grouped counts
   because subqueries were out of scope. That restriction covers the public query
   API, not compiler-internal SQL, so the derived-table form replaced the refusal.
+
+## D010 — Split generated output by default, with an ownership manifest
+
+**Date:** 2026-11-08 (output organization and CLI usability)
+
+**Decision:** `Chetah.CodeGen` defaults to `--layout split`: one file per table
+under `Generated/Tables/`, one per enum under `Generated/Enums/`, and a small
+shared `Generated/Chetah.Schema.g.cs` holding the `Bindings` registry. Each
+table file carries its accessor class, record, mappers and registry binding
+field. `--layout single` keeps the previous one-file output. Both layouts expose
+the same public generated API (`UsersTable`, `User`, `ChetahSchema.UserBinding`,
+`ChetahSchema.Bindings`).
+
+**Rationale:**
+
+- A diff on a one-table change touches one generated file instead of the whole
+  schema, which makes review and merge conflicts smaller.
+- The shared registry is the only cross-table coupling; keeping it small means
+  table files are genuinely independent.
+- Deterministic filenames and a manifest allow deleting stale output without a
+  broad `*.cs` sweep, which could destroy user-authored files.
+
+**Consequences:**
+
+- `Generated/.chetah-codegen.json` is written last and lists every owned file.
+  Only manifest entries are deleted, and only when the file still starts with
+  the generated marker.
+- Switching layouts removes the other layout's files in the same run. Files at
+  generated paths that are not marked as generated are refused, not overwritten.
+- Generated type and file names must be unique case-insensitively; collisions
+  fail before any output is written.
+- Enums get a label-list type (`Values`) but columns still map to `string`, so
+  model properties and query behavior do not change.

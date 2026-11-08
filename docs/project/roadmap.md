@@ -77,8 +77,8 @@ Roughly: single-row and multi-row inserts, updates and deletes with mandatory sc
 
 This stage's open questions from the original draft were answered in Milestone 002:
 the format is JSON, the mechanism is the `Chetah.CodeGen` CLI, and the sync
-discipline is "regenerate the single `Chetah.Schema.g.cs`" (rationale in
-[`decisions.md`](decisions.md) D002). What remains open: whether the generated
+discipline is "regenerate the generated files" (split layout by default; rationale in
+[`decisions.md`](decisions.md) D002 and D010). What remains open: whether the generated
 shape still fits once `Where`/`Insert` chains consume the typed columns.
 
 **Gating question:** consumed for D001 — does `T` → generated table metadata
