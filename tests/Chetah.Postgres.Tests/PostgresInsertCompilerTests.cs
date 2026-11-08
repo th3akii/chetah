@@ -238,6 +238,35 @@ public class PostgresInsertCompilerTests
     }
 
     [Fact]
+    public void AlwaysIdentityUpdatesOnlyAllowDefault()
+    {
+        Assert.Throws<InvalidOperationException>(
+            () => PostgresInsertCompiler.Compile(Insert(
+                AlwaysIdentity, Row(("label", new SqlValue("x", typeof(string)))))
+                with
+                {
+                    Conflict = new InsertConflict(
+                        ["id"],
+                        InsertConflictAction.DoUpdate,
+                        [new InsertAssignment("id", new SqlIncoming("id", typeof(int), false))]),
+                }));
+
+        var compiled = PostgresInsertCompiler.Compile(Insert(
+            AlwaysIdentity, Row(("label", new SqlValue("x", typeof(string)))))
+            with
+            {
+                Conflict = new InsertConflict(
+                    ["id"],
+                    InsertConflictAction.DoUpdate,
+                    [new InsertAssignment("id", new SqlDefault(typeof(int)))]),
+            });
+
+        Assert.Equal(
+            """INSERT INTO "always_identity" ("label") VALUES ($1) ON CONFLICT ("id") DO UPDATE SET "id" = DEFAULT""",
+            compiled.Sql);
+    }
+
+    [Fact]
     public void AlwaysIdentityAcceptsAnExplicitDefaultCell()
     {
         var compiled = PostgresInsertCompiler.Compile(Insert(
@@ -362,6 +391,143 @@ public class PostgresInsertCompilerTests
             () => PostgresInsertCompiler.Compile(Insert(
                 Students, Row(("first_name", new SqlValue("Marko", typeof(string)))))
                 with { Conflict = new InsertConflict(["first_name"], InsertConflictAction.DoUpdate, []) }));
+    }
+
+    [Fact]
+    public void DoNothingRejectsAssignmentsAndDoUpdateRequiresATarget()
+    {
+        Assert.Throws<ArgumentException>(
+            () => PostgresInsertCompiler.Compile(Insert(
+                Students, Row(("first_name", new SqlValue("Marko", typeof(string)))))
+                with
+                {
+                    Conflict = new InsertConflict(
+                        ["first_name"],
+                        InsertConflictAction.DoNothing,
+                        [new InsertAssignment("age", new SqlValue(20, typeof(int?)))]),
+                }));
+
+        Assert.Throws<ArgumentException>(
+            () => PostgresInsertCompiler.Compile(Insert(
+                Students, Row(("first_name", new SqlValue("Marko", typeof(string)))))
+                with
+                {
+                    Conflict = new InsertConflict(
+                        [],
+                        InsertConflictAction.DoUpdate,
+                        [new InsertAssignment("age", new SqlValue(20, typeof(int?)))]),
+                }));
+    }
+
+    [Fact]
+    public void DoUpdateRejectsDuplicateAssignments()
+    {
+        Assert.Throws<ArgumentException>(
+            () => PostgresInsertCompiler.Compile(Insert(
+                Students, Row(("first_name", new SqlValue("Marko", typeof(string)))))
+                with
+                {
+                    Conflict = new InsertConflict(
+                        ["first_name"],
+                        InsertConflictAction.DoUpdate,
+                        [
+                            new InsertAssignment("age", new SqlValue(20, typeof(int?))),
+                            new InsertAssignment("age", new SqlValue(21, typeof(int?))),
+                        ]),
+                }));
+    }
+
+    [Fact]
+    public void DoUpdateRejectsInvalidAssignmentValues()
+    {
+        // Type mismatch against the target column.
+        Assert.Throws<InvalidOperationException>(
+            () => PostgresInsertCompiler.Compile(Insert(
+                Students, Row(("first_name", new SqlValue("Marko", typeof(string)))))
+                with
+                {
+                    Conflict = new InsertConflict(
+                        ["first_name"],
+                        InsertConflictAction.DoUpdate,
+                        [new InsertAssignment("age", new SqlValue("twenty", typeof(string)))]),
+                }));
+
+        // EXCLUDED from a nullable column into a NOT NULL target.
+        Assert.Throws<InvalidOperationException>(
+            () => PostgresInsertCompiler.Compile(Insert(
+                Students, Row(("first_name", new SqlValue("Marko", typeof(string)))))
+                with
+                {
+                    Conflict = new InsertConflict(
+                        ["first_name"],
+                        InsertConflictAction.DoUpdate,
+                        [new InsertAssignment(
+                            "first_name",
+                            new SqlIncoming("nickname", typeof(string), true))]),
+                }));
+
+        // EXCLUDED naming a column that does not exist.
+        Assert.Throws<ArgumentException>(
+            () => PostgresInsertCompiler.Compile(Insert(
+                Students, Row(("first_name", new SqlValue("Marko", typeof(string)))))
+                with
+                {
+                    Conflict = new InsertConflict(
+                        ["first_name"],
+                        InsertConflictAction.DoUpdate,
+                        [new InsertAssignment(
+                            "age",
+                            new SqlIncoming("bogus", typeof(int?), true))]),
+                }));
+    }
+
+    [Fact]
+    public void ConflictCompilationIsDeterministic()
+    {
+        var query = Insert(
+            Students,
+            Row(("first_name", new SqlValue("Marko", typeof(string))), ("age", new SqlValue(20, typeof(int?)))))
+            with
+            {
+                Conflict = new InsertConflict(
+                    ["first_name"],
+                    InsertConflictAction.DoUpdate,
+                    [
+                        new InsertAssignment("nickname", new SqlIncoming("nickname", typeof(string), true)),
+                        new InsertAssignment("age", new SqlValue(21, typeof(int?))),
+                    ]),
+            };
+
+        var first = PostgresInsertCompiler.Compile(query);
+        var second = PostgresInsertCompiler.Compile(query);
+
+        Assert.Equal(first.Sql, second.Sql);
+        Assert.Equal(first.Parameters, second.Parameters);
+    }
+
+    [Fact]
+    public void ConflictIdentifiersAreQuotedEvenWhenTheyLookLikeSql()
+    {
+        var table = new Table("user data", new[]
+        {
+            Column("select", typeof(int), nullable: false),
+            Column("order", typeof(string), nullable: false),
+        });
+        var compiled = PostgresInsertCompiler.Compile(new InsertQuery(table)
+        {
+            Rows =
+            [
+                Row(("select", new SqlValue(1, typeof(int))), ("order", new SqlValue("x", typeof(string)))),
+            ],
+            Conflict = new InsertConflict(
+                ["select"],
+                InsertConflictAction.DoUpdate,
+                [new InsertAssignment("order", new SqlIncoming("order", typeof(string), false))]),
+        });
+
+        Assert.Equal(
+            "INSERT INTO \"user data\" (\"select\", \"order\") VALUES ($1, $2) ON CONFLICT (\"select\") DO UPDATE SET \"order\" = EXCLUDED.\"order\"",
+            compiled.Sql);
     }
 
     // ---------- RETURNING ----------

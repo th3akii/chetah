@@ -376,4 +376,50 @@ public class TypedInsertQueryTests
                 .Values(new { FirstName = "Marko" })
                 .OnConflict(student => new { Primary = student.FirstName, Secondary = student.FirstName }));
     }
+
+    [Fact]
+    public void DuplicateUpdateAssignmentsAreRejected()
+    {
+        Assert.Throws<ArgumentException>(
+            () => Db.Insert<Student>()
+                .Values(new { FirstName = "Marko" })
+                .OnConflict(student => student.FirstName)
+                .DoUpdate(update => update
+                    .SetExcluded(student => student.Age)
+                    .SetExcluded(student => student.Age))
+                .Compile());
+    }
+
+    [Fact]
+    public void AlwaysIdentityUpdateOnlyAllowsDefault()
+    {
+        Assert.Throws<InvalidOperationException>(
+            () => Db.Insert<AlwaysRecord>()
+                .Values(new { Label = "x" })
+                .OnConflict(record => record.Id)
+                .DoUpdate(update => update.SetExcluded(record => record.Id))
+                .Compile());
+
+        var compiled = Db.Insert<AlwaysRecord>()
+            .Values(new { Label = "x" })
+            .OnConflict(record => record.Id)
+            .DoUpdate(update => update.SetDefault(record => record.Id))
+            .Compile();
+
+        Assert.Contains("DO UPDATE SET \"id\" = DEFAULT", compiled.Sql, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void PrimaryKeyConflictTargetCompiles()
+    {
+        var compiled = Db.Insert<Student>()
+            .Values(new { Id = 9001, FirstName = "Marko" })
+            .OnConflict(student => student.Id)
+            .DoUpdate(update => update.SetExcluded(student => student.FirstName))
+            .Compile();
+
+        Assert.Equal(
+            "INSERT INTO \"students\" (\"id\", \"first_name\") VALUES ($1, $2) ON CONFLICT (\"id\") DO UPDATE SET \"first_name\" = EXCLUDED.\"first_name\"",
+            compiled.Sql);
+    }
 }

@@ -156,6 +156,228 @@ public class InsertLiveTests
     }
 
     [PostgresFact]
+    public async Task BatchUpsertMixesInsertsAndUpdatesAndCountsBoth()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+
+        await fixture.Db.Insert<Student>()
+            .Values(new { FirstName = "BatchExisting", Age = (int?)10 })
+            .ExecuteAsync();
+
+        var affected = await fixture.Db.Insert<Student>()
+            .Values(
+                new { FirstName = "BatchExisting", Age = (int?)11 },
+                new { FirstName = "BatchNew", Age = (int?)12 })
+            .OnConflict(student => student.FirstName)
+            .DoUpdate(update => update.SetExcluded(student => student.Age))
+            .ExecuteAsync();
+
+        var existing = await fixture.Db.Select<Student>()
+            .Where(student => student.FirstName == "BatchExisting")
+            .SingleAsync();
+        var inserted = await fixture.Db.Select<Student>()
+            .Where(student => student.FirstName == "BatchNew")
+            .SingleAsync();
+
+        Assert.Equal(2, affected);
+        Assert.Equal(11, existing.Age);
+        Assert.Equal(12, inserted.Age);
+    }
+
+    [PostgresFact]
+    public async Task BatchUpsertReturnsOneRowPerAffectedRow()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+
+        await fixture.Db.Insert<Student>()
+            .Values(new { FirstName = "ReturnExisting", Age = (int?)10 })
+            .ExecuteAsync();
+
+        var returned = await fixture.Db.Insert<Student>()
+            .Values(
+                new { FirstName = "ReturnExisting", Age = (int?)11 },
+                new { FirstName = "ReturnNew", Age = (int?)12 })
+            .OnConflict(student => student.FirstName)
+            .DoUpdate(update => update.SetExcluded(student => student.Age))
+            .ReturningAll()
+            .ToListAsync();
+
+        Assert.Equal(2, returned.Count);
+        Assert.Equal(
+            new[] { "ReturnExisting", "ReturnNew" },
+            returned.Select(row => row.FirstName).Order(StringComparer.Ordinal));
+    }
+
+    [PostgresFact]
+    public async Task BatchUpsertWithDuplicateConflictKeysFailsAtomically()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+
+        await fixture.Db.Insert<Student>()
+            .Values(new { FirstName = "DuplicateKey", Age = (int?)10 })
+            .ExecuteAsync();
+
+        var error = await Assert.ThrowsAsync<PostgresException>(
+            () => fixture.Db.Insert<Student>()
+                .Values(
+                    new { FirstName = "DuplicateKey", Age = (int?)11 },
+                    new { FirstName = "DuplicateKey", Age = (int?)12 })
+                .OnConflict(student => student.FirstName)
+                .DoUpdate(update => update.SetExcluded(student => student.Age))
+                .ExecuteAsync());
+
+        var row = await fixture.Db.Select<Student>()
+            .Where(student => student.FirstName == "DuplicateKey")
+            .SingleAsync();
+
+        Assert.Equal("21000", error.SqlState);
+        Assert.Equal(10, row.Age);
+    }
+
+    [PostgresFact]
+    public async Task BatchConflictDoNothingSkipsIgnoredRowsAndCountsOnlyInserts()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+
+        await fixture.Db.Insert<Student>()
+            .Values(new { FirstName = "SkipExisting", Age = (int?)10 })
+            .ExecuteAsync();
+
+        var affected = await fixture.Db.Insert<Student>()
+            .Values(
+                new { FirstName = "SkipExisting" },
+                new { FirstName = "SkipNew" })
+            .OnConflict(student => student.FirstName)
+            .DoNothing()
+            .ExecuteAsync();
+
+        var returned = await fixture.Db.Insert<Student>()
+            .Values(
+                new { FirstName = "SkipExisting" },
+                new { FirstName = "SkipReturned" })
+            .OnConflict(student => student.FirstName)
+            .DoNothing()
+            .ReturningAll()
+            .ToListAsync();
+
+        var duplicateTwins = await fixture.Db.Insert<Student>()
+            .Values(new { FirstName = "Twin" }, new { FirstName = "Twin" })
+            .OnConflictDoNothing()
+            .ExecuteAsync();
+
+        Assert.Equal(1, affected);
+        Assert.Single(returned);
+        Assert.Equal("SkipReturned", returned[0].FirstName);
+        Assert.Equal(1, duplicateTwins);
+    }
+
+    [PostgresFact]
+    public async Task CompositeUniqueConflictTargetUpdatesTheMatchingRow()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+
+        await fixture.Db.Insert<Student>()
+            .Values(new { FirstName = "Composite", Age = (int?)10, Nickname = "before" })
+            .ExecuteAsync();
+
+        var updated = await fixture.Db.Insert<Student>()
+            .Values(new { FirstName = "Composite", Age = (int?)10, Nickname = "after" })
+            .OnConflict(student => new { student.FirstName, student.Age })
+            .DoUpdate(update => update.SetExcluded(student => student.Nickname))
+            .ReturningAll()
+            .SingleAsync();
+
+        Assert.Equal("after", updated.Nickname);
+    }
+
+    [PostgresFact]
+    public async Task PrimaryKeyConflictTargetUpdatesTheMatchingRow()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+
+        var inserted = await fixture.Db.Insert<Student>()
+            .Values(new { Id = 5000, FirstName = "PkBefore" })
+            .Returning(student => student.Id)
+            .SingleAsync();
+
+        var updated = await fixture.Db.Insert<Student>()
+            .Values(new { Id = 5000, FirstName = "PkAfter" })
+            .OnConflict(student => student.Id)
+            .DoUpdate(update => update.SetExcluded(student => student.FirstName))
+            .ReturningAll()
+            .SingleAsync();
+
+        Assert.Equal(5000, inserted);
+        Assert.Equal(5000, updated.Id);
+        Assert.Equal("PkAfter", updated.FirstName);
+    }
+
+    [PostgresFact]
+    public async Task InvalidConflictTargetFailsAtRuntime()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+
+        var error = await Assert.ThrowsAsync<PostgresException>(
+            () => fixture.Db.Insert<Student>()
+                .Values(new { FirstName = "InvalidTarget", Age = (int?)1 })
+                .OnConflict(student => student.Age)
+                .DoNothing()
+                .ExecuteAsync());
+
+        Assert.Equal("42P10", error.SqlState);
+    }
+
+    [PostgresFact]
+    public async Task ExcludedNullAndDefaultAreApplied()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+
+        await fixture.Db.Insert<Student>()
+            .Values(new { FirstName = "Excluded", Nickname = "first" })
+            .ExecuteAsync();
+
+        var nulled = await fixture.Db.Insert<Student>()
+            .Values(new { FirstName = "Excluded", Nickname = (string?)null })
+            .OnConflict(student => student.FirstName)
+            .DoUpdate(update => update.SetExcluded(student => student.Nickname))
+            .ReturningAll()
+            .SingleAsync();
+        var defaulted = await fixture.Db.Insert<Student>()
+            .Values(new { FirstName = "Excluded" })
+            .OnConflict(student => student.FirstName)
+            .DoUpdate(update => update.SetDefault(student => student.Nickname))
+            .ReturningAll()
+            .SingleAsync();
+
+        Assert.Null(nulled.Nickname);
+        Assert.Equal("anon", defaulted.Nickname);
+    }
+
+    [PostgresFact]
+    public async Task BatchConstraintFailureRollsBackEveryRow()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+
+        var error = await Assert.ThrowsAsync<PostgresException>(
+            () => fixture.Db.Insert<Student>()
+                .Values(
+                    new { FirstName = "AtomicOk", Age = (int?)null },
+                    new { FirstName = "AtomicBad", Age = (int?)-1 })
+                .ExecuteAsync());
+
+        var accepted = await fixture.Db.Select<Student>()
+            .Where(student => student.FirstName == "AtomicOk")
+            .ToListAsync();
+        var rejected = await fixture.Db.Select<Student>()
+            .Where(student => student.FirstName == "AtomicBad")
+            .ToListAsync();
+
+        Assert.Equal(PostgresErrorCodes.CheckViolation, error.SqlState);
+        Assert.Empty(accepted);
+        Assert.Empty(rejected);
+    }
+
+    [PostgresFact]
     public async Task DefaultValuesReturnsTheGeneratedRow()
     {
         await using var fixture = await Fixture.CreateAsync();
@@ -237,6 +459,7 @@ public class InsertLiveTests
                         status text NOT NULL DEFAULT 'active',
                         display text GENERATED ALWAYS AS (first_name || '!') STORED
                     );
+                    CREATE UNIQUE INDEX students_name_age_key ON students (first_name, age);
                     CREATE TABLE notes (
                         id integer GENERATED BY DEFAULT AS IDENTITY,
                         body text
