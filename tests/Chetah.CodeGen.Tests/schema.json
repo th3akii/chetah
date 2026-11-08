@@ -1,7 +1,7 @@
 {
   // Comments are allowed: the parser reads JSONC.
   "enums": {
-    "user_status": ["active", "inactive", "banned"]
+    "user_status": ["active", "inactive", "banned", "line\nbreak", "carriage\rreturn", "tab\there", "control\u0001"]
   },
   "tables": {
     "test_widgets": {

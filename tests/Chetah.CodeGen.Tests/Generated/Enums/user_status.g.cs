@@ -15,6 +15,10 @@ public static class UserStatus
         "active",
         "inactive",
         "banned",
+        "line\nbreak",
+        "carriage\rreturn",
+        "tab\there",
+        "control\u0001",
     };
 }
 

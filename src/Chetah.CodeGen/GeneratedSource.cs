@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 
 namespace Chetah.CodeGen;
@@ -339,8 +340,37 @@ public static class GeneratedSource
         return pascal.Length == 0 ? "_" : char.ToLowerInvariant(pascal[0]) + pascal[1..];
     }
 
-    /// <summary>Proper C# string literal — schema names are validated identifiers, so
-    /// this only ever escapes \" and \\ sequences.</summary>
-    private static string CSharpStringLiteral(string value) =>
-        "\"" + value.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
+    /// <summary>Proper C# string literal. Table and column names are validated identifiers, but
+    /// enum labels are arbitrary non-empty strings, so control and line-separator characters are
+    /// escaped rather than emitted raw.</summary>
+    private static string CSharpStringLiteral(string value)
+    {
+        var literal = new StringBuilder(value.Length + 2);
+        literal.Append('"');
+        foreach (var character in value)
+        {
+            switch (character)
+            {
+                case '\\': literal.Append("\\\\"); break;
+                case '"': literal.Append("\\\""); break;
+                case '\0': literal.Append("\\0"); break;
+                case '\a': literal.Append("\\a"); break;
+                case '\b': literal.Append("\\b"); break;
+                case '\f': literal.Append("\\f"); break;
+                case '\n': literal.Append("\\n"); break;
+                case '\r': literal.Append("\\r"); break;
+                case '\t': literal.Append("\\t"); break;
+                case '\v': literal.Append("\\v"); break;
+                default:
+                    if (char.IsControl(character) || character is '\u2028' or '\u2029')
+                        literal.Append("\\u").Append(((int)character).ToString("x4", CultureInfo.InvariantCulture));
+                    else
+                        literal.Append(character);
+                    break;
+            }
+        }
+
+        literal.Append('"');
+        return literal.ToString();
+    }
 }

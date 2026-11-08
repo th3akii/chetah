@@ -8,7 +8,7 @@ public class CodeGenCliTests
     private const string MultiSchema = """
         {
           "enums": {
-            "user_status": ["active", "inactive"],
+            "user_status": ["active", "inactive", "line\nbreak", "carriage\rreturn", "tab\there", "control\u0001"],
             "kind": { "values": ["a", "b"], "schema": "app" }
           },
           "tables": {
@@ -68,6 +68,10 @@ public class CodeGenCliTests
         var status = File.ReadAllText(temp.Combine("Generated", "Enums", "user_status.g.cs"));
         Assert.Contains("public static class UserStatus", status, StringComparison.Ordinal);
         Assert.Contains("\"inactive\"", status, StringComparison.Ordinal);
+        Assert.Contains("\"line\\nbreak\"", status, StringComparison.Ordinal);
+        Assert.Contains("\"carriage\\rreturn\"", status, StringComparison.Ordinal);
+        Assert.Contains("\"tab\\there\"", status, StringComparison.Ordinal);
+        Assert.Contains("\"control\\u0001\"", status, StringComparison.Ordinal);
 
         var kind = File.ReadAllText(temp.Combine("Generated", "Enums", "app_kind.g.cs"));
         Assert.Contains("public static class AppKind", kind, StringComparison.Ordinal);
@@ -92,6 +96,7 @@ public class CodeGenCliTests
         Assert.Contains("public sealed record User", source, StringComparison.Ordinal);
         Assert.Contains("public sealed record Order", source, StringComparison.Ordinal);
         Assert.Contains("public static class UserStatus", source, StringComparison.Ordinal);
+        Assert.Contains("\"line\\nbreak\"", source, StringComparison.Ordinal);
         Assert.Contains("[typeof(Order)] = OrderBinding", source, StringComparison.Ordinal);
     }
 
