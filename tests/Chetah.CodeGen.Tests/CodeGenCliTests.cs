@@ -225,6 +225,35 @@ public class CodeGenCliTests
     }
 
     [Fact]
+    public async Task ReplacedGeneratedOutputIsPreservedWhenItBecomesObsolete()
+    {
+        using var temp = new TempDirectory();
+        var schema = temp.Write("schema.json", MultiSchema);
+        var output = temp.Combine("Generated");
+
+        Assert.Equal(0, (await Run("--schema", schema, "--out", output)).Exit);
+
+        var replaced = temp.Write(Path.Combine("Generated", "Tables", "users.g.cs"), "// mine now\n");
+        File.WriteAllText(schema, """
+            {
+              "tables": {
+                "orders": {
+                  "model": "Order",
+                  "columns": { "id": { "type": "integer", "nullable": false } }
+                }
+              }
+            }
+            """);
+
+        var result = await Run("--schema", schema, "--out", output);
+
+        Assert.Equal(0, result.Exit);
+        Assert.Equal("// mine now\n", File.ReadAllText(replaced));
+        Assert.Contains("Preserved", result.Error, StringComparison.Ordinal);
+        Assert.DoesNotContain("Tables/users.g.cs", ManifestFiles(output));
+    }
+
+    [Fact]
     public async Task CaseInsensitiveGeneratedNameCollisionsFailBeforeWriting()
     {
         using var temp = new TempDirectory();
