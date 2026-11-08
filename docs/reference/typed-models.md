@@ -186,8 +186,10 @@ Generated/
 ```
 
 Enum files expose the declared labels as `Values`; enum columns still map to
-`string`, exactly as in the `single` layout. `single` emits the same types in
-one `Chetah.Schema.g.cs`.
+`string`, exactly as in the `single` layout. An enum outside the default
+schema is qualified in both its type and file name (`app.kind` →
+`Enums/app_kind.g.cs`, class `AppKind`) so two schemas can declare the same
+enum name. `single` emits the same types in one `Chetah.Schema.g.cs`.
 
 Naming: accessor class = PascalCase(table name) + `"Table"` (`users` →
 `UsersTable`); record = `model` or PascalCase(table name) (`User`).
