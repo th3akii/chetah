@@ -112,6 +112,8 @@ public static class GeneratedOutput
         // Stage every file first so a failed write does not truncate an existing generated file.
         Directory.CreateDirectory(root);
         var staged = new List<(string Temporary, string Target)>();
+        var deleted = new List<string>();
+        var preserved = new List<string>();
         try
         {
             foreach (var (relative, file) in desired)
@@ -123,6 +125,25 @@ public static class GeneratedOutput
                 staged.Add((temporary, target));
             }
 
+            // Retire stale files before moving the staged ones: on Windows a case-only rename is the
+            // same path, so deleting afterwards could remove the file that was just written.
+            foreach (var relative in stale)
+            {
+                var target = FullPath(root, relative);
+                if (!File.Exists(target))
+                    continue;
+
+                // The manifest is the owner, but do not delete a file the user replaced with their own.
+                if (!await StartsWithGeneratedMarkerAsync(target, cancellationToken))
+                {
+                    preserved.Add(relative);
+                    continue;
+                }
+
+                File.Delete(target);
+                deleted.Add(relative);
+            }
+
             foreach (var (temporary, target) in staged)
                 File.Move(temporary, target, overwrite: true);
         }
@@ -131,25 +152,6 @@ public static class GeneratedOutput
             foreach (var (temporary, _) in staged.Where(item => File.Exists(item.Temporary)))
                 File.Delete(temporary);
             throw;
-        }
-
-        var deleted = new List<string>();
-        var preserved = new List<string>();
-        foreach (var relative in stale)
-        {
-            var target = FullPath(root, relative);
-            if (!File.Exists(target))
-                continue;
-
-            // The manifest is the owner, but do not delete a file the user replaced with their own.
-            if (!await StartsWithGeneratedMarkerAsync(target, cancellationToken))
-            {
-                preserved.Add(relative);
-                continue;
-            }
-
-            File.Delete(target);
-            deleted.Add(relative);
         }
 
         var manifest = new Manifest
