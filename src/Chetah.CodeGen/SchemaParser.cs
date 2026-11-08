@@ -361,47 +361,22 @@ public static class SchemaParser
             "\"default\" must be a string, number, boolean, null, or { \"sql\": \"...\" } expression."),
     };
 
-    /// <summary>A string default is a literal. A pre-v1 file used raw SQL here, so a value that
-    /// looks like SQL is refused unless the file declares the contract: converting a timestamp
-    /// default from <c>now()</c> to the text <c>'now()'</c> is exactly the silent reinterpretation
-    /// the format change must not perform.</summary>
+    /// <summary>A string default is a literal, and a pre-v1 file used raw SQL in exactly this place.
+    /// No heuristic can tell <c>"1 + 1"</c> from a text value, so a string default requires the
+    /// contract marker: adding <c>"$schema"</c> is a deliberate statement that the file is v1.
+    /// Unambiguous literals (numbers, booleans, null) or <c>{ "sql": ... }</c> need no marker.</summary>
     private static ColumnDefault ParseStringDefault(string value, string path, bool contractDeclared)
     {
-        if (!contractDeclared && LooksLikeSql(value))
+        if (!contractDeclared)
         {
             throw Error(path,
-                $"The string default \"{value}\" looks like a pre-v1 SQL expression. In this format a string is a "
-                + "literal: write { \"sql\": \"...\" } for SQL, or add \"$schema\" to confirm the new format. "
-                + "See the schema guide's conversion table.");
+                $"The string default \"{value}\" is a literal, but a pre-v1 schema used raw SQL here. "
+                + "Add \"$schema\" to confirm the schema-v1 format, or write { \"sql\": \"...\" } for SQL. "
+                + "JSON numbers, booleans and null need no marker. See the schema guide's conversion table.");
         }
 
         return ColumnDefault.FromLiteral(SqlStringLiteral(value));
     }
-
-    /// <summary>Conservative shape test for values that were SQL in the previous format: quoted
-    /// literals, booleans, bare numbers, function calls, casts and statements.</summary>
-    private static bool LooksLikeSql(string value)
-    {
-        var trimmed = value.Trim();
-        if (trimmed.Length == 0)
-            return false;
-
-        if (trimmed[0] == '\''
-            || bool.TryParse(trimmed, out _)
-            || double.TryParse(trimmed, NumberStyles.Float, CultureInfo.InvariantCulture, out _)
-            || trimmed.Contains('(')
-            || trimmed.Contains(';')
-            || trimmed.Contains("::", StringComparison.Ordinal))
-            return true;
-
-        return SqlKeywordDefaults.Contains(trimmed);
-    }
-
-    private static readonly HashSet<string> SqlKeywordDefaults = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "null", "current_date", "current_time", "current_timestamp", "localtime", "localtimestamp",
-        "current_user", "session_user", "user",
-    };
 
     private static ColumnDefault ParseSqlDefault(JsonElement element, string path)
     {

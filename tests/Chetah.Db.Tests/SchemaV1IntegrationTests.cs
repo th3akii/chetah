@@ -23,6 +23,7 @@ public class SchemaV1IntegrationTests
     {
         var schema = Parse("""
             {
+              "$schema": "./chetah.schema.json",
               "tables": {
                 "parents": {
                   "primaryKey": { "name": "pk_parents", "columns": ["id"] },

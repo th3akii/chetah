@@ -1678,7 +1678,7 @@ public class MigrationApplyTests
     {
         await using var fixture = await Fixture.CreateAsync();
         const string schema = """
-            { "tables": { "t": { "columns": {
+            { "$schema": "./chetah.schema.json", "tables": { "t": { "columns": {
               "id": { "type": "integer", "nullable": false },
               "note": { "type": "text", "default": "a  b" },
               "at": { "type": "timestamp", "default": { "sql": "'2020-01-01 10:00'::date" } } } } } }
@@ -1874,7 +1874,7 @@ public class MigrationApplyTests
     {
         await using var fixture = await Fixture.CreateAsync();
         const string before = """
-            { "tables": {
+            { "$schema": "./chetah.schema.json", "tables": {
               "roles": {
                 "primaryKey": { "columns": ["id"] },
                 "columns": { "id": { "type": "integer", "nullable": false } } },
@@ -1892,7 +1892,7 @@ public class MigrationApplyTests
                   "references": { "table": "roles", "columns": ["id"] } }] } } }
             """;
         const string after = """
-            { "tables": {
+            { "$schema": "./chetah.schema.json", "tables": {
               "roles": {
                 "primaryKey": { "columns": ["id"] },
                 "columns": { "id": { "type": "integer", "nullable": false } } },

@@ -117,7 +117,7 @@ public class SchemaParserTests
     public void ReadsLiteralAndSqlDefaults()
     {
         var columns = Parse("""
-            { "tables": { "t": { "columns": {
+            { "$schema": "./chetah.schema.json", "tables": { "t": { "columns": {
               "name": { "type": "text", "default": "pending" },
               "quote": { "type": "text", "default": "it's" },
               "age": { "type": "integer", "default": 0 },
@@ -614,24 +614,29 @@ public class SchemaParserTests
     [InlineData("true")]
     [InlineData("CURRENT_TIMESTAMP")]
     [InlineData("nextval('s')")]
-    public void RejectsLegacyLookingStringDefaultsWithoutTheContract(string value)
+    [InlineData("1 + 1")]
+    [InlineData("pending")]
+    public void RejectsStringDefaultsWithoutTheContract(string value)
     {
         AssertRejected($$"""
             { "tables": { "t": { "columns": { "c": { "type": "text", "default": "{{value}}" } } } } }
-            """, "pre-v1 SQL expression");
+            """, "is a literal, but a pre-v1 schema used raw SQL");
     }
 
-    [Fact]
-    public void AcceptsExpressionLookingLiteralsWhenTheContractIsDeclared()
+    [Theory]
+    [InlineData("now()", "'now()'")]
+    [InlineData("1 + 1", "'1 + 1'")]
+    [InlineData("pending", "'pending'")]
+    public void AcceptsStringLiteralsWhenTheContractIsDeclared(string value, string expected)
     {
-        var column = Parse("""
+        var column = Parse($$"""
             { "$schema": "./chetah.schema.json", "tables": { "t": { "columns": {
-              "c": { "type": "text", "default": "now()" } } } } }
+              "c": { "type": "text", "default": "{{value}}" } } } } }
             """).Tables[0].Columns.Single();
 
-        // The contract marker says "this is v1"; now() is a literal here, and SQL is written as
-        // { "sql": "now()" } instead.
-        Assert.Equal("'now()'", column.Default!.Sql);
+        // The contract marker says "this is v1": every string is a literal, including the
+        // documented pre-v1 expression "1 + 1", and SQL is written as { "sql": ... } instead.
+        Assert.Equal(expected, column.Default!.Sql);
         Assert.Equal(DefaultKind.Literal, column.Default.Kind);
     }
 

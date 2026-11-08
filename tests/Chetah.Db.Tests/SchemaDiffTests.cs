@@ -251,7 +251,7 @@ public class SchemaDiffTests
     public async Task DefaultAndIdentity_AreDiffed()
     {
         var desired = Desired("""
-            { "tables": { "t": { "columns": {
+            { "$schema": "./chetah.schema.json", "tables": { "t": { "columns": {
               "a": { "type": "text", "default": "active" },
               "b": { "type": "integer", "nullable": false, "identity": true } } } } }
             """);
@@ -770,7 +770,7 @@ public class SchemaDiffTests
 
         // Same normalized text, different value: the cast truncates the time, so dropping it must
         // not be invisible just because normalization strips casts.
-        var withoutCast = Desired("""{ "tables": { "t": { "columns": { "at": { "type": "timestamp", "default": "2020-01-01 10:00" } } } } }""");
+        var withoutCast = Desired("""{ "$schema": "./chetah.schema.json", "tables": { "t": { "columns": { "at": { "type": "timestamp", "default": "2020-01-01 10:00" } } } } }""");
         var plan = await SchemaDiff.ComputeAsync(withoutCast, live, NoNulls, identities);
         Assert.Equal(
             "ALTER TABLE \"t\" ALTER COLUMN \"at\" SET DEFAULT '2020-01-01 10:00'",
@@ -781,7 +781,7 @@ public class SchemaDiffTests
     public async Task EmittedDefault_IsTheDeclarationVerbatim()
     {
         var desired = Desired("""
-            { "tables": { "t": { "columns": {
+            { "$schema": "./chetah.schema.json", "tables": { "t": { "columns": {
               "note": { "type": "text", "default": "a  b" },
               "at": { "type": "timestamp", "default": { "sql": "'2020-01-01 10:00'::date" } } } } } }
             """);
@@ -795,7 +795,7 @@ public class SchemaDiffTests
 
         var live = Live(Table("t", ("note", "text", false), ("at", "timestamp", false)));
         var altered = Desired("""
-            { "tables": { "t": { "columns": {
+            { "$schema": "./chetah.schema.json", "tables": { "t": { "columns": {
               "note": { "type": "text", "default": "a  b" },
               "at": { "type": "timestamp", "nullable": false } } } } }
             """);
@@ -841,7 +841,7 @@ public class SchemaDiffTests
     public async Task DefaultThatOnlyDiffersByCasts_IsNotChanged()
     {
         // PostgreSQL prints 'active' back as 'active'::text; that is the same default.
-        var desired = Desired("""{ "tables": { "t": { "columns": { "a": { "type": "text", "default": "active" } } } } }""");
+        var desired = Desired("""{ "$schema": "./chetah.schema.json", "tables": { "t": { "columns": { "a": { "type": "text", "default": "active" } } } } }""");
         var live = new CatalogState([
             new TableState("t", [new ColumnState("a", "text", false, Defaults.Normalize("'active'::text"))]),
         ]);

@@ -369,8 +369,10 @@ in the format is refused explicitly with its path instead of being ignored.
 - Defaults follow one rule: a JSON scalar is a SQL literal, `{ "sql": "..." }` is
   an expression. Strings are quoted and escaped, never parsed as SQL — the old
   "everything is raw SQL" convention silently changed meaning when copied.
-  `"$schema"` doubles as the v1 opt-in: a string default that looks like SQL is
-  refused without it, so a pre-v1 file cannot be reinterpreted silently.
+  `"$schema"` doubles as the v1 opt-in: a string default requires it (a pre-v1
+  file used raw SQL there, and `"1 + 1"` cannot be told apart from text), so a
+  pre-v1 file cannot be reinterpreted silently. Numbers, booleans, null and
+  `{ "sql": ... }` need no marker.
 - Primary keys: `true` on a single column, or a table-level object with `name`
   and `columns`. Column-level and table-level declarations cannot coexist.
 - Unique constraints: `true` on a single column, or table-level objects with

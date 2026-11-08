@@ -85,10 +85,10 @@ Every collection is optional; the file must declare at least one object across
 them. An empty schema is rejected rather than read as "drop everything".
 
 `$schema` is ignored for validation but is not decorative: it also marks the file
-as schema v1. Without it, a string default that looks like SQL (`now()`, `'x'`,
-`0`, `::date`, a semicolon) is refused instead of being reinterpreted as a
-literal (see [Defaults](#defaults)). Both tools read it; editors use it for
-completion and structural validation.
+as schema v1. A **string** default requires it, because a pre-v1 file used raw SQL
+in that position and no pattern can tell `"1 + 1"` from a text value. Numbers,
+booleans, `null` and `{ "sql": ... }` need no marker. Both tools read `$schema`;
+editors use it for completion and structural validation.
 
 PostgreSQL's `public` is the default namespace; any object may set `"schema"` to
 another namespace.
@@ -186,12 +186,11 @@ expression.
 Strings are never interpreted as SQL. If you mean `now()`, write
 `{ "sql": "now()" }`; writing `"now()"` stores the text `now()`.
 
-Because a pre-v1 file used raw SQL here, the parser refuses a string default
-that *looks* like SQL — quoted literals (`'x'`), booleans, bare numbers,
-function calls, casts, semicolons and SQL keyword defaults such as
-`CURRENT_TIMESTAMP` — unless the file declares `"$schema"`. Add the marker to
-confirm the file is v1, or keep using `{ "sql": ... }`. A plain literal such as
-`"pending"` needs no marker.
+Because a pre-v1 file used raw SQL here, the parser cannot tell a text literal
+from an old expression — `"1 + 1"` is the documented example that no pattern can
+classify. Any **string** default therefore requires the file to declare
+`"$schema"`, the schema-v1 opt-in. Numbers, booleans, `null` and
+`{ "sql": ... }` are unambiguous and need no marker.
 
 A literal is emitted with its JSON kind: strings as quoted SQL literals,
 numbers and booleans verbatim, `null` as `NULL`. PostgreSQL then coerces it to the
@@ -567,8 +566,8 @@ catalog.
 The format was redesigned before v1 shipped. Convert once, deliberately; the tool
 does not reinterpret old files. Old shapes (`primaryKey` arrays, object-keyed
 `indexes`/`foreignKeys`, column `references`) are rejected with a conversion
-message, and so is a raw-SQL string default in a file that does not declare
-`"$schema"`.
+message, and a string default requires `"$schema"` so a raw-SQL default cannot
+change meaning silently.
 
 | Old | New |
 |---|---|
