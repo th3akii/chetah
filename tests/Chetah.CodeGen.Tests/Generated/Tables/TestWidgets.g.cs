@@ -11,14 +11,14 @@ namespace Chetah.CodeGen.Tests;
 
 public static class TestWidgetsTable
 {
-    public static readonly Chetah.Column<int> Id = new("id");
+    public static readonly Chetah.Column<int> Id = new("id") { IsNullable = false };
     public static readonly Chetah.Column<string?> Label = new("label");
-    public static readonly Chetah.Column<long> Quantity = new("quantity");
-    public static readonly Chetah.Column<bool> Active = new("active");
+    public static readonly Chetah.Column<long> Quantity = new("quantity") { IsNullable = false };
+    public static readonly Chetah.Column<bool> Active = new("active") { IsNullable = false };
     public static readonly Chetah.Column<Guid?> Token = new("token");
-    public static readonly Chetah.Column<DateTime> Created = new("created");
+    public static readonly Chetah.Column<DateTime> Created = new("created") { IsNullable = false };
 
-    public static readonly Chetah.Table Table = new("test_widgets", Id.Name, Label.Name, Quantity.Name, Active.Name, Token.Name, Created.Name);
+    public static readonly Chetah.Table Table = new("test_widgets", new Chetah.Column[] { Id, Label, Quantity, Active, Token, Created });
 
     public static readonly System.Collections.Generic.IReadOnlyDictionary<string, string> PropertyColumns =
         new System.Collections.Generic.Dictionary<string, string>(System.StringComparer.Ordinal)

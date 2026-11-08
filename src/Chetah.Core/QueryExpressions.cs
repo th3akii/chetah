@@ -30,6 +30,10 @@ public sealed record SqlIn : SqlExpression
 public sealed record SqlAggregate(AggregateKind Kind, SqlExpression? Argument, Type ClrType, bool CanBeNull)
     : SqlExpression(ClrType, CanBeNull);
 public sealed record SqlPresence(int SourceId) : SqlExpression(typeof(bool?), true);
+/// <summary>Asks PostgreSQL to use the target column's DEFAULT expression for this value.</summary>
+public sealed record SqlDefault(Type ClrType) : SqlExpression(ClrType, true);
+/// <summary>The incoming row of an INSERT, referenced by ON CONFLICT DO UPDATE (EXCLUDED).</summary>
+public sealed record SqlIncoming(string Name, Type ClrType, bool CanBeNull) : SqlExpression(ClrType, CanBeNull);
 
 public enum SqlBinaryOperator
 {

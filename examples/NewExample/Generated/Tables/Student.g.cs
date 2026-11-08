@@ -11,17 +11,17 @@ namespace Chetah.Generated;
 
 public static class StudentsTable
 {
-    public static readonly Chetah.Column<long> Id = new("id");
-    public static readonly Chetah.Column<int> DepartmentId = new("department_id");
-    public static readonly Chetah.Column<string> IndexNumber = new("index_number");
-    public static readonly Chetah.Column<string> FirstName = new("first_name");
-    public static readonly Chetah.Column<string> LastName = new("last_name");
+    public static readonly Chetah.Column<long> Id = new("id") { IsNullable = false, HasDefault = true };
+    public static readonly Chetah.Column<int> DepartmentId = new("department_id") { IsNullable = false };
+    public static readonly Chetah.Column<string> IndexNumber = new("index_number") { IsNullable = false };
+    public static readonly Chetah.Column<string> FirstName = new("first_name") { IsNullable = false };
+    public static readonly Chetah.Column<string> LastName = new("last_name") { IsNullable = false };
     public static readonly Chetah.Column<int?> EnrollmentYear = new("enrollment_year");
     public static readonly Chetah.Column<string?> Phone = new("phone");
     public static readonly Chetah.Column<bool?> TestFlag = new("test_flag");
     public static readonly Chetah.Column<int?> InvalidReference = new("invalid_reference");
 
-    public static readonly Chetah.Table Table = new("students", Id.Name, DepartmentId.Name, IndexNumber.Name, FirstName.Name, LastName.Name, EnrollmentYear.Name, Phone.Name, TestFlag.Name, InvalidReference.Name);
+    public static readonly Chetah.Table Table = new("students", new Chetah.Column[] { Id, DepartmentId, IndexNumber, FirstName, LastName, EnrollmentYear, Phone, TestFlag, InvalidReference });
 
     public static readonly System.Collections.Generic.IReadOnlyDictionary<string, string> PropertyColumns =
         new System.Collections.Generic.Dictionary<string, string>(System.StringComparer.Ordinal)

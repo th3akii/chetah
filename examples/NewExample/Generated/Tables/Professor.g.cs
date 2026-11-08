@@ -11,14 +11,14 @@ namespace Chetah.Generated;
 
 public static class InstructorsTable
 {
-    public static readonly Chetah.Column<int> Id = new("id");
-    public static readonly Chetah.Column<int> DepartmentId = new("department_id");
-    public static readonly Chetah.Column<string> FirstName = new("first_name");
-    public static readonly Chetah.Column<string> LastName = new("last_name");
-    public static readonly Chetah.Column<string> Email = new("email");
-    public static readonly Chetah.Column<bool> Active = new("active");
+    public static readonly Chetah.Column<int> Id = new("id") { IsNullable = false, HasDefault = true };
+    public static readonly Chetah.Column<int> DepartmentId = new("department_id") { IsNullable = false };
+    public static readonly Chetah.Column<string> FirstName = new("first_name") { IsNullable = false };
+    public static readonly Chetah.Column<string> LastName = new("last_name") { IsNullable = false };
+    public static readonly Chetah.Column<string> Email = new("email") { IsNullable = false };
+    public static readonly Chetah.Column<bool> Active = new("active") { IsNullable = false, HasDefault = true };
 
-    public static readonly Chetah.Table Table = new("instructors", Id.Name, DepartmentId.Name, FirstName.Name, LastName.Name, Email.Name, Active.Name);
+    public static readonly Chetah.Table Table = new("instructors", new Chetah.Column[] { Id, DepartmentId, FirstName, LastName, Email, Active });
 
     public static readonly System.Collections.Generic.IReadOnlyDictionary<string, string> PropertyColumns =
         new System.Collections.Generic.Dictionary<string, string>(System.StringComparer.Ordinal)

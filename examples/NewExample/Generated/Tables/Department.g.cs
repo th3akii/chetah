@@ -11,11 +11,11 @@ namespace Chetah.Generated;
 
 public static class DepartmentsTable
 {
-    public static readonly Chetah.Column<int> Id = new("id");
-    public static readonly Chetah.Column<string> Code = new("code");
-    public static readonly Chetah.Column<string> Name = new("name");
+    public static readonly Chetah.Column<int> Id = new("id") { IsNullable = false, HasDefault = true };
+    public static readonly Chetah.Column<string> Code = new("code") { IsNullable = false };
+    public static readonly Chetah.Column<string> Name = new("name") { IsNullable = false };
 
-    public static readonly Chetah.Table Table = new("departments", Id.Name, Code.Name, Name.Name);
+    public static readonly Chetah.Table Table = new("departments", new Chetah.Column[] { Id, Code, Name });
 
     public static readonly System.Collections.Generic.IReadOnlyDictionary<string, string> PropertyColumns =
         new System.Collections.Generic.Dictionary<string, string>(System.StringComparer.Ordinal)

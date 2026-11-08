@@ -173,14 +173,15 @@ public static class GeneratedSource
 
         foreach (var column in table.Columns)
             sb.AppendLine(
-                $"    public static readonly Chetah.Column<{PropertyType(column)}> {Identifier(column.Name)} = new({CSharpStringLiteral(column.Name)});");
+                $"    public static readonly Chetah.Column<{PropertyType(column)}> {Identifier(column.Name)} = "
+                + $"new({CSharpStringLiteral(column.Name)}){ColumnMetadata(column)};");
 
         sb.AppendLine();
         sb.AppendLine(
             "    public static readonly Chetah.Table Table = new("
-            + CSharpStringLiteral(table.Name) + ", "
-            + string.Join(", ", table.Columns.Select(c => Identifier(c.Name) + ".Name"))
-            + ");");
+            + CSharpStringLiteral(table.Name) + ", new Chetah.Column[] { "
+            + string.Join(", ", table.Columns.Select(c => Identifier(c.Name)))
+            + " });");
         sb.AppendLine();
         sb.AppendLine("    public static readonly System.Collections.Generic.IReadOnlyDictionary<string, string> PropertyColumns =");
         sb.AppendLine("        new System.Collections.Generic.Dictionary<string, string>(System.StringComparer.Ordinal)");
@@ -313,6 +314,23 @@ public static class GeneratedSource
 
     private static string PropertyType(ColumnSchema column) =>
         column.Nullable ? column.Type.Clr!.NullableName : column.Type.Clr!.Name;
+
+    /// <summary>Write-side metadata INSERT validation uses. Defaults are omitted when they match
+    /// <see cref="Chetah.Column"/>'s initial values, keeping generated files short.</summary>
+    private static string ColumnMetadata(ColumnSchema column)
+    {
+        var members = new List<string>();
+        if (!column.Nullable)
+            members.Add("IsNullable = false");
+        if (column.Default is not null || column.Identity is not null)
+            members.Add("HasDefault = true");
+        if (column.Generated is not null)
+            members.Add("Generation = Chetah.ColumnGeneration.Computed");
+        else if (column.Identity?.Generation == "ALWAYS")
+            members.Add("Generation = Chetah.ColumnGeneration.Always");
+
+        return members.Count == 0 ? "" : $" {{ {string.Join(", ", members)} }}";
+    }
 
     private static string Identifier(string name)
     {

@@ -11,13 +11,13 @@ namespace Chetah.Generated;
 
 public static class SemestersTable
 {
-    public static readonly Chetah.Column<int> Id = new("id");
-    public static readonly Chetah.Column<string> AcademicYear = new("academic_year");
-    public static readonly Chetah.Column<string> Term = new("term");
-    public static readonly Chetah.Column<DateTime> StartsAt = new("starts_at");
-    public static readonly Chetah.Column<DateTime> EndsAt = new("ends_at");
+    public static readonly Chetah.Column<int> Id = new("id") { IsNullable = false, HasDefault = true };
+    public static readonly Chetah.Column<string> AcademicYear = new("academic_year") { IsNullable = false };
+    public static readonly Chetah.Column<string> Term = new("term") { IsNullable = false };
+    public static readonly Chetah.Column<DateTime> StartsAt = new("starts_at") { IsNullable = false };
+    public static readonly Chetah.Column<DateTime> EndsAt = new("ends_at") { IsNullable = false };
 
-    public static readonly Chetah.Table Table = new("semesters", Id.Name, AcademicYear.Name, Term.Name, StartsAt.Name, EndsAt.Name);
+    public static readonly Chetah.Table Table = new("semesters", new Chetah.Column[] { Id, AcademicYear, Term, StartsAt, EndsAt });
 
     public static readonly System.Collections.Generic.IReadOnlyDictionary<string, string> PropertyColumns =
         new System.Collections.Generic.Dictionary<string, string>(System.StringComparer.Ordinal)

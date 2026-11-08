@@ -11,13 +11,13 @@ namespace Chetah.Generated;
 
 public static class GradesTable
 {
-    public static readonly Chetah.Column<long> StudentId = new("student_id");
-    public static readonly Chetah.Column<long> OfferingId = new("offering_id");
-    public static readonly Chetah.Column<int> Grade = new("grade");
-    public static readonly Chetah.Column<DateTime> GradedAt = new("graded_at");
+    public static readonly Chetah.Column<long> StudentId = new("student_id") { IsNullable = false };
+    public static readonly Chetah.Column<long> OfferingId = new("offering_id") { IsNullable = false };
+    public static readonly Chetah.Column<int> Grade = new("grade") { IsNullable = false };
+    public static readonly Chetah.Column<DateTime> GradedAt = new("graded_at") { IsNullable = false, HasDefault = true };
     public static readonly Chetah.Column<string?> Comment = new("comment");
 
-    public static readonly Chetah.Table Table = new("grades", StudentId.Name, OfferingId.Name, Grade.Name, GradedAt.Name, Comment.Name);
+    public static readonly Chetah.Table Table = new("grades", new Chetah.Column[] { StudentId, OfferingId, Grade, GradedAt, Comment });
 
     public static readonly System.Collections.Generic.IReadOnlyDictionary<string, string> PropertyColumns =
         new System.Collections.Generic.Dictionary<string, string>(System.StringComparer.Ordinal)

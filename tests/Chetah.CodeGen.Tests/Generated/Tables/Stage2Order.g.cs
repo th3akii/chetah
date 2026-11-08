@@ -11,12 +11,12 @@ namespace Chetah.CodeGen.Tests;
 
 public static class OrdersTable
 {
-    public static readonly Chetah.Column<int> Id = new("id");
-    public static readonly Chetah.Column<int> UserId = new("user_id");
-    public static readonly Chetah.Column<int> Amount = new("amount");
+    public static readonly Chetah.Column<int> Id = new("id") { IsNullable = false };
+    public static readonly Chetah.Column<int> UserId = new("user_id") { IsNullable = false };
+    public static readonly Chetah.Column<int> Amount = new("amount") { IsNullable = false };
     public static readonly Chetah.Column<string?> Note = new("note");
 
-    public static readonly Chetah.Table Table = new("orders", Id.Name, UserId.Name, Amount.Name, Note.Name);
+    public static readonly Chetah.Table Table = new("orders", new Chetah.Column[] { Id, UserId, Amount, Note });
 
     public static readonly System.Collections.Generic.IReadOnlyDictionary<string, string> PropertyColumns =
         new System.Collections.Generic.Dictionary<string, string>(System.StringComparer.Ordinal)
