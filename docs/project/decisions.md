@@ -153,6 +153,16 @@ fallback, no arbitrary getter invocation, no dynamic SQL.
 - Revisit trigger: when a real query needs an expression outside the surface,
   extend the translator surface explicitly rather than adding evaluation.
 
+**Revision (2026-11-10, found while adding UPDATE):** AND/OR now carry their
+operands' SQL nullability instead of reporting non-null whenever the CLR type is
+`bool`. SQL NULL propagates through `AND`/`OR` (`optional.Value && true` is NULL
+when the column is NULL), so the old annotation was wrong for expressions built
+from nullable operands. Two visible effects beyond UPDATE: a comparison over such
+an expression renders `IS [NOT] DISTINCT FROM` rather than a plain `=`, and
+projecting the AND/OR itself into a non-nullable `bool` maps NULL to `false`
+instead of throwing at read time. WHERE results are unchanged — a NULL predicate
+is not a match either way.
+
 ## D005 — Diff/push schema tool, recorded as SQL migrations
 
 **Date:** 2026-11-05 (Stage 7)
@@ -609,11 +619,13 @@ projection. D011's "UPDATE/DELETE unsupported" list is superseded for UPDATE.
   assignment expression with the translator's own rules (COALESCE, CASE,
   IS NULL, comparisons), so a nullable expression that cannot yield NULL is
   accepted and a nullable one into a `NOT NULL` column is refused.
-- Generated (computed) columns are never assignable; `GENERATED ALWAYS AS
-  IDENTITY` accepts only `DEFAULT`; `DEFAULT` on a `NOT NULL` column without a
-  default is refused. Duplicate assignments and unknown columns are rejected
-  before rendering. Constraint enforcement (CHECK, UNIQUE, FK) stays
-  PostgreSQL's job and surfaces as `PostgresException`.
+- Generated (computed) columns are never assignable — including `DEFAULT`, which
+  PostgreSQL itself would accept for a stored generated column; Chetah treats
+  the column as read-only. `GENERATED ALWAYS AS IDENTITY` accepts only
+  `DEFAULT`; `DEFAULT` on a `NOT NULL` column without a default is refused.
+  Duplicate assignments and unknown columns are rejected before rendering.
+  Constraint enforcement (CHECK, UNIQUE, FK) stays PostgreSQL's job and surfaces
+  as `PostgresException`.
 - `Where` accepts the SELECT predicate lambda and is translated by the same
   translator, so null-safe comparisons, membership snapshots and captured-value
   folding behave exactly as in SELECT. Repeated calls combine with AND.

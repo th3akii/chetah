@@ -204,7 +204,7 @@ query. Repeated `Where` calls combine with `AND`.
 
 | Assignment | Result |
 |---|---|
-| a generated (computed) column | rejected: PostgreSQL computes it |
+| a generated (computed) column, even as `DEFAULT` | rejected: Chetah treats it as read-only (PostgreSQL would accept `DEFAULT` there) |
 | a `GENERATED ALWAYS AS IDENTITY` column with a value | rejected; `SetDefault` is the only form |
 | `NULL` into a `NOT NULL` column | rejected before the connection opens |
 | an expression that can produce `NULL` into a `NOT NULL` column | rejected; use `COALESCE` or a non-null expression |
