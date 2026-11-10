@@ -200,6 +200,50 @@ terminal) throws when neither was chosen. `Where` takes the same lambda as
 values folded at the call — a local mutated afterwards cannot change the built
 query. Repeated `Where` calls combine with `AND`.
 
+### Update from other tables
+
+```csharp
+var updated = await db.Update<Student>()
+    .InnerJoin<Score>((student, score) => score.StudentId == student.Id)
+    .Set(row => row.Left.Age, row => row.Right.Value)
+    .Where(row => row.Right.Value >= 90)
+    .Returning(row => new { row.Left.Id, row.Left.Age, row.Right.Label })
+    .ToListAsync();
+```
+
+```sql
+UPDATE "students" AS "t0"
+SET "age" = "t1"."value"
+FROM "scores" AS "t1"
+WHERE ("t1"."student_id" = "t0"."id") AND ("t1"."value" >= $1)
+RETURNING "t0"."id" AS "c0", "t0"."age" AS "c1", "t1"."label" AS "c2"
+```
+
+Joins are the SELECT joins: `InnerJoin`/`LeftJoin` take `(left, right) => …`, the
+row type becomes `Joined<T, TJoin>`, later calls address `row.Left` / `row.Right`,
+and chained joins nest the same way (`row.Left.Left`). Every source gets a
+compiler alias, so ambiguous column references cannot occur; the SET target stays
+unqualified because PostgreSQL accepts only a bare target column there.
+
+Only the target table can be assigned. `Set(row => row.Right.Value, …)` is
+refused — put the joined column on the right of an assignment, in `Where`, or in
+`Returning`. `ReturningAll()` returns the whole joined shape.
+
+PostgreSQL rules this API follows:
+
+- The first join links the target to the first source and must be `InnerJoin`.
+  `UPDATE … FROM` has no outer target: a target row without a source match is
+  never updated, so a target-side LEFT join cannot exist.
+- A later join condition that mentions the target cannot appear in `FROM`
+  (PostgreSQL rejects target references there). Chetah moves an `INNER JOIN`
+  condition into `WHERE` — equivalent for inner joins — and refuses the same
+  shape for a `LEFT JOIN`, where it is not equivalent. Join through the previous
+  source instead, e.g. `label.StudentId == score.StudentId`.
+- A target row that matches several source rows is updated **once**, using one
+  arbitrary matching row's values. `AllRows()` still confirms an unfiltered
+  update; with a join it means every target row that has a match.
+- A left-joined row is nullable, so it cannot feed a `NOT NULL` column.
+
 ### Writes that cannot be executed
 
 | Assignment | Result |
@@ -232,7 +276,8 @@ foreach (var parameter in compiled.Parameters)
 
 `Compile()` is pure and never opens a connection. Parameter slots follow SQL order:
 VALUES first, then conflict assignments, then RETURNING expressions. For UPDATE
-the order is SET assignments, then WHERE, then RETURNING:
+the order is SET assignments, then join conditions (wherever they render), then
+WHERE, then RETURNING:
 
 ```csharp
 var compiled = db.Update<Student>()
@@ -255,7 +300,10 @@ var compiled = db.Update<Student>()
 | values for generated columns, or non-`DEFAULT` values for `GENERATED ALWAYS` identity columns | generated values are read-only; identity `ALWAYS` only accepts `DEFAULT` |
 | rows with different column sets in one statement | split the statement or supply every column |
 | an unscoped UPDATE (`Compile` throws) | call `AllRows()` to confirm a full-table update |
-| `UPDATE … FROM` and updates through joins | not implemented; scope with `Where` on the target table |
+| assigning a joined column (`Set(row => row.Right.Value, …)`) | only the target table's columns are assignable |
+| `LeftJoin` as the first update source | `UPDATE … FROM` cannot outer-join the target; use `InnerJoin` |
+| a `LeftJoin` condition that references the target | join through the previous source instead |
+| `UPDATE … FROM` referencing a table without joining it (no implicit CROSS JOIN sources) | add the source explicitly with `InnerJoin` |
 | expressions outside the SELECT translator surface (`Trim()`, method calls, client evaluation) | no client-side evaluation exists, so they fail loudly before I/O |
 | unsupported CLR parameter types | only `int`, `long`, `decimal`, `string`, `bool`, `Guid` and `DateTime` are supported today |
 | `DELETE` | not implemented yet; the shared `RETURNING` model is ready for it |

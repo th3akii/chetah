@@ -595,13 +595,15 @@ projection. D011's "UPDATE/DELETE unsupported" list is superseded for UPDATE.
 
 **Details:**
 
-- One statement form: `UPDATE <table> SET … [WHERE …] [RETURNING …]`. No
-  `UPDATE … FROM`, no joins, no `OVERRIDING SYSTEM VALUE`.
+- One statement form: `UPDATE <table> [AS t0] SET … [FROM joins] [WHERE …]
+  [RETURNING …]`. No `OVERRIDING SYSTEM VALUE`, no locking clause, no DELETE. The
+  FROM/increment semantics are recorded in the revision at the end of this entry.
 - An assignment is `UpdateAssignment(column, SqlExpression)`. Values are
   `SqlValue` parameters; `SetDefault` is `SqlDefault` and renders `DEFAULT`;
-  column references and arithmetic are the existing translator's nodes rendered
-  with source-0 bare columns (`"age"`, not `"t0"."age"`). No parallel expression
-  translator and no SQL fragment API.
+  column references and arithmetic are the existing translator's nodes, rendered
+  bare for a single-table update (`"age"`) and qualified when joins alias the
+  sources (`"t0"."age"`). No parallel expression translator and no SQL fragment
+  API.
 - `Set` is generic over the assigned type in **both** parameters
   (`Set<TValue>(Expression<Func<T, TValue>> column, TValue value)` and the same
   with an `Expression<Func<T, TValue>>` value), so a column and an incompatible
@@ -634,14 +636,46 @@ projection. D011's "UPDATE/DELETE unsupported" list is superseded for UPDATE.
   and `Where()` are mutually exclusive, and `Compile()` throws when neither
   scope was chosen. The Core record keeps the predicate optional so the provider
   contract mirrors SELECT.
-- Parameter order is rendering order: SET values, then WHERE, then RETURNING.
-  `Compile()` stays pure. Executing without RETURNING returns the affected-row
-  count through `ExecuteNonQueryAsync`; with RETURNING the shared
-  `ReturningQuery<TResult>` runner maps rows and its terminals judge zero/one/many.
+- Parameter order is rendering order: SET values, then join conditions, then
+  WHERE, then RETURNING. `Compile()` stays pure. Executing without RETURNING
+  returns the affected-row count through `ExecuteNonQueryAsync`; with RETURNING
+  the shared `ReturningQuery<TResult>` runner maps rows and its terminals judge
+  zero/one/many.
 
-**Unsupported, deliberately:** `UPDATE … FROM`/joins, expressions outside the
-frozen translator surface, aggregates in SET, partial-index or row-lock clauses,
-and DELETE. Each is a separate feature, not an inference from this one.
+**Revision (2026-11-10, second increment): `UPDATE … FROM` with joins.** The
+revisit trigger below fired, so `UpdateQuery` gained `Joins` — the same
+`JoinClause(kind, sourceId, table, on)` records SELECT uses — and the builder
+gained `InnerJoin`/`LeftJoin` that turn `TypedUpdateQuery<T>` into
+`TypedUpdateQuery<Joined<T, TJoin>>`, exactly like `TypedSelectQuery`. No second
+translator, no alias strings, no raw SQL:
+
+- All sources are aliased `t0…tN` and qualified, so ambiguous references cannot
+  be generated; the SET target stays unqualified because PostgreSQL accepts only
+  a bare target column there. Zero-join statements keep the previous unaliased
+  SQL byte for byte.
+- `Set` resolves its selector through the current row shape and requires source
+  0, so assigning a joined column is refused while joined columns remain usable
+  in values, `Where` and `Returning`.
+- The first join links the target to source 1 and must be `INNER`. PostgreSQL
+  cannot outer-join the UPDATE target — unmatched target rows are never updated —
+  so `LeftJoin` as the first source is refused; later LEFT joins are real and
+  render the same presence-marked derived source as SELECT.
+- The target is not a FROM item, so no join `ON` may reference it. Chetah moves a
+  later INNER join's target-referencing condition into `WHERE` (equivalent, and
+  rendered as `CROSS JOIN` in the from-list) and refuses the same shape for a
+  LEFT join, where moving it would change semantics.
+- Nullability now resolves each column against its own source table and treats a
+  LEFT-joined source as nullable regardless of its column metadata; assignment
+  type/compatibility checks still compare against the target column only.
+- PostgreSQL semantics are preserved, not simulated: a target row matching
+  several source rows updates once with an arbitrary matching row. `AllRows()`
+  keeps its meaning and, with a join, applies to every target row that has a
+  match. RETURNING can project both sides through the existing projection mapper.
+
+**Unsupported, deliberately:** expressions outside the frozen translator surface,
+aggregates in SET, partial-index or row-lock clauses, `UPDATE … FROM` with
+target-referencing LEFT join conditions, and DELETE. Each is a separate feature,
+not an inference from this one.
 
 **Consequences:**
 
@@ -649,7 +683,8 @@ and DELETE. Each is a separate feature, not an inference from this one.
   both now delegate to the same internal runner, so row-count judgment and
   mapper creation exist once.
 - `PostgresCompiler.Compilation` gained three fragment hooks (validate an
-  assignment expression, render an assignment value, render a predicate) rather
-  than a second renderer.
-- Revisit trigger: when `UPDATE … FROM` is genuinely needed, extend
-  `UpdateQuery` with validated extra sources instead of adding raw SQL.
+  assignment expression, render an assignment value, render a predicate) plus
+  join-fragment rendering, rather than a second renderer.
+- Revisit trigger (already used): `UpdateQuery` now carries validated extra
+  sources; the next extension point is DELETE, which reuses the same source
+  model, predicate and RETURNING.
