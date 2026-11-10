@@ -21,7 +21,7 @@ public sealed record InsertQuery
 
     public InsertConflict? Conflict { get; init; }
 
-    /// <summary>Shared with future UPDATE and DELETE support; this record only describes the output.</summary>
+    /// <summary>Shared by INSERT and UPDATE (and DELETEs once they exist); describes the output only.</summary>
     public ReturningClause? Returning { get => _returning; init => _returning = value; }
 }
 
