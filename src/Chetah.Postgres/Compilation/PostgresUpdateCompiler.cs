@@ -157,7 +157,10 @@ public static class PostgresUpdateCompiler
         SqlCase caseExpression =>
             CanProduceNull(caseExpression.IfTrue, table, Guarded(caseExpression.Test, provenNonNull, nonNullBranch: true))
             || CanProduceNull(caseExpression.IfFalse, table, Guarded(caseExpression.Test, provenNonNull, nonNullBranch: false)),
-        SqlLike or SqlIn => false,
+        // LIKE/IN render a null guard (`IS TRUE`) exactly when the input is marked nullable, so a
+        // node with an unjustified non-null annotation is the only way they can yield NULL.
+        SqlLike like => !like.Input.CanBeNull && CanProduceNull(like.Input, table, provenNonNull),
+        SqlIn inOp => !inOp.Input.CanBeNull && CanProduceNull(inOp.Input, table, provenNonNull),
         _ => expression.CanBeNull,
     };
 

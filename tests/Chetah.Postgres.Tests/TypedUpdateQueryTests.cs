@@ -264,6 +264,20 @@ public class TypedUpdateQueryTests
     }
 
     [Fact]
+    public void ComparisonOverANullableBooleanRendersNullSafe()
+    {
+        var compiled = Db.Update<Flag>()
+            .Set(flag => flag.Required, flag => (flag.Optional!.Value && true) == true)
+            .Where(flag => flag.Id == 1)
+            .Compile();
+
+        Assert.Equal(
+            """UPDATE "flags" SET "required" = ("optional" AND $1) IS NOT DISTINCT FROM $2 WHERE "id" = $3""",
+            compiled.Sql);
+        Assert.Equal(new object?[] { true, true, 1 }, compiled.Parameters.Select(parameter => parameter.Value));
+    }
+
+    [Fact]
     public void ManuallyBuiltColumnAnnotationsMustMatchMetadata()
     {
         var query = new UpdateQuery(StudentsTable)

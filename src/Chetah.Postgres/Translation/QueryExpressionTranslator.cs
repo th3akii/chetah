@@ -137,6 +137,10 @@ internal sealed class QueryExpressionTranslator(IReadOnlyDictionary<ParameterExp
         var nullable = op switch
         {
             SqlBinaryOperator.Equal or SqlBinaryOperator.NotEqual => false,
+            // SQL NULL propagates through AND/OR: a nullable operand (`optional.Value && true`)
+            // makes the result nullable even though C# calls the type bool. Marking it here also
+            // makes comparisons over such an expression render null-safe instead of plain `=`.
+            SqlBinaryOperator.And or SqlBinaryOperator.Or => left.CanBeNull || right.CanBeNull,
             SqlBinaryOperator.Coalesce => left.CanBeNull && right.CanBeNull,
             _ => expression.Type == typeof(bool) ? false : left.CanBeNull || right.CanBeNull
         };
