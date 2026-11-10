@@ -222,102 +222,131 @@ public static class PostgresUpdateCompiler
     /// <summary>
     /// Whether an assignment expression can evaluate to SQL NULL. Column leaves use the owning
     /// table's nullability metadata (the model property is only a CLR approximation), resolved by
-    /// source id so joined columns are judged by their own table; compound expressions follow the
-    /// same rules the translator uses for their result nullability. A CASE branch guarded by a null
-    /// check on the same column treats that column as non-null inside the branch, so
-    /// <c>value.HasValue ? value.Value : 0</c> is accepted.
+    /// source id so joined columns are judged by their own table, and a LEFT-joined source counts as
+    /// NULL-extended unless a guard proves its row present. Compound expressions follow the rules the
+    /// renderer actually applies: a CASE branch guarded by a null check on the same column (or by a
+    /// presence check on a joined entity) treats what it proves as non-null inside the branch.
     /// </summary>
     private static bool CanProduceNull(
         SqlExpression expression,
         IReadOnlyDictionary<int, Source> sources,
-        IReadOnlySet<(int SourceId, string Name)>? provenNonNull = null) => expression switch
+        Proof? proof = null) => expression switch
     {
         SqlColumn column =>
-            provenNonNull?.Contains((column.SourceId, column.Name)) == true
+            proof?.Columns.Contains((column.SourceId, column.Name)) == true
                 ? false
                 : sources.TryGetValue(column.SourceId, out var source)
-                    // A LEFT-joined source is NULL-extended even where its column is NOT NULL.
-                    ? source.Nullable || (source.Table.Columns
-                        .FirstOrDefault(candidate => string.Equals(candidate.Name, column.Name, StringComparison.Ordinal))
-                        ?.IsNullable ?? column.CanBeNull)
+                    ? (source.Nullable && proof?.PresentSources.Contains(column.SourceId) != true)
+                        || (source.Table.Columns
+                            .FirstOrDefault(candidate => string.Equals(candidate.Name, column.Name, StringComparison.Ordinal))
+                            ?.IsNullable ?? column.CanBeNull)
                     : column.CanBeNull,
         SqlValue value => value.Value is null,
         SqlDefault => true,
         SqlBinary binary => binary.Operator switch
         {
-            // A comparison renders two-valued null-safe predicates (IS [NOT] DISTINCT / IS NULL),
-            // or SQL NULL exactly when its own node admits UNKNOWN; the node decides. AND/OR can
-            // still yield NULL through a nullable operand (`optional.Value && true`), so they
-            // recurse instead of trusting the result type.
+            // The renderer null-guards a comparison only when the operand is marked nullable
+            // (IS [NOT] DISTINCT FROM, or "IS TRUE" for relational forms). A node whose annotation
+            // understates nullability — a LEFT-joined column forged as non-null — therefore renders
+            // an unguarded operator and can yield NULL, which this check has to catch.
             SqlBinaryOperator.Equal or SqlBinaryOperator.NotEqual
                 or SqlBinaryOperator.LessThan or SqlBinaryOperator.LessThanOrEqual
-                or SqlBinaryOperator.GreaterThan or SqlBinaryOperator.GreaterThanOrEqual => binary.CanBeNull,
+                or SqlBinaryOperator.GreaterThan or SqlBinaryOperator.GreaterThanOrEqual =>
+                binary.CanBeNull
+                || UnguardedOperandNull(binary.Left, sources, proof)
+                || UnguardedOperandNull(binary.Right, sources, proof),
+            // AND/OR can yield NULL through a nullable operand (`optional.Value && true`), so they
+            // recurse instead of trusting the boolean result type.
             SqlBinaryOperator.And or SqlBinaryOperator.Or =>
-                CanProduceNull(binary.Left, sources, provenNonNull) || CanProduceNull(binary.Right, sources, provenNonNull),
+                CanProduceNull(binary.Left, sources, proof) || CanProduceNull(binary.Right, sources, proof),
             SqlBinaryOperator.Coalesce =>
-                CanProduceNull(binary.Left, sources, provenNonNull) && CanProduceNull(binary.Right, sources, provenNonNull),
-            _ => CanProduceNull(binary.Left, sources, provenNonNull) || CanProduceNull(binary.Right, sources, provenNonNull),
+                CanProduceNull(binary.Left, sources, proof) && CanProduceNull(binary.Right, sources, proof),
+            _ => CanProduceNull(binary.Left, sources, proof) || CanProduceNull(binary.Right, sources, proof),
         },
         SqlUnary unary => unary.Operator is SqlUnaryOperator.IsNull or SqlUnaryOperator.IsNotNull
             ? false
-            : CanProduceNull(unary.Operand, sources, provenNonNull),
-        SqlCast cast => CanProduceNull(cast.Operand, sources, provenNonNull),
+            : CanProduceNull(unary.Operand, sources, proof),
+        SqlCast cast => CanProduceNull(cast.Operand, sources, proof),
         SqlCase caseExpression =>
-            CanProduceNull(caseExpression.IfTrue, sources, Guarded(caseExpression.Test, provenNonNull, nonNullBranch: true))
-            || CanProduceNull(caseExpression.IfFalse, sources, Guarded(caseExpression.Test, provenNonNull, nonNullBranch: false)),
+            CanProduceNull(caseExpression.IfTrue, sources, Guarded(caseExpression.Test, proof, nonNullBranch: true))
+            || CanProduceNull(caseExpression.IfFalse, sources, Guarded(caseExpression.Test, proof, nonNullBranch: false)),
         // LIKE/IN render a null guard (`IS TRUE`) exactly when the input is marked nullable, so a
         // node with an unjustified non-null annotation is the only way they can yield NULL.
-        SqlLike like => !like.Input.CanBeNull && CanProduceNull(like.Input, sources, provenNonNull),
-        SqlIn inOp => !inOp.Input.CanBeNull && CanProduceNull(inOp.Input, sources, provenNonNull),
+        SqlLike like => !like.Input.CanBeNull && CanProduceNull(like.Input, sources, proof),
+        SqlIn inOp => !inOp.Input.CanBeNull && CanProduceNull(inOp.Input, sources, proof),
         _ => expression.CanBeNull,
     };
 
+    /// <summary>An operand the renderer leaves unguarded can still be NULL when its annotation lies.</summary>
+    private static bool UnguardedOperandNull(
+        SqlExpression operand,
+        IReadOnlyDictionary<int, Source> sources,
+        Proof? proof) => !operand.CanBeNull && CanProduceNull(operand, sources, proof);
+
     /// <summary>
-    /// Columns the CASE test proves non-null on the selected branch, for null checks such as
-    /// <c>column.HasValue</c>, <c>column != null</c> and their negations.
+    /// What a CASE condition proves inside a branch: columns that are non-null, and LEFT-joined
+    /// sources whose row is present. Recognizes <c>column.HasValue</c>, <c>column != null</c>,
+    /// <c>joinedEntity == null</c>, and their negations.
     /// </summary>
-    private static IReadOnlySet<(int, string)>? Guarded(
-        SqlExpression test,
-        IReadOnlySet<(int, string)>? provenNonNull,
-        bool nonNullBranch)
+    private static Proof? Guarded(SqlExpression test, Proof? proof, bool nonNullBranch)
     {
-        if (NullCheckedColumn(test, nonNullBranch) is not { } guarded)
-            return provenNonNull;
+        if (NullCheckedColumn(test, nonNullBranch) is not { } guard)
+            return proof;
 
-        var (sourceId, name) = guarded;
-        if (provenNonNull?.Contains((sourceId, name)) == true)
-            return provenNonNull;
+        proof ??= Proof.Empty;
+        if (guard.Name is null)
+            return proof.PresentSources.Contains(guard.SourceId)
+                ? proof
+                : proof with { PresentSources = new HashSet<int>(proof.PresentSources) { guard.SourceId } };
 
-        var proven = provenNonNull is null
-            ? new HashSet<(int, string)>()
-            : new HashSet<(int, string)>(provenNonNull);
-        proven.Add((sourceId, name));
-        return proven;
+        var key = (guard.SourceId, guard.Name);
+        return proof.Columns.Contains(key)
+            ? proof
+            : proof with { Columns = new HashSet<(int, string)>(proof.Columns) { key } };
     }
 
-    private static (int SourceId, string Name)? NullCheckedColumn(SqlExpression test, bool nonNullBranch) => test switch
+    private static (int SourceId, string? Name)? NullCheckedColumn(SqlExpression test, bool nonNullBranch) => test switch
     {
         SqlUnary { Operator: SqlUnaryOperator.IsNotNull, Operand: SqlColumn column } =>
             nonNullBranch ? (column.SourceId, column.Name) : null,
         SqlUnary { Operator: SqlUnaryOperator.IsNull, Operand: SqlColumn column } =>
             nonNullBranch ? null : (column.SourceId, column.Name),
+        // A nullable joined entity is judged by its presence marker, not by a column.
+        SqlUnary { Operator: SqlUnaryOperator.IsNotNull, Operand: SqlPresence presence } =>
+            nonNullBranch ? (presence.SourceId, null) : null,
+        SqlUnary { Operator: SqlUnaryOperator.IsNull, Operand: SqlPresence presence } =>
+            nonNullBranch ? null : (presence.SourceId, null),
         SqlUnary { Operator: SqlUnaryOperator.Not, Operand: var operand } =>
             NullCheckedColumn(operand, !nonNullBranch),
         SqlBinary { Operator: SqlBinaryOperator.NotEqual } binary when IsNullValue(binary.Right) =>
-            nonNullBranch ? ColumnName(binary.Left) : null,
+            nonNullBranch ? NullChecked(binary.Left) : null,
         SqlBinary { Operator: SqlBinaryOperator.Equal } binary when IsNullValue(binary.Right) =>
-            nonNullBranch ? null : ColumnName(binary.Left),
+            nonNullBranch ? null : NullChecked(binary.Left),
         SqlBinary { Operator: SqlBinaryOperator.NotEqual } binary when IsNullValue(binary.Left) =>
-            nonNullBranch ? ColumnName(binary.Right) : null,
+            nonNullBranch ? NullChecked(binary.Right) : null,
         SqlBinary { Operator: SqlBinaryOperator.Equal } binary when IsNullValue(binary.Left) =>
-            nonNullBranch ? null : ColumnName(binary.Right),
+            nonNullBranch ? null : NullChecked(binary.Right),
         _ => null,
     };
 
-    private static bool IsNullValue(SqlExpression expression) => expression is SqlValue { Value: null };
+    private static (int SourceId, string? Name)? NullChecked(SqlExpression expression) => expression switch
+    {
+        SqlColumn column => (column.SourceId, column.Name),
+        SqlPresence presence => (presence.SourceId, null),
+        _ => null,
+    };
 
-    private static (int, string)? ColumnName(SqlExpression expression) =>
-        expression is SqlColumn column ? (column.SourceId, column.Name) : null;
+    /// <summary>Nullability facts a CASE condition proves for the branch being evaluated.</summary>
+    private sealed record Proof(
+        IReadOnlySet<(int SourceId, string Name)> Columns,
+        IReadOnlySet<int> PresentSources)
+    {
+        internal static readonly Proof Empty = new(
+            new HashSet<(int, string)>(),
+            new HashSet<int>());
+    }
+
+    private static bool IsNullValue(SqlExpression expression) => expression is SqlValue { Value: null };
 
     private static Type Unwrap(Type type) => Nullable.GetUnderlyingType(type) ?? type;
 

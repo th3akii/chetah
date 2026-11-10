@@ -799,6 +799,83 @@ public class TypedUpdateQueryTests
     }
 
     [Fact]
+    public void CaseGuardedByAJoinedPresenceCheckIsAccepted()
+    {
+        var nullBranch = Db.Update<Student>()
+            .InnerJoin<Score>((student, score) => score.StudentId == student.Id)
+            .LeftJoin<Label>((chain, label) => label.StudentId == chain.Right.StudentId)
+            .Set(row => row.Left.Left.FirstName, row => row.Right == null ? "unknown" : row.Right!.Name)
+            .AllRows()
+            .Compile();
+        var presentBranch = Db.Update<Student>()
+            .InnerJoin<Score>((student, score) => score.StudentId == student.Id)
+            .LeftJoin<Label>((chain, label) => label.StudentId == chain.Right.StudentId)
+            .Set(row => row.Left.Left.FirstName, row => row.Right != null ? row.Right!.Name : "unknown")
+            .AllRows()
+            .Compile();
+
+        Assert.Contains(
+            """SET "first_name" = CASE WHEN "t2"."__chetah_present" IS NULL THEN $1 ELSE "t2"."name" END""",
+            nullBranch.Sql,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            """SET "first_name" = CASE WHEN "t2"."__chetah_present" IS NOT NULL THEN "t2"."name" ELSE $1 END""",
+            presentBranch.Sql,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ComparisonsOverForgedNullabilityAreRejected()
+    {
+        // A hand-built Core node can claim a LEFT-joined column is non-null; the renderer then emits
+        // a plain comparison, so the check must look through the annotation.
+        var query = new UpdateQuery(FlagsTable)
+        {
+            Joins =
+            [
+                new JoinClause(
+                    JoinKind.Inner,
+                    1,
+                    ScoresTable,
+                    new SqlBinary(
+                        SqlBinaryOperator.Equal,
+                        new SqlColumn(1, "student_id", typeof(int), false),
+                        new SqlColumn(0, "id", typeof(int), false),
+                        typeof(bool),
+                        false)),
+                new JoinClause(
+                    JoinKind.Left,
+                    2,
+                    LabelsTable,
+                    new SqlBinary(
+                        SqlBinaryOperator.Equal,
+                        new SqlColumn(2, "student_id", typeof(int), false),
+                        new SqlColumn(1, "student_id", typeof(int), false),
+                        typeof(bool),
+                        false)),
+            ],
+            Assignments =
+            [
+                new UpdateAssignment(
+                    "required",
+                    new SqlBinary(
+                        SqlBinaryOperator.Equal,
+                        new SqlColumn(2, "name", typeof(string), false),
+                        new SqlValue("x", typeof(string)),
+                        typeof(bool),
+                        false)),
+            ],
+            Predicate = new SqlUnary(
+                SqlUnaryOperator.IsNotNull,
+                new SqlColumn(0, "id", typeof(int), false),
+                typeof(bool),
+                false),
+        };
+
+        Assert.Throws<InvalidOperationException>(() => PostgresUpdateCompiler.Compile(query));
+    }
+
+    [Fact]
     public void MixedJoinConditionsKeepSqlTextParameterOrder()
     {
         var tag = "x";
