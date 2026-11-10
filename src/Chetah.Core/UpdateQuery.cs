@@ -9,8 +9,19 @@ public sealed record UpdateQuery
     public UpdateQuery(Table table) => Table = table ?? throw new ArgumentNullException(nameof(table));
 
     private IReadOnlyList<UpdateAssignment> _assignments = Array.Empty<UpdateAssignment>();
+    private IReadOnlyList<JoinClause> _joins = Array.Empty<JoinClause>();
 
     public Table Table { get; }
+
+    /// <summary>
+    /// UPDATE … FROM sources, in join order. Source 0 is always <see cref="Table"/>; each join adds
+    /// one table with source id = its position + 1, exactly like <see cref="SelectQuery.Joins"/>.
+    /// </summary>
+    public IReadOnlyList<JoinClause> Joins
+    {
+        get => _joins;
+        init => _joins = Array.AsReadOnly(value.ToArray());
+    }
 
     /// <summary>SET assignments, in the order they were added. Empty until the caller assigns a column.</summary>
     public IReadOnlyList<UpdateAssignment> Assignments
