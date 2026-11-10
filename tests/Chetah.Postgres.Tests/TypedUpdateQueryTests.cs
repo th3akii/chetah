@@ -16,6 +16,10 @@ public class TypedUpdateQueryTests
 
     private sealed record Flag(int Id, bool Required, bool? Optional);
 
+    private sealed record Score(int Id, int StudentId, int Value, string? Label);
+
+    private sealed record Label(int Id, int StudentId, string Name);
+
     private static Column Column(
         string name,
         Type type,
@@ -64,6 +68,21 @@ public class TypedUpdateQueryTests
         Column("id", typeof(int), nullable: false),
         Column("required", typeof(bool), nullable: false),
         Column("optional", typeof(bool)),
+    });
+
+    private static readonly Table ScoresTable = new("scores", new[]
+    {
+        Column("id", typeof(int), nullable: false),
+        Column("student_id", typeof(int), nullable: false),
+        Column("value", typeof(int), nullable: false),
+        Column("label", typeof(string)),
+    });
+
+    private static readonly Table LabelsTable = new("labels", new[]
+    {
+        Column("id", typeof(int), nullable: false),
+        Column("student_id", typeof(int), nullable: false),
+        Column("name", typeof(string), nullable: false),
     });
 
     private static readonly PostgresDb Db = CreateDb();
@@ -121,6 +140,27 @@ public class TypedUpdateQueryTests
                 [nameof(Flag.Required)] = "required",
                 [nameof(Flag.Optional)] = "optional",
             });
+        var scores = new TableBinding<Score>(
+            ScoresTable,
+            _ => throw new NotSupportedException("Compile-only binding."),
+            (_, _) => throw new NotSupportedException("Compile-only binding."),
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [nameof(Score.Id)] = "id",
+                [nameof(Score.StudentId)] = "student_id",
+                [nameof(Score.Value)] = "value",
+                [nameof(Score.Label)] = "label",
+            });
+        var labels = new TableBinding<Label>(
+            LabelsTable,
+            _ => throw new NotSupportedException("Compile-only binding."),
+            (_, _) => throw new NotSupportedException("Compile-only binding."),
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [nameof(Label.Id)] = "id",
+                [nameof(Label.StudentId)] = "student_id",
+                [nameof(Label.Name)] = "name",
+            });
 
         return new PostgresDb(
             "Host=localhost;Database=chetah-tests;Username=chetah",
@@ -131,6 +171,8 @@ public class TypedUpdateQueryTests
                 [typeof(AlwaysRecord)] = always,
                 [typeof(Metric)] = metrics,
                 [typeof(Flag)] = flags,
+                [typeof(Score)] = scores,
+                [typeof(Label)] = labels,
             });
     }
 
@@ -594,7 +636,7 @@ public class TypedUpdateQueryTests
             .Compile();
 
         Assert.Equal(
-            "UPDATE \"students\" SET \"age\" = $1 WHERE \"id\" = $2 RETURNING \"id\" AS \"c0\", \"first_name\" AS \"c1\", \"age\" AS \"c2\", \"nickname\" AS \"c3\", \"display\" AS \"c4\"",
+            """UPDATE "students" SET "age" = $1 WHERE "id" = $2 RETURNING "id" AS "c0", "first_name" AS "c1", "age" AS "c2", "nickname" AS "c3", "display" AS "c4""" + "\"",
             compiled.Sql);
     }
 
@@ -608,7 +650,7 @@ public class TypedUpdateQueryTests
             .Compile();
 
         Assert.Equal(
-            "UPDATE \"students\" SET \"age\" = $1 WHERE \"id\" = $2 RETURNING \"id\" AS \"c0\", $3 AS \"c1\"",
+            """UPDATE "students" SET "age" = $1 WHERE "id" = $2 RETURNING "id" AS "c0", $3 AS "c1""" + "\"",
             compiled.Sql);
         Assert.Equal(new object?[] { 1, 2, "x" }, compiled.Parameters.Select(parameter => parameter.Value));
     }
@@ -620,7 +662,7 @@ public class TypedUpdateQueryTests
 
         Assert.Throws<InvalidOperationException>(() => returning.Compile());
         Assert.Equal(
-            "UPDATE \"students\" SET \"age\" = $1 RETURNING \"id\" AS \"c0\", \"first_name\" AS \"c1\", \"age\" AS \"c2\", \"nickname\" AS \"c3\", \"display\" AS \"c4\"",
+            """UPDATE "students" SET "age" = $1 RETURNING "id" AS "c0", "first_name" AS "c1", "age" AS "c2", "nickname" AS "c3", "display" AS "c4""" + "\"",
             Db.Update<Student>().Set(student => student.Age, 1).AllRows().ReturningAll().Compile().Sql);
     }
 
@@ -629,6 +671,221 @@ public class TypedUpdateQueryTests
     {
         Assert.Throws<NotSupportedException>(
             () => Db.Update<Student>().Set(student => student.Age, 1).Returning(student => Sql.Count(student.Id)));
+    }
+
+    // ---------- UPDATE … FROM ----------
+
+    [Fact]
+    public void InnerJoinRendersAnAliasedFromClause()
+    {
+        var compiled = Db.Update<Student>()
+            .InnerJoin<Score>((student, score) => score.StudentId == student.Id)
+            .Set(row => row.Left.Age, row => row.Right.Value)
+            .Where(row => row.Right.Value > 10)
+            .Compile();
+
+        Assert.Equal(
+            """UPDATE "students" AS "t0" SET "age" = "t1"."value" FROM "scores" AS "t1" WHERE ("t1"."student_id" = "t0"."id") AND ("t1"."value" > $1)""",
+            compiled.Sql);
+        Assert.Equal(new object?[] { 10 }, compiled.Parameters.Select(parameter => parameter.Value));
+    }
+
+    [Fact]
+    public void JoinedAndTargetColumnsStayQualifiedInSetAndWhere()
+    {
+        var compiled = Db.Update<Student>()
+            .InnerJoin<Score>((student, score) => score.StudentId == student.Id)
+            .Set(row => row.Left.Nickname, row => row.Left.FirstName)
+            .Where(row => row.Right.Label == null)
+            .Compile();
+
+        Assert.Equal(
+            """UPDATE "students" AS "t0" SET "nickname" = "t0"."first_name" FROM "scores" AS "t1" WHERE ("t1"."student_id" = "t0"."id") AND ("t1"."label" IS NULL)""",
+            compiled.Sql);
+    }
+
+    [Fact]
+    public void ChainedJoinsAddOneAliasPerSource()
+    {
+        var compiled = Db.Update<Student>()
+            .InnerJoin<Score>((student, score) => score.StudentId == student.Id)
+            .InnerJoin<Label>((chain, label) => label.StudentId == chain.Left.Id)
+            .Set(row => row.Left.Left.Nickname, row => row.Right.Name)
+            .Where(row => row.Right.Name != null)
+            .Compile();
+
+        Assert.Equal(
+            """UPDATE "students" AS "t0" SET "nickname" = "t2"."name" FROM "scores" AS "t1" CROSS JOIN "labels" AS "t2" WHERE (("t1"."student_id" = "t0"."id") AND ("t2"."student_id" = "t0"."id")) AND ("t2"."name" IS NOT NULL)""",
+            compiled.Sql);
+    }
+
+    [Fact]
+    public void TargetLinkedLeftJoinConditionsAreRejected()
+    {
+        var error = Assert.Throws<InvalidOperationException>(
+            () => Db.Update<Student>()
+                .InnerJoin<Score>((student, score) => score.StudentId == student.Id)
+                .LeftJoin<Label>((chain, label) => label.StudentId == chain.Left.Id)
+                .Set(row => row.Left.Left.Nickname, row => row.Right!.Name)
+                .AllRows()
+                .Compile());
+
+        Assert.Contains("LEFT-joined", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void LaterLeftJoinRendersThePresenceMarkedSource()
+    {
+        var compiled = Db.Update<Student>()
+            .InnerJoin<Score>((student, score) => score.StudentId == student.Id)
+            .LeftJoin<Label>((chain, label) => label.StudentId == chain.Right.StudentId)
+            .Set(row => row.Left.Left.Nickname, row => row.Right!.Name)
+            .Where(row => row.Right == null)
+            .Compile();
+
+        Assert.Equal(
+            """UPDATE "students" AS "t0" SET "nickname" = "t2"."name" FROM "scores" AS "t1" LEFT JOIN (SELECT "id", "student_id", "name", TRUE AS "__chetah_present" FROM "labels") AS "t2" ON "t2"."student_id" IS NOT DISTINCT FROM "t1"."student_id" WHERE ("t1"."student_id" = "t0"."id") AND "t2"."__chetah_present" IS NULL""",
+            compiled.Sql);
+    }
+
+    [Fact]
+    public void TheFirstJoinCannotBeLeft()
+    {
+        var error = Assert.Throws<InvalidOperationException>(
+            () => Db.Update<Student>().LeftJoin<Score>((student, score) => score.StudentId == student.Id));
+
+        Assert.Contains("first join", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void JoinedColumnsCannotBeAssigned()
+    {
+        var error = Assert.Throws<InvalidOperationException>(
+            () => Db.Update<Student>()
+                .InnerJoin<Score>((student, score) => score.StudentId == student.Id)
+                .Set(row => row.Right.Value, 5));
+
+        Assert.Contains("target table", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void LeftJoinedColumnsAreNullableEvenWhenTheirColumnIsNotNull()
+    {
+        Assert.Throws<InvalidOperationException>(
+            () => Db.Update<Student>()
+                .InnerJoin<Score>((student, score) => score.StudentId == student.Id)
+                .LeftJoin<Label>((chain, label) => label.StudentId == chain.Right.StudentId)
+                .Set(row => row.Left.Left.FirstName, row => row.Right!.Name)
+                .Compile());
+    }
+
+    [Fact]
+    public void ParametersFollowSetJoinWhereAndReturningOrder()
+    {
+        var min = 10;
+        var query = Db.Update<Student>()
+            .InnerJoin<Score>((student, score) => score.StudentId == student.Id && score.Value > min)
+            .Set(row => row.Left.Age, 5)
+            .Where(row => row.Right.Label == "a")
+            .Returning(row => new { row.Left.Id, Tag = "t" });
+
+        min = 99;
+        var compiled = query.Compile();
+
+        Assert.Equal(
+            """UPDATE "students" AS "t0" SET "age" = $1 FROM "scores" AS "t1" WHERE (("t1"."student_id" = "t0"."id") AND ("t1"."value" > $2)) AND ("t1"."label" IS NOT DISTINCT FROM $3) RETURNING "t0"."id" AS "c0", $4 AS "c1""" + "\"",
+            compiled.Sql);
+        Assert.Equal(new object?[] { 5, 10, "a", "t" }, compiled.Parameters.Select(parameter => parameter.Value));
+    }
+
+    [Fact]
+    public void ReturningAllProjectsTheWholeJoinedShape()
+    {
+        var compiled = Db.Update<Student>()
+            .InnerJoin<Score>((student, score) => score.StudentId == student.Id)
+            .SetDefault(row => row.Left.Nickname)
+            .AllRows()
+            .ReturningAll()
+            .Compile();
+
+        Assert.Equal(
+            """UPDATE "students" AS "t0" SET "nickname" = DEFAULT FROM "scores" AS "t1" WHERE "t1"."student_id" = "t0"."id" RETURNING "t0"."id" AS "c0", "t0"."first_name" AS "c1", "t0"."age" AS "c2", "t0"."nickname" AS "c3", "t0"."display" AS "c4", "t1"."id" AS "c5", "t1"."student_id" AS "c6", "t1"."value" AS "c7", "t1"."label" AS "c8""" + "\"",
+            compiled.Sql);
+    }
+
+    [Fact]
+    public void AllRowsIsStillRequiredWithAJoin()
+    {
+        var query = Db.Update<Student>()
+            .InnerJoin<Score>((student, score) => score.StudentId == student.Id)
+            .Set(row => row.Left.Age, 1);
+
+        Assert.Throws<InvalidOperationException>(() => query.Compile());
+        Assert.Equal(
+            """UPDATE "students" AS "t0" SET "age" = $1 FROM "scores" AS "t1" WHERE "t1"."student_id" = "t0"."id""" + "\"",
+            query.AllRows().Compile().Sql);
+    }
+
+    [Fact]
+    public void SelfJoinsGetDistinctAliases()
+    {
+        var compiled = Db.Update<Student>()
+            .InnerJoin<Student>((left, right) => right.Id == left.Id)
+            .Set(row => row.Left.Nickname, row => row.Right.FirstName)
+            .Where(row => row.Right.Age == null)
+            .Compile();
+
+        Assert.Equal(
+            """UPDATE "students" AS "t0" SET "nickname" = "t1"."first_name" FROM "students" AS "t1" WHERE ("t1"."id" = "t0"."id") AND ("t1"."age" IS NULL)""",
+            compiled.Sql);
+    }
+
+    [Fact]
+    public void HandBuiltJoinsCannotAssignAJoinedColumn()
+    {
+        var query = new UpdateQuery(StudentsTable)
+        {
+            Joins =
+            [
+                new JoinClause(
+                    JoinKind.Inner,
+                    1,
+                    ScoresTable,
+                    new SqlBinary(
+                        SqlBinaryOperator.Equal,
+                        new SqlColumn(1, "student_id", typeof(int), false),
+                        new SqlColumn(0, "id", typeof(int), false),
+                        typeof(bool),
+                        false)),
+            ],
+            Assignments = [new UpdateAssignment("value", new SqlValue(1, typeof(int)))],
+        };
+
+        Assert.Throws<ArgumentException>(() => PostgresUpdateCompiler.Compile(query));
+    }
+
+    [Fact]
+    public void HandBuiltUpdatesRejectALeftFirstJoin()
+    {
+        var query = new UpdateQuery(StudentsTable)
+        {
+            Joins =
+            [
+                new JoinClause(
+                    JoinKind.Left,
+                    1,
+                    ScoresTable,
+                    new SqlBinary(
+                        SqlBinaryOperator.Equal,
+                        new SqlColumn(1, "student_id", typeof(int), false),
+                        new SqlColumn(0, "id", typeof(int), false),
+                        typeof(bool),
+                        false)),
+            ],
+            Assignments = [new UpdateAssignment("age", new SqlValue(1, typeof(int)))],
+        };
+
+        Assert.Throws<InvalidOperationException>(() => PostgresUpdateCompiler.Compile(query));
     }
 
     // ---------- immutability ----------

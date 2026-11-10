@@ -7,6 +7,69 @@ namespace Chetah.CodeGen.Tests;
 /// <summary>UPDATE behavior against a disposable PostgreSQL schema; skipped without CHETAH_CONNECTION_STRING.</summary>
 public class UpdateLiveTests
 {
+    private sealed record Score(int Id, int StudentId, int Value, string? Label);
+
+    private sealed record Label(int Id, int StudentId, string Name);
+
+    private static readonly Table ScoresTable = new("scores", new Column[]
+    {
+        new Column<int>("id") { IsNullable = false, HasDefault = true },
+        new Column<int>("student_id") { IsNullable = false },
+        new Column<int>("value") { IsNullable = false },
+        new Column<string?>("label"),
+    });
+
+    private static readonly Table LabelsTable = new("labels", new Column[]
+    {
+        new Column<int>("id") { IsNullable = false, HasDefault = true },
+        new Column<int>("student_id") { IsNullable = false },
+        new Column<string>("name") { IsNullable = false },
+    });
+
+    private static readonly ITableBinding ScoreBinding = new TableBinding<Score>(
+        ScoresTable,
+        reader => new Score(
+            reader.GetInt32(0),
+            reader.GetInt32(1),
+            reader.GetInt32(2),
+            reader.IsDBNull(3) ? null : reader.GetString(3)),
+        (reader, offset) => new Score(
+            reader.GetInt32(offset),
+            reader.GetInt32(offset + 1),
+            reader.GetInt32(offset + 2),
+            reader.IsDBNull(offset + 3) ? null : reader.GetString(offset + 3)),
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [nameof(Score.Id)] = "id",
+            [nameof(Score.StudentId)] = "student_id",
+            [nameof(Score.Value)] = "value",
+            [nameof(Score.Label)] = "label",
+        });
+
+    private static readonly ITableBinding LabelBinding = new TableBinding<Label>(
+        LabelsTable,
+        reader => new Label(reader.GetInt32(0), reader.GetInt32(1), reader.GetString(2)),
+        (reader, offset) => new Label(
+            reader.GetInt32(offset),
+            reader.GetInt32(offset + 1),
+            reader.GetString(offset + 2)),
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [nameof(Label.Id)] = "id",
+            [nameof(Label.StudentId)] = "student_id",
+            [nameof(Label.Name)] = "name",
+        });
+
+    private static IReadOnlyDictionary<Type, ITableBinding> Bindings()
+    {
+        var bindings = new Dictionary<Type, ITableBinding>(ChetahSchema.Bindings)
+        {
+            [typeof(Score)] = ScoreBinding,
+            [typeof(Label)] = LabelBinding,
+        };
+        return bindings;
+    }
+
     [PostgresFact]
     public async Task SingleRowUpdateReturnsTheChangedRowAndLeavesOthersAlone()
     {
@@ -342,6 +405,181 @@ public class UpdateLiveTests
         Assert.Null(unchanged.Age);
     }
 
+    [PostgresFact]
+    public async Task JoinUpdatesFromASourceTableAndReturnsBothSides()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var student = await fixture.InsertAsync(new { FirstName = "Ada", Age = (int?)1 });
+        var id = student.Id;
+        await fixture.Db.Insert<Score>()
+            .Values(new { StudentId = id, Value = 42, Label = "quiz" })
+            .ReturningAll()
+            .SingleAsync();
+
+        var updated = await fixture.Db.Update<Student>()
+            .InnerJoin<Score>((target, score) => score.StudentId == target.Id)
+            .Set(row => row.Left.Age, row => row.Right.Value)
+            .Where(row => row.Right.Label == "quiz")
+            .Returning(row => new { row.Left.Id, row.Left.Age, Score = row.Right.Value })
+            .SingleAsync();
+
+        Assert.Equal(id, updated.Id);
+        Assert.Equal(42, updated.Age);
+        Assert.Equal(42, updated.Score);
+
+        var stored = await fixture.Db.Select<Student>().Where(target => target.Id == id).SingleAsync();
+        Assert.Equal(42, stored.Age);
+    }
+
+    [PostgresFact]
+    public async Task JoinPredicateFiltersWhichTargetsChange()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var ada = await fixture.InsertAsync(new { FirstName = "Ada" });
+        await fixture.InsertAsync(new { FirstName = "Grace" });
+        var adaId = ada.Id;
+        await fixture.Db.Insert<Score>()
+            .Values(new { StudentId = adaId, Value = 42, Label = "quiz" })
+            .ReturningAll()
+            .SingleAsync();
+
+        var affected = await fixture.Db.Update<Student>()
+            .InnerJoin<Score>((target, score) => score.StudentId == target.Id)
+            .Set(row => row.Left.Nickname, row => row.Right.Label)
+            .Where(row => row.Right.Value >= 10)
+            .ExecuteAsync();
+
+        Assert.Equal(1, affected);
+        Assert.Equal("quiz", (await fixture.Db.Select<Student>().Where(target => target.Id == adaId).SingleAsync()).Nickname);
+        Assert.Equal(1, await fixture.Db.Select<Student>().Where(target => target.Nickname == "anon").CountAsync());
+    }
+
+    [PostgresFact]
+    public async Task JoinUpdatesEachMatchingTargetRowOnceEvenWithManySources()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var ada = await fixture.InsertAsync(new { FirstName = "Ada" });
+        var grace = await fixture.InsertAsync(new { FirstName = "Grace" });
+        var adaId = ada.Id;
+        var graceId = grace.Id;
+        foreach (var label in new[] { "a", "b", "c" })
+        {
+            await fixture.Db.Insert<Score>()
+                .Values(new { StudentId = adaId, Value = 1, Label = label })
+                .ReturningAll()
+                .SingleAsync();
+        }
+
+        await fixture.Db.Insert<Score>()
+            .Values(new { StudentId = graceId, Value = 1, Label = "d" })
+            .ReturningAll()
+            .SingleAsync();
+
+        var affected = await fixture.Db.Update<Student>()
+            .InnerJoin<Score>((target, score) => score.StudentId == target.Id)
+            .Set(row => row.Left.Nickname, row => row.Right.Label)
+            .AllRows()
+            .ExecuteAsync();
+
+        // PostgreSQL updates each target row once and picks one matching source row, so the
+        // affected count is the number of targets, not the number of joined pairs.
+        Assert.Equal(2, affected);
+        var nicknames = await fixture.Db.Select<Student>().Select(target => target.Nickname).ToListAsync();
+        Assert.Equal(2, nicknames.Count);
+        Assert.All(nicknames, nickname => Assert.Contains(nickname, new[] { "a", "b", "c", "d" }));
+    }
+
+    [PostgresFact]
+    public async Task LeftJoinedSourceReportsAbsenceAndLeavesRowsAlone()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var ada = await fixture.InsertAsync(new { FirstName = "Ada" });
+        var grace = await fixture.InsertAsync(new { FirstName = "Grace" });
+        var adaId = ada.Id;
+        var graceId = grace.Id;
+        await fixture.Db.Insert<Score>()
+            .Values(new { StudentId = adaId, Value = 1, Label = "ada" })
+            .ReturningAll()
+            .SingleAsync();
+        await fixture.Db.Insert<Score>()
+            .Values(new { StudentId = graceId, Value = 2, Label = "grace" })
+            .ReturningAll()
+            .SingleAsync();
+        await fixture.Db.Insert<Label>()
+            .Values(new { StudentId = graceId, Name = "graded" })
+            .ReturningAll()
+            .SingleAsync();
+
+        var labelled = await fixture.Db.Update<Student>()
+            .InnerJoin<Score>((target, score) => score.StudentId == target.Id)
+            .LeftJoin<Label>((chain, label) => label.StudentId == chain.Right.StudentId)
+            .Set(row => row.Left.Left.Nickname, row => row.Right.Name)
+            .Where(row => row.Right != null)
+            .Returning(row => new { row.Left.Left.Id, row.Left.Left.Nickname, row.Right!.Name })
+            .SingleAsync();
+        var unlabelled = await fixture.Db.Update<Student>()
+            .InnerJoin<Score>((target, score) => score.StudentId == target.Id)
+            .LeftJoin<Label>((chain, label) => label.StudentId == chain.Right.StudentId)
+            .Set(row => row.Left.Left.Status, "unlabelled")
+            .Where(row => row.Right == null)
+            .Returning(row => new { row.Left.Left.Id, row.Left.Left.Status })
+            .SingleAsync();
+
+        Assert.Equal(graceId, labelled.Id);
+        Assert.Equal("graded", labelled.Nickname);
+        Assert.Equal("graded", labelled.Name);
+        Assert.Equal(adaId, unlabelled.Id);
+        Assert.Equal("unlabelled", unlabelled.Status);
+    }
+
+    [PostgresFact]
+    public async Task JoinWithNoMatchAffectsNoRows()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var student = await fixture.InsertAsync(new { FirstName = "Ada" });
+        var id = student.Id;
+
+        var affected = await fixture.Db.Update<Student>()
+            .InnerJoin<Score>((target, score) => score.StudentId == target.Id)
+            .Set(row => row.Left.Nickname, "never")
+            .Where(row => row.Right.Value > 1000)
+            .ExecuteAsync();
+        var rows = await fixture.Db.Update<Student>()
+            .InnerJoin<Score>((target, score) => score.StudentId == target.Id)
+            .Set(row => row.Left.Nickname, "never")
+            .Where(row => row.Right.Value > 1000)
+            .ReturningAll()
+            .ToListAsync();
+
+        Assert.Equal(0, affected);
+        Assert.Empty(rows);
+        Assert.Equal("anon", (await fixture.Db.Select<Student>().Where(target => target.Id == id).SingleAsync()).Nickname);
+    }
+
+    [PostgresFact]
+    public async Task ReturningAllWithAJoinMapsBothEntities()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var student = await fixture.InsertAsync(new { FirstName = "Ada", Age = (int?)3 });
+        var id = student.Id;
+        await fixture.Db.Insert<Score>()
+            .Values(new { StudentId = id, Value = 7, Label = "quiz" })
+            .ReturningAll()
+            .SingleAsync();
+
+        var joined = await fixture.Db.Update<Student>()
+            .InnerJoin<Score>((target, score) => score.StudentId == target.Id)
+            .Set(row => row.Left.Age, 8)
+            .Where(row => row.Right.Value == 7)
+            .ReturningAll()
+            .SingleAsync();
+
+        Assert.Equal("Ada", joined.Left.FirstName);
+        Assert.Equal(8, joined.Left.Age);
+        Assert.Equal(7, joined.Right.Value);
+        Assert.Equal("quiz", joined.Right.Label);
+    }
+
     private sealed class Fixture : IAsyncDisposable
     {
         private readonly string _root;
@@ -352,7 +590,7 @@ public class UpdateLiveTests
         {
             _root = root;
             var connectionString = new NpgsqlConnectionStringBuilder(root) { SearchPath = _schema }.ConnectionString;
-            Db = new PostgresDb(connectionString, ChetahSchema.Bindings);
+            Db = new PostgresDb(connectionString, Bindings());
         }
 
         internal async Task<Student> InsertAsync<TValues>(TValues values) =>
@@ -381,6 +619,17 @@ public class UpdateLiveTests
                     CREATE TABLE always_notes (
                         id integer GENERATED ALWAYS AS IDENTITY,
                         body text
+                    );
+                    CREATE TABLE scores (
+                        id integer GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+                        student_id integer NOT NULL REFERENCES students(id),
+                        value integer NOT NULL,
+                        label text
+                    );
+                    CREATE TABLE labels (
+                        id integer GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+                        student_id integer NOT NULL REFERENCES students(id),
+                        name text NOT NULL
                     );
                     """);
                 return fixture;
