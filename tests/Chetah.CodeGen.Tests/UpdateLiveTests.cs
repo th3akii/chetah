@@ -261,6 +261,24 @@ public class UpdateLiveTests
     }
 
     [PostgresFact]
+    public async Task NumericCastsExecuteWithPostgresSemantics()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var inserted = await fixture.InsertAsync(new { FirstName = "Ada", Age = (int?)7 });
+        var id = inserted.Id;
+
+        // int → bigint → integer stays explicit SQL CAST, so the value is PostgreSQL's conversion.
+        var updated = await fixture.Db.Update<Student>()
+            .Set(student => student.Age, student => (int?)(long?)student.Id)
+            .Where(student => student.Id == id)
+            .ReturningAll()
+            .SingleAsync();
+
+        Assert.Equal(id, updated.Age);
+        Assert.Equal(7, inserted.Age);
+    }
+
+    [PostgresFact]
     public async Task GeneratedAndAlwaysIdentityColumnsAreRejectedBeforeIo()
     {
         await using var fixture = await Fixture.CreateAsync();
