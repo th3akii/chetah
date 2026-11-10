@@ -580,6 +580,30 @@ public class UpdateLiveTests
         Assert.Equal("quiz", joined.Right.Label);
     }
 
+    [PostgresFact]
+    public async Task ReturningAllWithALeftJoinMapsAnAbsentRightAsNull()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var student = await fixture.InsertAsync(new { FirstName = "Ada" });
+        var id = student.Id;
+        await fixture.Db.Insert<Score>()
+            .Values(new { StudentId = id, Value = 1, Label = "ada" })
+            .ReturningAll()
+            .SingleAsync();
+
+        var joined = await fixture.Db.Update<Student>()
+            .InnerJoin<Score>((target, score) => score.StudentId == target.Id)
+            .LeftJoin<Label>((chain, label) => label.StudentId == chain.Right.StudentId)
+            .Set(row => row.Left.Left.Nickname, "no-label")
+            .Where(row => row.Right == null)
+            .ReturningAll()
+            .SingleAsync();
+
+        Assert.Equal("Ada", joined.Left.Left.FirstName);
+        Assert.Equal(1, joined.Left.Right.Value);
+        Assert.Null(joined.Right);
+    }
+
     private sealed class Fixture : IAsyncDisposable
     {
         private readonly string _root;
