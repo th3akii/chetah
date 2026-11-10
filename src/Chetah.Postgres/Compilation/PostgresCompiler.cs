@@ -835,32 +835,48 @@ public static class PostgresCompiler
             _query.IsDistinct || _query.GroupKeys.Count > 0 || _query.Having is not null
             || _query.Limit is not null || _query.Offset is not null;
 
-        private void RenderJoin(JoinClause join)
-        {
-            _sql.Append(join.Kind switch
-            {
-                JoinKind.Inner => " INNER JOIN ",
-                JoinKind.Left => " LEFT JOIN ",
-                _ => throw new NotSupportedException($"Unsupported join kind {join.Kind} in source {join.SourceId}."),
-            });
+        private void RenderJoin(JoinClause join) => _sql.Append(RenderJoinFragment(join));
 
+        /// <summary>Renders a join (operator, source and ON) for UPDATE … FROM.</summary>
+        internal string RenderJoinFragment(JoinClause join) =>
+            JoinOperator(join) + RenderJoinEntry(join) + " ON " + RenderExpression(join.On);
+
+        /// <summary>
+        /// Renders a join whose ON condition moved to WHERE, because that condition references the
+        /// UPDATE target and PostgreSQL rejects target references inside a FROM join's ON clause.
+        /// An INNER JOIN without its condition is exactly a CROSS JOIN plus a WHERE filter.
+        /// </summary>
+        internal string RenderJoinWithoutConditionFragment(JoinClause join)
+        {
+            if (join.Kind != JoinKind.Inner)
+                throw new InvalidOperationException(
+                    $"Source {join.SourceId} is LEFT-joined and its condition references the UPDATE target; "
+                    + "PostgreSQL cannot express that in FROM.");
+            return " CROSS JOIN " + RenderJoinEntry(join);
+        }
+
+        /// <summary>Renders the first FROM item of an UPDATE … FROM; later sources use <see cref="RenderJoinFragment"/>.</summary>
+        internal string RenderJoinEntryFragment(JoinClause join) => RenderJoinEntry(join);
+
+        private static string JoinOperator(JoinClause join) => join.Kind switch
+        {
+            JoinKind.Inner => " INNER JOIN ",
+            JoinKind.Left => " LEFT JOIN ",
+            _ => throw new NotSupportedException($"Unsupported join kind {join.Kind} in source {join.SourceId}."),
+        };
+
+        private string RenderJoinEntry(JoinClause join)
+        {
             if (join.Kind == JoinKind.Left)
             {
                 // The right side is a derived SELECT of the table's columns plus a hidden presence
                 // marker; that marker—not an all-null column heuristic—decides whether the row exists.
                 var marker = _presenceMarkers[join.SourceId];
                 var columnList = string.Join(", ", join.Table.Columns.Select(c => QuoteIdentifier(c.Name)));
-                _sql.Append("(SELECT ").Append(columnList)
-                    .Append(", TRUE AS ").Append(QuoteIdentifier(marker))
-                    .Append(" FROM ").Append(QuoteIdentifier(join.Table.Name))
-                    .Append(") AS ").Append(QuoteIdentifier($"t{join.SourceId}"));
+                return $"(SELECT {columnList}, TRUE AS {QuoteIdentifier(marker)} FROM {QuoteIdentifier(join.Table.Name)}) AS {QuoteIdentifier($"t{join.SourceId}")}";
             }
-            else
-                _sql.Append(QuoteIdentifier(join.Table.Name))
-                    .Append(" AS ")
-                    .Append(QuoteIdentifier($"t{join.SourceId}"));
 
-            _sql.Append(" ON ").Append(RenderExpression(join.On));
+            return $"{QuoteIdentifier(join.Table.Name)} AS {QuoteIdentifier($"t{join.SourceId}")}";
         }
 
         // ---------- expression rendering (parameters emitted in encounter order) ----------
