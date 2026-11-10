@@ -157,11 +157,15 @@ fallback, no arbitrary getter invocation, no dynamic SQL.
 operands' SQL nullability instead of reporting non-null whenever the CLR type is
 `bool`. SQL NULL propagates through `AND`/`OR` (`optional.Value && true` is NULL
 when the column is NULL), so the old annotation was wrong for expressions built
-from nullable operands. Two visible effects beyond UPDATE: a comparison over such
-an expression renders `IS [NOT] DISTINCT FROM` rather than a plain `=`, and
-projecting the AND/OR itself into a non-nullable `bool` maps NULL to `false`
-instead of throwing at read time. WHERE results are unchanged — a NULL predicate
-is not a match either way.
+from nullable operands. Two effects beyond UPDATE: a comparison over such an
+expression now renders a null-guarded form (`IS [NOT] DISTINCT FROM`, `IS TRUE`)
+rather than a plain `=`, and — because those forms are two-valued — a predicate
+like `(optional.Value && true) != true` now also matches rows where the operand is
+NULL, which plain three-valued SQL excluded. Plain AND/OR chains in WHERE are
+unchanged: a NULL operand still fails to match. Projections are unaffected in
+behavior: `ProjectionMapper.ReadScalar` still decides NULL handling by the CLR
+output type, so reading NULL into a non-nullable `bool` output keeps throwing;
+only the expression's recorded nullability is more accurate.
 
 ## D005 — Diff/push schema tool, recorded as SQL migrations
 
