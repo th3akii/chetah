@@ -128,6 +128,19 @@ public static class PostgresCompiler
         /// <summary>Renders a projection item (expression plus alias) for RETURNING.</summary>
         internal string RenderProjectionFragment(SelectItem item, int slot) => RenderSelectItem(item, slot);
 
+        /// <summary>Validates an expression used outside a clause: an UPDATE assignment value.</summary>
+        internal void ValidateExpressionFragment(SqlExpression expression)
+        {
+            RequireNoAggregate(expression, "a SET assignment");
+            ValidateTree(expression);
+        }
+
+        /// <summary>Renders an assignment value; the right of SET is a complete expression context.</summary>
+        internal string RenderSetValueFragment(SqlExpression expression) => RenderExpression(expression);
+
+        /// <summary>Renders a statement predicate (UPDATE … WHERE).</summary>
+        internal string RenderPredicateFragment(SqlExpression expression) => RenderExpression(expression);
+
         internal IReadOnlyList<CompiledParameter> ParameterSnapshot() => _parameters.ToArray();
 
         /// <summary>
@@ -694,8 +707,16 @@ public static class PostgresCompiler
             if (!_sources.TryGetValue(column.SourceId, out var table))
                 throw new ArgumentException($"SQL column '{column.Name}' references unknown source id {column.SourceId}.");
 
-            if (!table.Columns.Any(c => string.Equals(c.Name, column.Name, StringComparison.Ordinal)))
-                throw new ArgumentException($"Table '{table.Name}' has no column '{column.Name}'.");
+            var declared = table.Columns.FirstOrDefault(c => string.Equals(c.Name, column.Name, StringComparison.Ordinal))
+                ?? throw new ArgumentException($"Table '{table.Name}' has no column '{column.Name}'.");
+
+            // Core is public and manually constructible: a node that misdeclares its CLR type would
+            // pass every later type check while rendering a column of a different SQL type.
+            if (UnwrapNullable(declared.ClrType) != typeof(object)
+                && UnwrapNullable(declared.ClrType) != UnwrapNullable(column.ClrType))
+                throw new InvalidOperationException(
+                    $"Column '{column.Name}' of table '{table.Name}' is declared as {declared.ClrType.Name}, "
+                    + $"but the expression uses it as {column.ClrType.Name}.");
         }
 
         private void ValidateValue(SqlValue value)
