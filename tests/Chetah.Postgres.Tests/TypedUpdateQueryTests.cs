@@ -799,6 +799,24 @@ public class TypedUpdateQueryTests
     }
 
     [Fact]
+    public void MixedJoinConditionsKeepSqlTextParameterOrder()
+    {
+        var tag = "x";
+        var compiled = Db.Update<Student>()
+            .InnerJoin<Score>((student, score) => score.StudentId == student.Id)
+            .InnerJoin<Label>((chain, label) => label.StudentId == chain.Right.StudentId && label.Name != tag)
+            .Set(row => row.Left.Left.Nickname, "scored")
+            .Where(row => row.Right!.Name != null)
+            .Returning(row => new { row.Left.Left.Id, Tag = tag })
+            .Compile();
+
+        Assert.Equal(
+            "UPDATE \"students\" AS \"t0\" SET \"nickname\" = $1 FROM \"scores\" AS \"t1\" INNER JOIN \"labels\" AS \"t2\" ON (\"t2\".\"student_id\" = \"t1\".\"student_id\") AND (\"t2\".\"name\" IS DISTINCT FROM $2) WHERE (\"t1\".\"student_id\" = \"t0\".\"id\") AND (\"t2\".\"name\" IS NOT NULL) RETURNING \"t0\".\"id\" AS \"c0\", $3 AS \"c1\"",
+            compiled.Sql);
+        Assert.Equal(new object?[] { "scored", "x", "x" }, compiled.Parameters.Select(parameter => parameter.Value));
+    }
+
+    [Fact]
     public void ReturningAllProjectsTheWholeJoinedShape()
     {
         var compiled = Db.Update<Student>()
