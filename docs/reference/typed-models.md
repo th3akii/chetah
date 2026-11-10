@@ -168,9 +168,9 @@ public static partial class ChetahSchema
 }
 ```
 
-`Column` metadata is also what INSERT validates against: nullability, database
-defaults, identity generation and computed columns. Descriptions of the write
-surface are in [`../guide/writing-data.md`](../guide/writing-data.md).
+`Column` metadata is also what INSERT and UPDATE validate against: nullability,
+database defaults, identity generation and computed columns. Descriptions of the
+write surface are in [`../guide/writing-data.md`](../guide/writing-data.md).
 
 `Chetah.Schema.g.cs` holds the rest of the registry, so the public API is
 unchanged whether you use `split` or `single`:
@@ -368,7 +368,7 @@ Backward compatibility of milestone 001 is covered by the unchanged
 
 ## Deliberate limits
 
-Not implemented, not hidden: `UPDATE`/`DELETE` (INSERT is documented in
+Not implemented, not hidden: `DELETE` (INSERT and UPDATE are documented in
 [`../guide/writing-data.md`](../guide/writing-data.md)), SQL Server, Roslyn
 source generators, automatic relationship management, RIGHT/FULL/CROSS joins.
 Schema-to-database tooling and catalog introspection live in `src/Chetah.Db`

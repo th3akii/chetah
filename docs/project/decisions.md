@@ -556,7 +556,8 @@ typed builder lives in `Chetah.Postgres` and reuses the generated binding.
 **Unsupported, deliberately:** partial conflict targets (`ON CONFLICT … WHERE`),
 expression conflict targets, arbitrary `EXCLUDED` expressions, `OVERRIDING
 SYSTEM VALUE`, UPDATE/DELETE, and transaction APIs. Each is a separate feature,
-not an inference from this one.
+not an inference from this one. (UPDATE followed in D012; DELETE is still
+unsupported.)
 
 **Consequences:**
 
@@ -570,3 +571,73 @@ not an inference from this one.
 - Revisit trigger: if partial-index conflict targets become necessary, extend
   `InsertConflict` with a validated predicate expression rather than adding a
   raw SQL escape hatch.
+
+## D012 — UPDATE is an immutable Core query over the SELECT predicate and RETURNING
+
+**Date:** 2026-11-10 (Stage 3, UPDATE)
+
+**Decision:** UPDATE is modelled in `Chetah.Core` as an immutable `UpdateQuery`
+(table, assignments, optional predicate, optional returning), compiled by
+`PostgresUpdateCompiler`, and executed through the existing `PostgresDb`
+parameter/reader path. `TypedUpdateQuery<T>` is the fluent half and reuses the
+generated binding, the SELECT expression translator and the shared `RETURNING`
+projection. D011's "UPDATE/DELETE unsupported" list is superseded for UPDATE.
+
+**Details:**
+
+- One statement form: `UPDATE <table> SET … [WHERE …] [RETURNING …]`. No
+  `UPDATE … FROM`, no joins, no `OVERRIDING SYSTEM VALUE`.
+- An assignment is `UpdateAssignment(column, SqlExpression)`. Values are
+  `SqlValue` parameters; `SetDefault` is `SqlDefault` and renders `DEFAULT`;
+  column references and arithmetic are the existing translator's nodes rendered
+  with source-0 bare columns (`"age"`, not `"t0"."age"`). No parallel expression
+  translator and no SQL fragment API.
+- `Set` is generic over the assigned type in **both** parameters
+  (`Set<TValue>(Expression<Func<T, TValue>> column, TValue value)` and the same
+  with an `Expression<Func<T, TValue>>` value), so a column and an incompatible
+  CLR type have no common type argument and the call does not compile. C#
+  implicit conversions still apply, and they split two ways: a widened *value*
+  (`int` into a `long` column) leaves the selector a plain member and is fine,
+  while a *converted column* (`Set(s => s.Id, 5L)` on an `int` column) makes the
+  compiler wrap the selector in a conversion — the fluent call detects that and
+  refuses, so a narrowing needs an explicit cast on the value and never happens
+  silently. The compiler then checks the SQL kind: identical scalar types or a
+  numeric pair, nothing else.
+- Nullability is judged from the table's column metadata, not from the model
+  property type: a `NOT NULL text` column is still a nullable CLR `string`, so
+  the property alone cannot prove a non-null value. The check walks the
+  assignment expression with the translator's own rules (COALESCE, CASE,
+  IS NULL, comparisons), so a nullable expression that cannot yield NULL is
+  accepted and a nullable one into a `NOT NULL` column is refused.
+- Generated (computed) columns are never assignable; `GENERATED ALWAYS AS
+  IDENTITY` accepts only `DEFAULT`; `DEFAULT` on a `NOT NULL` column without a
+  default is refused. Duplicate assignments and unknown columns are rejected
+  before rendering. Constraint enforcement (CHECK, UNIQUE, FK) stays
+  PostgreSQL's job and surfaces as `PostgresException`.
+- `Where` accepts the SELECT predicate lambda and is translated by the same
+  translator, so null-safe comparisons, membership snapshots and captured-value
+  folding behave exactly as in SELECT. Repeated calls combine with AND.
+- Because "update every row" is a different intention from "match nothing", the
+  fluent layer requires `AllRows()` for a predicate-free statement; `AllRows()`
+  and `Where()` are mutually exclusive, and `Compile()` throws when neither
+  scope was chosen. The Core record keeps the predicate optional so the provider
+  contract mirrors SELECT.
+- Parameter order is rendering order: SET values, then WHERE, then RETURNING.
+  `Compile()` stays pure. Executing without RETURNING returns the affected-row
+  count through `ExecuteNonQueryAsync`; with RETURNING the shared
+  `ReturningQuery<TResult>` runner maps rows and its terminals judge zero/one/many.
+
+**Unsupported, deliberately:** `UPDATE … FROM`/joins, expressions outside the
+frozen translator surface, aggregates in SET, partial-index or row-lock clauses,
+and DELETE. Each is a separate feature, not an inference from this one.
+
+**Consequences:**
+
+- `TypedUpdateReturningQuery<T, TResult>` mirrors the INSERT returning type;
+  both now delegate to the same internal runner, so row-count judgment and
+  mapper creation exist once.
+- `PostgresCompiler.Compilation` gained three fragment hooks (validate an
+  assignment expression, render an assignment value, render a predicate) rather
+  than a second renderer.
+- Revisit trigger: when `UPDATE … FROM` is genuinely needed, extend
+  `UpdateQuery` with validated extra sources instead of adding raw SQL.
