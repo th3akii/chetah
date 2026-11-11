@@ -160,11 +160,12 @@ ad-hoc queries that do not come from the typed chain.
 count statement — it cannot change how many rows a query returns — but it is
 still validated, so an invalid chain fails here exactly as it would on `ToListAsync`.
 
-Also not implemented: `DELETE`, transactions, RIGHT/FULL/CROSS joins,
-automatic relationship loading, and dialects other than PostgreSQL. INSERT and
-UPDATE are covered by [`writing-data.md`](writing-data.md). See
+Also not implemented: transactions, RIGHT/FULL/CROSS joins,
+automatic relationship loading, and dialects other than PostgreSQL. INSERT,
+UPDATE and DELETE are covered by [`writing-data.md`](writing-data.md). See
 [`roadmap.md`](../project/roadmap.md) for the stage each belongs to, and
-[`decisions.md`](../project/decisions.md) D004/D009/D011/D012 for the rationale.
+[`decisions.md`](../project/decisions.md) D004/D009/D011/D012/D013 for the
+rationale.
 
 ## Checklist for a new query
 

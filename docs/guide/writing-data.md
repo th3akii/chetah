@@ -1,14 +1,14 @@
-# Writing data with INSERT and UPDATE — a guide
+# Writing data with INSERT, UPDATE and DELETE — a guide
 
-> Status: delivered · covers `db.Insert<T>()`, conflict handling, `db.Update<T>()`
-> and `RETURNING`
+> Status: delivered · covers `db.Insert<T>()`, conflict handling, `db.Update<T>()`,
+> `db.Delete<T>()` and `RETURNING`
 > Reference context: [`typed-models.md`](../reference/typed-models.md),
 > [`querying.md`](querying.md)
 
-INSERT and UPDATE use the same generated model binding as SELECT: `T` resolves to
-its table, values are parameterized, and the statement is compiled before a
-connection opens. PostgreSQL identifier quoting and parameter numbering are the
-compiler's job; user values never become SQL text.
+INSERT, UPDATE and DELETE use the same generated model binding as SELECT: `T`
+resolves to its table, values are parameterized, and the statement is compiled
+before a connection opens. PostgreSQL identifier quoting and parameter numbering
+are the compiler's job; user values never become SQL text.
 
 ## Insert one row
 
@@ -259,6 +259,84 @@ PostgreSQL rules this API follows:
 `RETURNING` works exactly as for INSERT — any projection shape, the same
 terminals, and an empty result when the predicate matched no row.
 
+## Delete rows
+
+```csharp
+var deleted = await db.Delete<Student>()
+    .Where(s => s.Id == 1)
+    .ExecuteAsync();                            // deleted row count
+
+var removed = await db.Delete<Student>()
+    .Where(s => s.Age < 18)
+    .Returning(s => new { s.Id, s.FirstName })
+    .ToListAsync();                             // one row per deleted row
+```
+
+```sql
+DELETE FROM "students" WHERE "id" = $1
+```
+
+A DELETE has nothing to assign: `Where` is the same SELECT predicate, and
+`Returning`/`ReturningAll` accept the same projections and the same terminals as
+INSERT and UPDATE (`ToListAsync`, `FirstAsync`, `FirstOrDefaultAsync`,
+`SingleAsync`, `SingleOrDefaultAsync`). Without `RETURNING`, `ExecuteAsync`
+returns the number of rows PostgreSQL deleted.
+
+### Scoping a delete
+
+A DELETE with no `WHERE` removes every row, so it has to be requested
+explicitly:
+
+```csharp
+var purged = await db.Delete<Student>()
+    .AllRows()
+    .ExecuteAsync();                            // every row removed
+```
+
+`AllRows()` and `Where()` are mutually exclusive, and `Compile()` (or any
+terminal) throws when neither was chosen. Repeated `Where` calls combine with
+`AND`, and captured values are folded at the call exactly as in SELECT.
+
+### Delete from other tables
+
+```csharp
+var purged = await db.Delete<Student>()
+    .InnerJoin<Score>((student, score) => score.StudentId == student.Id)
+    .Where(row => row.Right.Value < 50)
+    .Returning(row => new { row.Left.Id, row.Right.Label })
+    .ToListAsync();
+```
+
+```sql
+DELETE FROM "students" AS "t0"
+USING "scores" AS "t1"
+WHERE ("t1"."student_id" = "t0"."id") AND ("t1"."value" < $1)
+RETURNING "t0"."id" AS "c0", "t1"."label" AS "c1"
+```
+
+Joins are the SELECT joins: `InnerJoin`/`LeftJoin` take `(left, right) => …`, the
+row type becomes `Joined<T, TJoin>`, chained joins nest the same way
+(`row.Left.Left`), and every source gets a compiler alias. Because DELETE has no
+`SET`, joined columns are usable only in `Where` and `Returning`.
+
+PostgreSQL rules this API follows:
+
+- The first join links the target to the first source and must be `InnerJoin`.
+  `DELETE … USING` has no outer target: a target row without a source match is
+  never deleted, so a target-side LEFT join cannot exist.
+- A later join condition that mentions the target cannot appear in `USING`
+  (PostgreSQL rejects target references there). Chetah moves an `INNER JOIN`
+  condition into `WHERE` — equivalent for inner joins — and refuses the same
+  shape for a `LEFT JOIN`, where it is not equivalent. Join through the previous
+  source instead, e.g. `label.StudentId == score.StudentId`.
+- Each target row is deleted **once**, even when several source rows match it.
+  The affected count is deleted target rows, and `RETURNING` yields one row per
+  deleted target row, carrying one arbitrary matching source row.
+- `AllRows()` still confirms an unfiltered delete; with a join it means every
+  target row that has a match.
+- A left-joined row is nullable, in `Where` and in `Returning` alike:
+  `row.Right == null` tests that no source row matched.
+
 ## Inspect the SQL
 
 ```csharp
@@ -289,6 +367,19 @@ var compiled = db.Update<Student>()
 // UPDATE "students" SET "age" = "age" + $1 WHERE "id" = $2 RETURNING "id" AS "c0", "age" AS "c1"
 ```
 
+For DELETE there are no SET values, so the order is the `USING` join
+conditions, then WHERE (the first join's condition, any moved conditions, then
+the predicate), then RETURNING:
+
+```csharp
+var compiled = db.Delete<Student>()
+    .Where(s => s.Id == 1)
+    .Returning(s => new { s.Id })
+    .Compile();
+
+// DELETE FROM "students" WHERE "id" = $1 RETURNING "id" AS "c0"
+```
+
 ## What is refused
 
 | Refused | Reason / use instead |
@@ -299,16 +390,17 @@ var compiled = db.Update<Student>()
 | `OVERRIDING SYSTEM VALUE` for `GENERATED ALWAYS` identity columns | supply a `BY DEFAULT` identity column instead |
 | values for generated columns, or non-`DEFAULT` values for `GENERATED ALWAYS` identity columns | generated values are read-only; identity `ALWAYS` only accepts `DEFAULT` |
 | rows with different column sets in one statement | split the statement or supply every column |
-| an unscoped UPDATE (`Compile` throws) | call `AllRows()` to confirm a full-table update |
+| an unscoped UPDATE or DELETE (`Compile` throws) | call `AllRows()` to confirm a full-table write |
 | assigning a joined column (`Set(row => row.Right.Value, …)`) | only the target table's columns are assignable |
-| `LeftJoin` as the first update source | `UPDATE … FROM` cannot outer-join the target; use `InnerJoin` |
+| `LeftJoin` as the first update or delete source | `UPDATE … FROM` and `DELETE … USING` cannot outer-join the target; use `InnerJoin` |
 | a `LeftJoin` condition that references the target | join through the previous source instead |
-| `UPDATE … FROM` referencing a table without joining it (no implicit CROSS JOIN sources) | add the source explicitly with `InnerJoin` |
+| `UPDATE … FROM` or `DELETE … USING` referencing a table without joining it (no implicit CROSS JOIN sources) | add the source explicitly with `InnerJoin` |
 | expressions outside the SELECT translator surface (`Trim()`, method calls, client evaluation) | no client-side evaluation exists, so they fail loudly before I/O |
 | unsupported CLR parameter types | only `int`, `long`, `decimal`, `string`, `bool`, `Guid` and `DateTime` are supported today |
-| `DELETE` | not implemented yet; the shared `RETURNING` model is ready for it |
 | transaction management | kept out of this API; connections and commands are disposed per execution |
 
 Affected-row counts come from `ExecuteNonQueryAsync`. Without `RETURNING`, the
-count is the number of inserted or updated rows (an UPDATE counts the rows its
-`WHERE` matched, `0` when it matched none); ignored conflicts are not counted.
+count is the number of inserted, updated or deleted rows (an UPDATE or DELETE
+counts the rows its `WHERE` matched — each target row once, even when several
+joined sources match it — and `0` when it matched none); ignored conflicts are
+not counted.

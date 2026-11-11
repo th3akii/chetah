@@ -570,8 +570,7 @@ typed builder lives in `Chetah.Postgres` and reuses the generated binding.
 **Unsupported, deliberately:** partial conflict targets (`ON CONFLICT … WHERE`),
 expression conflict targets, arbitrary `EXCLUDED` expressions, `OVERRIDING
 SYSTEM VALUE`, UPDATE/DELETE, and transaction APIs. Each is a separate feature,
-not an inference from this one. (UPDATE followed in D012; DELETE is still
-unsupported.)
+not an inference from this one. (UPDATE followed in D012 and DELETE in D013.)
 
 **Consequences:**
 
@@ -595,13 +594,15 @@ unsupported.)
 `PostgresUpdateCompiler`, and executed through the existing `PostgresDb`
 parameter/reader path. `TypedUpdateQuery<T>` is the fluent half and reuses the
 generated binding, the SELECT expression translator and the shared `RETURNING`
-projection. D011's "UPDATE/DELETE unsupported" list is superseded for UPDATE.
+projection. D011's "UPDATE/DELETE unsupported" list is superseded for UPDATE,
+and for DELETE by D013.
 
 **Details:**
 
 - One statement form: `UPDATE <table> [AS t0] SET … [FROM joins] [WHERE …]
-  [RETURNING …]`. No `OVERRIDING SYSTEM VALUE`, no locking clause, no DELETE. The
-  FROM/increment semantics are recorded in the revision at the end of this entry.
+  [RETURNING …]`. No `OVERRIDING SYSTEM VALUE` and no locking clause; DELETE has
+  its own entry in D013. The FROM/increment semantics are recorded in the
+  revision at the end of this entry.
 - An assignment is `UpdateAssignment(column, SqlExpression)`. Values are
   `SqlValue` parameters; `SetDefault` is `SqlDefault` and renders `DEFAULT`;
   column references and arithmetic are the existing translator's nodes, rendered
@@ -677,9 +678,9 @@ translator, no alias strings, no raw SQL:
   match. RETURNING can project both sides through the existing projection mapper.
 
 **Unsupported, deliberately:** expressions outside the frozen translator surface,
-aggregates in SET, partial-index or row-lock clauses, `UPDATE … FROM` with
-target-referencing LEFT join conditions, and DELETE. Each is a separate feature,
-not an inference from this one.
+aggregates in SET, partial-index or row-lock clauses, and `UPDATE … FROM` with
+target-referencing LEFT join conditions. Each is a separate feature, not an
+inference from this one. (DELETE followed in D013.)
 
 **Consequences:**
 
@@ -690,5 +691,94 @@ not an inference from this one.
   assignment expression, render an assignment value, render a predicate) plus
   join-fragment rendering, rather than a second renderer.
 - Revisit trigger (already used): `UpdateQuery` now carries validated extra
-  sources; the next extension point is DELETE, which reuses the same source
-  model, predicate and RETURNING.
+  sources; the next extension point was DELETE, which reused the same source
+  model, predicate and RETURNING (delivered as D013).
+
+## D013 — DELETE is an immutable Core query over the shared join sources, predicate and RETURNING
+
+**Date:** 2026-11-11 (Stage 3, DELETE)
+
+**Decision:** DELETE is modelled in `Chetah.Core` as an immutable `DeleteQuery`
+(table, joins, optional predicate, optional returning — no assignments),
+compiled by `PostgresDeleteCompiler`, and executed through the existing
+`PostgresDb` parameter/reader path. `TypedDeleteQuery<T>` is the fluent half and
+reuses the generated binding, the SELECT expression translator, the shared
+`RETURNING` projection that `TypedDeleteReturningQuery<T, TResult>` wraps, and
+the join-source assembly UPDATE and DELETE now share. The "DELETE is still
+unsupported" statements in D011 and D012 are superseded.
+
+**Details:**
+
+- One statement form: `DELETE FROM <table> [AS t0] [USING joins] [WHERE …]
+  [RETURNING …]`. Without joins the statement is unaliased and renders bare
+  target columns, byte for byte in the style of a single-table UPDATE:
+  `DELETE FROM "students" WHERE "id" = $1 RETURNING "id" AS "c0"`.
+- With joins every source is aliased and qualified, and the first join becomes
+  the `USING` entry; later joins render there exactly as they do in
+  `UPDATE … FROM`, including an INNER join whose condition references source 0
+  rendering as `CROSS JOIN` with its condition moved into `WHERE`:
+  `DELETE FROM "students" AS "t0" USING "scores" AS "t1" WHERE
+  ("t1"."student_id" = "t0"."id") AND ("t1"."value" < $1) RETURNING "t0"."id"
+  AS "c0"`.
+- `Where` is the SELECT predicate lambda, translated by the same translator and
+  subject to the same snapshot rules (null-safe comparisons, folded captured
+  values, `AND`-combined repeats). There is no SET, so DELETE carries no
+  assignment, type-compatibility or assignment-nullability rules at all; the
+  only validated inputs are the predicate and the projection.
+- The fluent layer repeats D012's safety shape: `AllRows()` is required for a
+  predicate-free statement, `AllRows()` and `Where()` are mutually exclusive,
+  `Compile()` throws when neither was chosen, and `LeftJoin` as the first source
+  is refused eagerly by the builder and again by the compiler. Parameter order
+  is rendering order: `USING` join conditions, then WHERE (join 0's condition,
+  moved conditions, predicate), then RETURNING. `Compile()` stays pure and never
+  opens a connection.
+- `Returning`/`ReturningAll` are the shared `ReturningQuery<TResult>` runner, so
+  projections, terminals and compiled mapping are the ones INSERT and UPDATE
+  already use; `ExecuteAsync` returns the deleted-row count through
+  `ExecuteNonQueryAsync`. The translator runs with `allowAggregates: false`,
+  exactly as for UPDATE.
+- **Shared join sources, not a copy.** The `UPDATE … FROM` assembly — source
+  aliasing, `ReferencesSource`, condition combining, first-join validation and
+  the CROSS-JOIN/moved-condition rules — was extracted from
+  `PostgresUpdateCompiler` into the internal `PostgresJoinSources` helper
+  (`src/Chetah.Postgres/Compilation`), parameterized by the statement keyword for
+  error text, and both compilers call it. UPDATE SQL text, parameter order and
+  every existing assertion (messages containing "first join", "LEFT-joined",
+  "AllRows", "target table") are unchanged; only the shared
+  `RenderJoinWithoutConditionFragment` wording was generalized so it no longer
+  names UPDATE.
+
+**PostgreSQL semantics (verified against PostgreSQL 17.11):**
+
+- A `DELETE … USING` whose target row matches several source rows deletes each
+  target once, and the command tag counts deleted target rows rather than joined
+  rows. `RETURNING` yields one row per deleted target row, carrying one
+  arbitrary matching source row.
+- The target alias is not visible inside a `USING` join condition
+  (`ERROR: invalid reference to FROM-clause entry for table "t0"`), exactly as
+  in `UPDATE … FROM`; the `CROSS JOIN` + `WHERE` rewrite is what keeps the inner
+  case expressible.
+- A LEFT join between USING sources, `NULL`-extended columns in `RETURNING`, the
+  presence-marked derived LEFT source and self-joins through an alias all behave
+  as they do for SELECT and UPDATE. A left-joined row stays nullable in `Where`
+  and `Returning` regardless of its column metadata, so absence is tested with
+  `row.Right == null` rather than by primary-key assumptions.
+
+**Unsupported, deliberately:** `USING` sources the chain never joined (there are
+no implicit CROSS JOIN sources), target-referencing LEFT join conditions,
+aggregates in `Where`/`Returning`, expressions outside the frozen translator
+surface, `FOR UPDATE`-style row-lock clauses, `TRUNCATE`, and transaction APIs.
+Each is a separate feature, not an inference from this one.
+
+**Consequences:**
+
+- All three write statements now share one Core vocabulary (`Table`,
+  `JoinClause`, `SqlExpression`, `ReturningClause`) and one join-source builder;
+  a further write form adds a statement shape, not new infrastructure.
+- `DeleteQuery` is the smallest of the three records — no assignments — which is
+  the concrete evidence for D011's prediction that no redesign would be needed
+  for the last write path.
+- Revisit trigger: a delete that needs target-referencing LEFT join semantics
+  cannot use the moving rewrite; the alternative is a subquery form
+  (`DELETE … WHERE "id" IN (SELECT …)`), which would be a new decision rather
+  than a variation of this one.

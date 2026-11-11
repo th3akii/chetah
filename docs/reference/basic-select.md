@@ -270,13 +270,12 @@ constant row at `LIMIT 1`, and `CountAsync` compiles a direct `SELECT COUNT(*)`
 or a counted derived table for queries whose own clauses reduce the row set —
 see [`typed-models.md`](typed-models.md#step-4--typed-queries).
 
-Not implemented, not hidden: `DELETE`, transactions, RIGHT/FULL/CROSS
-joins and automatic relationship loading (Stage 5 candidates), expressions
-outside the frozen translator surface (they fail explicitly before any
-connection), dialects other than PostgreSQL. `INSERT`/`UPDATE` and their typed
-`RETURNING` chains are documented in
-[`../guide/writing-data.md`](../guide/writing-data.md). Typed model generation
-and typed column/nullability metadata arrived in milestone 002; write-side
+Not implemented, not hidden: transactions, RIGHT/FULL/CROSS joins and automatic
+relationship loading (Stage 5 candidates), expressions outside the frozen
+translator surface (they fail explicitly before any connection), dialects other
+than PostgreSQL. `INSERT`/`UPDATE`/`DELETE` and their typed `RETURNING` chains
+are documented in [`../guide/writing-data.md`](../guide/writing-data.md).
+Typed model generation and typed column/nullability metadata arrived in milestone 002; write-side
 column metadata (`IsNullable`, `HasDefault`, identity/computed generation)
 arrived with INSERT. The boundaries above (Core data objects / dialect compiler
 / executor) were chosen so those additions extend rather than reshape the code.

@@ -368,9 +368,9 @@ Backward compatibility of milestone 001 is covered by the unchanged
 
 ## Deliberate limits
 
-Not implemented, not hidden: `DELETE` (INSERT and UPDATE are documented in
-[`../guide/writing-data.md`](../guide/writing-data.md)), SQL Server, Roslyn
-source generators, automatic relationship management, RIGHT/FULL/CROSS joins.
+Not implemented, not hidden: SQL Server, Roslyn source generators, automatic
+relationship management, RIGHT/FULL/CROSS joins. INSERT, UPDATE and DELETE are
+documented in [`../guide/writing-data.md`](../guide/writing-data.md).
 Schema-to-database tooling and catalog introspection live in `src/Chetah.Db`
 instead — see [`schema-tooling.md`](schema-tooling.md).
 Query lambdas outside the
