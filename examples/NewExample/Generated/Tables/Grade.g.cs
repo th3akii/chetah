@@ -5,31 +5,29 @@
 
 #nullable enable
 
-using Npgsql;
-
 namespace Chetah.Generated;
 
 public static class GradesTable
 {
-    public static readonly Chetah.Column<long> StudentId = new("student_id") { IsNullable = false };
-    public static readonly Chetah.Column<long> OfferingId = new("offering_id") { IsNullable = false };
-    public static readonly Chetah.Column<int> Grade = new("grade") { IsNullable = false };
-    public static readonly Chetah.Column<DateTime> GradedAt = new("graded_at") { IsNullable = false, HasDefault = true };
-    public static readonly Chetah.Column<string?> Comment = new("comment");
+    public static readonly global::Chetah.Column<long> StudentId = new("student_id") { IsNullable = false, StoreType = "int8" };
+    public static readonly global::Chetah.Column<long> OfferingId = new("offering_id") { IsNullable = false, StoreType = "int8" };
+    public static readonly global::Chetah.Column<int> GradeColumn = new("grade") { IsNullable = false, StoreType = "int4" };
+    public static readonly global::Chetah.Column<global::System.DateTime> GradedAt = new("graded_at") { IsNullable = false, HasDefault = true, StoreType = "timestamp" };
+    public static readonly global::Chetah.Column<string?> Comment = new("comment") { StoreType = "text" };
 
-    public static readonly Chetah.Table Table = new("grades", new Chetah.Column[] { StudentId, OfferingId, Grade, GradedAt, Comment });
+    public static readonly global::Chetah.Table Table = new("grades", new global::Chetah.Column[] { StudentId, OfferingId, GradeColumn, GradedAt, Comment });
 
-    public static readonly System.Collections.Generic.IReadOnlyDictionary<string, string> PropertyColumns =
-        new System.Collections.Generic.Dictionary<string, string>(System.StringComparer.Ordinal)
+    public static readonly global::System.Collections.Generic.IReadOnlyDictionary<string, string> PropertyColumns =
+        new global::System.Collections.Generic.Dictionary<string, string>(global::System.StringComparer.Ordinal)
         {
             [nameof(Grade.StudentId)] = "student_id",
             [nameof(Grade.OfferingId)] = "offering_id",
-            [nameof(Grade.Grade)] = "grade",
+            [nameof(Grade.GradeColumn)] = "grade",
             [nameof(Grade.GradedAt)] = "graded_at",
             [nameof(Grade.Comment)] = "comment",
         };
 
-    public static Grade Map(NpgsqlDataReader reader)
+    public static Grade Map(global::Npgsql.NpgsqlDataReader reader)
     {
         var commentOrdinal = reader.GetOrdinal("comment");
 
@@ -42,7 +40,7 @@ public static class GradesTable
         );
     }
 
-    public static Grade MapAt(NpgsqlDataReader reader, int offset)
+    public static Grade MapAt(global::Npgsql.NpgsqlDataReader reader, int offset)
     {
         return new Grade(
             reader.GetInt64(offset + 0),
@@ -55,10 +53,10 @@ public static class GradesTable
 
 }
 
-public sealed record Grade(long StudentId, long OfferingId, int Grade, DateTime GradedAt, string? Comment);
+public sealed record Grade(long StudentId, long OfferingId, int GradeColumn, global::System.DateTime GradedAt, string? Comment);
 
 public static partial class ChetahSchema
 {
-    public static readonly Chetah.Postgres.TableBinding<Grade> GradeBinding = new(GradesTable.Table, GradesTable.Map, GradesTable.MapAt, GradesTable.PropertyColumns);
+    public static readonly global::Chetah.Postgres.TableBinding<Grade> GradeBinding = new(GradesTable.Table, GradesTable.Map, GradesTable.MapAt, GradesTable.PropertyColumns);
 }
 

@@ -5,21 +5,19 @@
 
 #nullable enable
 
-using Npgsql;
-
 namespace Chetah.Generated;
 
 public static class EnrollmentsTable
 {
-    public static readonly Chetah.Column<long> StudentId = new("student_id") { IsNullable = false };
-    public static readonly Chetah.Column<long> OfferingId = new("offering_id") { IsNullable = false };
-    public static readonly Chetah.Column<DateTime> EnrolledAt = new("enrolled_at") { IsNullable = false, HasDefault = true };
-    public static readonly Chetah.Column<string> Status = new("status") { IsNullable = false, HasDefault = true };
+    public static readonly global::Chetah.Column<long> StudentId = new("student_id") { IsNullable = false, StoreType = "int8" };
+    public static readonly global::Chetah.Column<long> OfferingId = new("offering_id") { IsNullable = false, StoreType = "int8" };
+    public static readonly global::Chetah.Column<global::System.DateTime> EnrolledAt = new("enrolled_at") { IsNullable = false, HasDefault = true, StoreType = "timestamp" };
+    public static readonly global::Chetah.Column<string> Status = new("status") { IsNullable = false, HasDefault = true, StoreType = "varchar(20)" };
 
-    public static readonly Chetah.Table Table = new("enrollments", new Chetah.Column[] { StudentId, OfferingId, EnrolledAt, Status });
+    public static readonly global::Chetah.Table Table = new("enrollments", new global::Chetah.Column[] { StudentId, OfferingId, EnrolledAt, Status });
 
-    public static readonly System.Collections.Generic.IReadOnlyDictionary<string, string> PropertyColumns =
-        new System.Collections.Generic.Dictionary<string, string>(System.StringComparer.Ordinal)
+    public static readonly global::System.Collections.Generic.IReadOnlyDictionary<string, string> PropertyColumns =
+        new global::System.Collections.Generic.Dictionary<string, string>(global::System.StringComparer.Ordinal)
         {
             [nameof(Enrollment.StudentId)] = "student_id",
             [nameof(Enrollment.OfferingId)] = "offering_id",
@@ -27,7 +25,7 @@ public static class EnrollmentsTable
             [nameof(Enrollment.Status)] = "status",
         };
 
-    public static Enrollment Map(NpgsqlDataReader reader)
+    public static Enrollment Map(global::Npgsql.NpgsqlDataReader reader)
     {
         return new Enrollment(
             reader.GetInt64(reader.GetOrdinal("student_id")),
@@ -37,7 +35,7 @@ public static class EnrollmentsTable
         );
     }
 
-    public static Enrollment MapAt(NpgsqlDataReader reader, int offset)
+    public static Enrollment MapAt(global::Npgsql.NpgsqlDataReader reader, int offset)
     {
         return new Enrollment(
             reader.GetInt64(offset + 0),
@@ -49,10 +47,10 @@ public static class EnrollmentsTable
 
 }
 
-public sealed record Enrollment(long StudentId, long OfferingId, DateTime EnrolledAt, string Status);
+public sealed record Enrollment(long StudentId, long OfferingId, global::System.DateTime EnrolledAt, string Status);
 
 public static partial class ChetahSchema
 {
-    public static readonly Chetah.Postgres.TableBinding<Enrollment> EnrollmentBinding = new(EnrollmentsTable.Table, EnrollmentsTable.Map, EnrollmentsTable.MapAt, EnrollmentsTable.PropertyColumns);
+    public static readonly global::Chetah.Postgres.TableBinding<Enrollment> EnrollmentBinding = new(EnrollmentsTable.Table, EnrollmentsTable.Map, EnrollmentsTable.MapAt, EnrollmentsTable.PropertyColumns);
 }
 

@@ -5,21 +5,19 @@
 
 #nullable enable
 
-using Npgsql;
-
 namespace Chetah.CodeGen.Tests;
 
 public static class OrdersTable
 {
-    public static readonly Chetah.Column<int> Id = new("id") { IsNullable = false };
-    public static readonly Chetah.Column<int> UserId = new("user_id") { IsNullable = false };
-    public static readonly Chetah.Column<int> Amount = new("amount") { IsNullable = false };
-    public static readonly Chetah.Column<string?> Note = new("note");
+    public static readonly global::Chetah.Column<int> Id = new("id") { IsNullable = false, StoreType = "int4" };
+    public static readonly global::Chetah.Column<int> UserId = new("user_id") { IsNullable = false, StoreType = "int4" };
+    public static readonly global::Chetah.Column<int> Amount = new("amount") { IsNullable = false, StoreType = "int4" };
+    public static readonly global::Chetah.Column<string?> Note = new("note") { StoreType = "text" };
 
-    public static readonly Chetah.Table Table = new("orders", new Chetah.Column[] { Id, UserId, Amount, Note });
+    public static readonly global::Chetah.Table Table = new("orders", new global::Chetah.Column[] { Id, UserId, Amount, Note });
 
-    public static readonly System.Collections.Generic.IReadOnlyDictionary<string, string> PropertyColumns =
-        new System.Collections.Generic.Dictionary<string, string>(System.StringComparer.Ordinal)
+    public static readonly global::System.Collections.Generic.IReadOnlyDictionary<string, string> PropertyColumns =
+        new global::System.Collections.Generic.Dictionary<string, string>(global::System.StringComparer.Ordinal)
         {
             [nameof(Stage2Order.Id)] = "id",
             [nameof(Stage2Order.UserId)] = "user_id",
@@ -27,7 +25,7 @@ public static class OrdersTable
             [nameof(Stage2Order.Note)] = "note",
         };
 
-    public static Stage2Order Map(NpgsqlDataReader reader)
+    public static Stage2Order Map(global::Npgsql.NpgsqlDataReader reader)
     {
         var noteOrdinal = reader.GetOrdinal("note");
 
@@ -39,7 +37,7 @@ public static class OrdersTable
         );
     }
 
-    public static Stage2Order MapAt(NpgsqlDataReader reader, int offset)
+    public static Stage2Order MapAt(global::Npgsql.NpgsqlDataReader reader, int offset)
     {
         return new Stage2Order(
             reader.GetInt32(offset + 0),
@@ -55,6 +53,6 @@ public sealed record Stage2Order(int Id, int UserId, int Amount, string? Note);
 
 public static partial class ChetahSchema
 {
-    public static readonly Chetah.Postgres.TableBinding<Stage2Order> Stage2OrderBinding = new(OrdersTable.Table, OrdersTable.Map, OrdersTable.MapAt, OrdersTable.PropertyColumns);
+    public static readonly global::Chetah.Postgres.TableBinding<Stage2Order> Stage2OrderBinding = new(OrdersTable.Table, OrdersTable.Map, OrdersTable.MapAt, OrdersTable.PropertyColumns);
 }
 

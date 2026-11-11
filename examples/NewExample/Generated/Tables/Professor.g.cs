@@ -5,23 +5,21 @@
 
 #nullable enable
 
-using Npgsql;
-
 namespace Chetah.Generated;
 
 public static class InstructorsTable
 {
-    public static readonly Chetah.Column<int> Id = new("id") { IsNullable = false, HasDefault = true };
-    public static readonly Chetah.Column<int> DepartmentId = new("department_id") { IsNullable = false };
-    public static readonly Chetah.Column<string> FirstName = new("first_name") { IsNullable = false };
-    public static readonly Chetah.Column<string> LastName = new("last_name") { IsNullable = false };
-    public static readonly Chetah.Column<string> Email = new("email") { IsNullable = false };
-    public static readonly Chetah.Column<bool> Active = new("active") { IsNullable = false, HasDefault = true };
+    public static readonly global::Chetah.Column<int> Id = new("id") { IsNullable = false, HasDefault = true, StoreType = "int4" };
+    public static readonly global::Chetah.Column<int> DepartmentId = new("department_id") { IsNullable = false, StoreType = "int4" };
+    public static readonly global::Chetah.Column<string> FirstName = new("first_name") { IsNullable = false, StoreType = "varchar(80)" };
+    public static readonly global::Chetah.Column<string> LastName = new("last_name") { IsNullable = false, StoreType = "varchar(80)" };
+    public static readonly global::Chetah.Column<string> Email = new("email") { IsNullable = false, StoreType = "varchar(320)" };
+    public static readonly global::Chetah.Column<bool> Active = new("active") { IsNullable = false, HasDefault = true, StoreType = "bool" };
 
-    public static readonly Chetah.Table Table = new("instructors", new Chetah.Column[] { Id, DepartmentId, FirstName, LastName, Email, Active });
+    public static readonly global::Chetah.Table Table = new("instructors", new global::Chetah.Column[] { Id, DepartmentId, FirstName, LastName, Email, Active });
 
-    public static readonly System.Collections.Generic.IReadOnlyDictionary<string, string> PropertyColumns =
-        new System.Collections.Generic.Dictionary<string, string>(System.StringComparer.Ordinal)
+    public static readonly global::System.Collections.Generic.IReadOnlyDictionary<string, string> PropertyColumns =
+        new global::System.Collections.Generic.Dictionary<string, string>(global::System.StringComparer.Ordinal)
         {
             [nameof(Professor.Id)] = "id",
             [nameof(Professor.DepartmentId)] = "department_id",
@@ -31,7 +29,7 @@ public static class InstructorsTable
             [nameof(Professor.Active)] = "active",
         };
 
-    public static Professor Map(NpgsqlDataReader reader)
+    public static Professor Map(global::Npgsql.NpgsqlDataReader reader)
     {
         return new Professor(
             reader.GetInt32(reader.GetOrdinal("id")),
@@ -43,7 +41,7 @@ public static class InstructorsTable
         );
     }
 
-    public static Professor MapAt(NpgsqlDataReader reader, int offset)
+    public static Professor MapAt(global::Npgsql.NpgsqlDataReader reader, int offset)
     {
         return new Professor(
             reader.GetInt32(offset + 0),
@@ -61,6 +59,6 @@ public sealed record Professor(int Id, int DepartmentId, string FirstName, strin
 
 public static partial class ChetahSchema
 {
-    public static readonly Chetah.Postgres.TableBinding<Professor> ProfessorBinding = new(InstructorsTable.Table, InstructorsTable.Map, InstructorsTable.MapAt, InstructorsTable.PropertyColumns);
+    public static readonly global::Chetah.Postgres.TableBinding<Professor> ProfessorBinding = new(InstructorsTable.Table, InstructorsTable.Map, InstructorsTable.MapAt, InstructorsTable.PropertyColumns);
 }
 

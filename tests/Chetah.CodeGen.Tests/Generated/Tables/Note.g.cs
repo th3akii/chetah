@@ -5,25 +5,23 @@
 
 #nullable enable
 
-using Npgsql;
-
 namespace Chetah.CodeGen.Tests;
 
 public static class NotesTable
 {
-    public static readonly Chetah.Column<int> Id = new("id") { IsNullable = false, HasDefault = true };
-    public static readonly Chetah.Column<string?> Body = new("body");
+    public static readonly global::Chetah.Column<int> Id = new("id") { IsNullable = false, HasDefault = true, StoreType = "int4" };
+    public static readonly global::Chetah.Column<string?> Body = new("body") { StoreType = "text" };
 
-    public static readonly Chetah.Table Table = new("notes", new Chetah.Column[] { Id, Body });
+    public static readonly global::Chetah.Table Table = new("notes", new global::Chetah.Column[] { Id, Body });
 
-    public static readonly System.Collections.Generic.IReadOnlyDictionary<string, string> PropertyColumns =
-        new System.Collections.Generic.Dictionary<string, string>(System.StringComparer.Ordinal)
+    public static readonly global::System.Collections.Generic.IReadOnlyDictionary<string, string> PropertyColumns =
+        new global::System.Collections.Generic.Dictionary<string, string>(global::System.StringComparer.Ordinal)
         {
             [nameof(Note.Id)] = "id",
             [nameof(Note.Body)] = "body",
         };
 
-    public static Note Map(NpgsqlDataReader reader)
+    public static Note Map(global::Npgsql.NpgsqlDataReader reader)
     {
         var bodyOrdinal = reader.GetOrdinal("body");
 
@@ -33,7 +31,7 @@ public static class NotesTable
         );
     }
 
-    public static Note MapAt(NpgsqlDataReader reader, int offset)
+    public static Note MapAt(global::Npgsql.NpgsqlDataReader reader, int offset)
     {
         return new Note(
             reader.GetInt32(offset + 0),
@@ -47,6 +45,6 @@ public sealed record Note(int Id, string? Body);
 
 public static partial class ChetahSchema
 {
-    public static readonly Chetah.Postgres.TableBinding<Note> NoteBinding = new(NotesTable.Table, NotesTable.Map, NotesTable.MapAt, NotesTable.PropertyColumns);
+    public static readonly global::Chetah.Postgres.TableBinding<Note> NoteBinding = new(NotesTable.Table, NotesTable.Map, NotesTable.MapAt, NotesTable.PropertyColumns);
 }
 

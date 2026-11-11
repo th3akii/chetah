@@ -10,7 +10,7 @@ namespace Chetah.CodeGen.Tests;
 /// <summary>Labels of the PostgreSQL enum <c>public.user_status</c>, in declaration order.</summary>
 public static class UserStatus
 {
-    public static readonly System.Collections.Generic.IReadOnlyList<string> Values = new string[]
+    public static readonly global::System.Collections.Generic.IReadOnlyList<string> Values = new string[]
     {
         "active",
         "inactive",

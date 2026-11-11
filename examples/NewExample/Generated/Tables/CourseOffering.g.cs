@@ -5,22 +5,20 @@
 
 #nullable enable
 
-using Npgsql;
-
 namespace Chetah.Generated;
 
 public static class CourseOfferingsTable
 {
-    public static readonly Chetah.Column<long> Id = new("id") { IsNullable = false, HasDefault = true };
-    public static readonly Chetah.Column<int> CourseId = new("course_id") { IsNullable = false };
-    public static readonly Chetah.Column<int> SemesterId = new("semester_id") { IsNullable = false };
-    public static readonly Chetah.Column<int?> ProfessorId = new("professor_id");
-    public static readonly Chetah.Column<string> GroupCode = new("group_code") { IsNullable = false, HasDefault = true };
+    public static readonly global::Chetah.Column<long> Id = new("id") { IsNullable = false, HasDefault = true, StoreType = "int8" };
+    public static readonly global::Chetah.Column<int> CourseId = new("course_id") { IsNullable = false, StoreType = "int4" };
+    public static readonly global::Chetah.Column<int> SemesterId = new("semester_id") { IsNullable = false, StoreType = "int4" };
+    public static readonly global::Chetah.Column<int?> ProfessorId = new("professor_id") { StoreType = "int4" };
+    public static readonly global::Chetah.Column<string> GroupCode = new("group_code") { IsNullable = false, HasDefault = true, StoreType = "varchar(12)" };
 
-    public static readonly Chetah.Table Table = new("course_offerings", new Chetah.Column[] { Id, CourseId, SemesterId, ProfessorId, GroupCode });
+    public static readonly global::Chetah.Table Table = new("course_offerings", new global::Chetah.Column[] { Id, CourseId, SemesterId, ProfessorId, GroupCode });
 
-    public static readonly System.Collections.Generic.IReadOnlyDictionary<string, string> PropertyColumns =
-        new System.Collections.Generic.Dictionary<string, string>(System.StringComparer.Ordinal)
+    public static readonly global::System.Collections.Generic.IReadOnlyDictionary<string, string> PropertyColumns =
+        new global::System.Collections.Generic.Dictionary<string, string>(global::System.StringComparer.Ordinal)
         {
             [nameof(CourseOffering.Id)] = "id",
             [nameof(CourseOffering.CourseId)] = "course_id",
@@ -29,7 +27,7 @@ public static class CourseOfferingsTable
             [nameof(CourseOffering.GroupCode)] = "group_code",
         };
 
-    public static CourseOffering Map(NpgsqlDataReader reader)
+    public static CourseOffering Map(global::Npgsql.NpgsqlDataReader reader)
     {
         var professorIdOrdinal = reader.GetOrdinal("professor_id");
 
@@ -42,7 +40,7 @@ public static class CourseOfferingsTable
         );
     }
 
-    public static CourseOffering MapAt(NpgsqlDataReader reader, int offset)
+    public static CourseOffering MapAt(global::Npgsql.NpgsqlDataReader reader, int offset)
     {
         return new CourseOffering(
             reader.GetInt64(offset + 0),
@@ -59,6 +57,6 @@ public sealed record CourseOffering(long Id, int CourseId, int SemesterId, int? 
 
 public static partial class ChetahSchema
 {
-    public static readonly Chetah.Postgres.TableBinding<CourseOffering> CourseOfferingBinding = new(CourseOfferingsTable.Table, CourseOfferingsTable.Map, CourseOfferingsTable.MapAt, CourseOfferingsTable.PropertyColumns);
+    public static readonly global::Chetah.Postgres.TableBinding<CourseOffering> CourseOfferingBinding = new(CourseOfferingsTable.Table, CourseOfferingsTable.Map, CourseOfferingsTable.MapAt, CourseOfferingsTable.PropertyColumns);
 }
 

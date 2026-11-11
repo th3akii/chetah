@@ -5,25 +5,23 @@
 
 #nullable enable
 
-using Npgsql;
-
 namespace Chetah.CodeGen.Tests;
 
 public static class AlwaysNotesTable
 {
-    public static readonly Chetah.Column<int> Id = new("id") { IsNullable = false, HasDefault = true, Generation = Chetah.ColumnGeneration.Always };
-    public static readonly Chetah.Column<string?> Body = new("body");
+    public static readonly global::Chetah.Column<int> Id = new("id") { IsNullable = false, HasDefault = true, Generation = global::Chetah.ColumnGeneration.Always, StoreType = "int4" };
+    public static readonly global::Chetah.Column<string?> Body = new("body") { StoreType = "text" };
 
-    public static readonly Chetah.Table Table = new("always_notes", new Chetah.Column[] { Id, Body });
+    public static readonly global::Chetah.Table Table = new("always_notes", new global::Chetah.Column[] { Id, Body });
 
-    public static readonly System.Collections.Generic.IReadOnlyDictionary<string, string> PropertyColumns =
-        new System.Collections.Generic.Dictionary<string, string>(System.StringComparer.Ordinal)
+    public static readonly global::System.Collections.Generic.IReadOnlyDictionary<string, string> PropertyColumns =
+        new global::System.Collections.Generic.Dictionary<string, string>(global::System.StringComparer.Ordinal)
         {
             [nameof(AlwaysNote.Id)] = "id",
             [nameof(AlwaysNote.Body)] = "body",
         };
 
-    public static AlwaysNote Map(NpgsqlDataReader reader)
+    public static AlwaysNote Map(global::Npgsql.NpgsqlDataReader reader)
     {
         var bodyOrdinal = reader.GetOrdinal("body");
 
@@ -33,7 +31,7 @@ public static class AlwaysNotesTable
         );
     }
 
-    public static AlwaysNote MapAt(NpgsqlDataReader reader, int offset)
+    public static AlwaysNote MapAt(global::Npgsql.NpgsqlDataReader reader, int offset)
     {
         return new AlwaysNote(
             reader.GetInt32(offset + 0),
@@ -47,6 +45,6 @@ public sealed record AlwaysNote(int Id, string? Body);
 
 public static partial class ChetahSchema
 {
-    public static readonly Chetah.Postgres.TableBinding<AlwaysNote> AlwaysNoteBinding = new(AlwaysNotesTable.Table, AlwaysNotesTable.Map, AlwaysNotesTable.MapAt, AlwaysNotesTable.PropertyColumns);
+    public static readonly global::Chetah.Postgres.TableBinding<AlwaysNote> AlwaysNoteBinding = new(AlwaysNotesTable.Table, AlwaysNotesTable.Map, AlwaysNotesTable.MapAt, AlwaysNotesTable.PropertyColumns);
 }
 

@@ -11,7 +11,7 @@ public static partial class ChetahSchema
 {
     static ChetahSchema()
     {
-        Bindings = new System.Collections.Generic.Dictionary<System.Type, Chetah.Postgres.ITableBinding>
+        Bindings = new global::System.Collections.Generic.Dictionary<global::System.Type, global::Chetah.Postgres.ITableBinding>
         {
             [typeof(Department)] = DepartmentBinding,
             [typeof(Professor)] = ProfessorBinding,
@@ -24,6 +24,6 @@ public static partial class ChetahSchema
         };
     }
 
-    public static readonly System.Collections.Generic.IReadOnlyDictionary<System.Type, Chetah.Postgres.ITableBinding> Bindings;
+    public static readonly global::System.Collections.Generic.IReadOnlyDictionary<global::System.Type, global::Chetah.Postgres.ITableBinding> Bindings;
 }
 

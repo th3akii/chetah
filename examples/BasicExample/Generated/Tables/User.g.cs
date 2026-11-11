@@ -5,27 +5,25 @@
 
 #nullable enable
 
-using Npgsql;
-
 namespace Chetah.Generated;
 
 public static class UsersTable
 {
-    public static readonly Chetah.Column<int> Id = new("id") { IsNullable = false };
-    public static readonly Chetah.Column<string> Name = new("name") { IsNullable = false };
-    public static readonly Chetah.Column<int?> Age = new("age");
+    public static readonly global::Chetah.Column<int> Id = new("id") { IsNullable = false, StoreType = "int4" };
+    public static readonly global::Chetah.Column<string> Name = new("name") { IsNullable = false, StoreType = "text" };
+    public static readonly global::Chetah.Column<int?> Age = new("age") { StoreType = "int4" };
 
-    public static readonly Chetah.Table Table = new("users", new Chetah.Column[] { Id, Name, Age });
+    public static readonly global::Chetah.Table Table = new("users", new global::Chetah.Column[] { Id, Name, Age });
 
-    public static readonly System.Collections.Generic.IReadOnlyDictionary<string, string> PropertyColumns =
-        new System.Collections.Generic.Dictionary<string, string>(System.StringComparer.Ordinal)
+    public static readonly global::System.Collections.Generic.IReadOnlyDictionary<string, string> PropertyColumns =
+        new global::System.Collections.Generic.Dictionary<string, string>(global::System.StringComparer.Ordinal)
         {
             [nameof(User.Id)] = "id",
             [nameof(User.Name)] = "name",
             [nameof(User.Age)] = "age",
         };
 
-    public static User Map(NpgsqlDataReader reader)
+    public static User Map(global::Npgsql.NpgsqlDataReader reader)
     {
         var ageOrdinal = reader.GetOrdinal("age");
 
@@ -36,7 +34,7 @@ public static class UsersTable
         );
     }
 
-    public static User MapAt(NpgsqlDataReader reader, int offset)
+    public static User MapAt(global::Npgsql.NpgsqlDataReader reader, int offset)
     {
         return new User(
             reader.GetInt32(offset + 0),
@@ -51,6 +49,6 @@ public sealed record User(int Id, string Name, int? Age);
 
 public static partial class ChetahSchema
 {
-    public static readonly Chetah.Postgres.TableBinding<User> UserBinding = new(UsersTable.Table, UsersTable.Map, UsersTable.MapAt, UsersTable.PropertyColumns);
+    public static readonly global::Chetah.Postgres.TableBinding<User> UserBinding = new(UsersTable.Table, UsersTable.Map, UsersTable.MapAt, UsersTable.PropertyColumns);
 }
 

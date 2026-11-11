@@ -5,23 +5,21 @@
 
 #nullable enable
 
-using Npgsql;
-
 namespace Chetah.CodeGen.Tests;
 
 public static class TestWidgetsTable
 {
-    public static readonly Chetah.Column<int> Id = new("id") { IsNullable = false };
-    public static readonly Chetah.Column<string?> Label = new("label");
-    public static readonly Chetah.Column<long> Quantity = new("quantity") { IsNullable = false };
-    public static readonly Chetah.Column<bool> Active = new("active") { IsNullable = false };
-    public static readonly Chetah.Column<Guid?> Token = new("token");
-    public static readonly Chetah.Column<DateTime> Created = new("created") { IsNullable = false };
+    public static readonly global::Chetah.Column<int> Id = new("id") { IsNullable = false, StoreType = "int4" };
+    public static readonly global::Chetah.Column<string?> Label = new("label") { StoreType = "text" };
+    public static readonly global::Chetah.Column<long> Quantity = new("quantity") { IsNullable = false, StoreType = "int8" };
+    public static readonly global::Chetah.Column<bool> Active = new("active") { IsNullable = false, StoreType = "bool" };
+    public static readonly global::Chetah.Column<global::System.Guid?> Token = new("token") { StoreType = "uuid" };
+    public static readonly global::Chetah.Column<global::System.DateTime> Created = new("created") { IsNullable = false, StoreType = "timestamp" };
 
-    public static readonly Chetah.Table Table = new("test_widgets", new Chetah.Column[] { Id, Label, Quantity, Active, Token, Created });
+    public static readonly global::Chetah.Table Table = new("test_widgets", new global::Chetah.Column[] { Id, Label, Quantity, Active, Token, Created });
 
-    public static readonly System.Collections.Generic.IReadOnlyDictionary<string, string> PropertyColumns =
-        new System.Collections.Generic.Dictionary<string, string>(System.StringComparer.Ordinal)
+    public static readonly global::System.Collections.Generic.IReadOnlyDictionary<string, string> PropertyColumns =
+        new global::System.Collections.Generic.Dictionary<string, string>(global::System.StringComparer.Ordinal)
         {
             [nameof(TestWidgets.Id)] = "id",
             [nameof(TestWidgets.Label)] = "label",
@@ -31,7 +29,7 @@ public static class TestWidgetsTable
             [nameof(TestWidgets.Created)] = "created",
         };
 
-    public static TestWidgets Map(NpgsqlDataReader reader)
+    public static TestWidgets Map(global::Npgsql.NpgsqlDataReader reader)
     {
         var labelOrdinal = reader.GetOrdinal("label");
         var tokenOrdinal = reader.GetOrdinal("token");
@@ -46,7 +44,7 @@ public static class TestWidgetsTable
         );
     }
 
-    public static TestWidgets MapAt(NpgsqlDataReader reader, int offset)
+    public static TestWidgets MapAt(global::Npgsql.NpgsqlDataReader reader, int offset)
     {
         return new TestWidgets(
             reader.GetInt32(offset + 0),
@@ -60,10 +58,10 @@ public static class TestWidgetsTable
 
 }
 
-public sealed record TestWidgets(int Id, string? Label, long Quantity, bool Active, Guid? Token, DateTime Created);
+public sealed record TestWidgets(int Id, string? Label, long Quantity, bool Active, global::System.Guid? Token, global::System.DateTime Created);
 
 public static partial class ChetahSchema
 {
-    public static readonly Chetah.Postgres.TableBinding<TestWidgets> TestWidgetsBinding = new(TestWidgetsTable.Table, TestWidgetsTable.Map, TestWidgetsTable.MapAt, TestWidgetsTable.PropertyColumns);
+    public static readonly global::Chetah.Postgres.TableBinding<TestWidgets> TestWidgetsBinding = new(TestWidgetsTable.Table, TestWidgetsTable.Map, TestWidgetsTable.MapAt, TestWidgetsTable.PropertyColumns);
 }
 

@@ -5,26 +5,24 @@
 
 #nullable enable
 
-using Npgsql;
-
 namespace Chetah.Generated;
 
 public static class StudentsTable
 {
-    public static readonly Chetah.Column<long> Id = new("id") { IsNullable = false, HasDefault = true };
-    public static readonly Chetah.Column<int> DepartmentId = new("department_id") { IsNullable = false };
-    public static readonly Chetah.Column<string> IndexNumber = new("index_number") { IsNullable = false };
-    public static readonly Chetah.Column<string> FirstName = new("first_name") { IsNullable = false };
-    public static readonly Chetah.Column<string> LastName = new("last_name") { IsNullable = false };
-    public static readonly Chetah.Column<int?> EnrollmentYear = new("enrollment_year");
-    public static readonly Chetah.Column<string?> Phone = new("phone");
-    public static readonly Chetah.Column<bool?> TestFlag = new("test_flag");
-    public static readonly Chetah.Column<int?> InvalidReference = new("invalid_reference");
+    public static readonly global::Chetah.Column<long> Id = new("id") { IsNullable = false, HasDefault = true, StoreType = "int8" };
+    public static readonly global::Chetah.Column<int> DepartmentId = new("department_id") { IsNullable = false, StoreType = "int4" };
+    public static readonly global::Chetah.Column<string> IndexNumber = new("index_number") { IsNullable = false, StoreType = "varchar(24)" };
+    public static readonly global::Chetah.Column<string> FirstName = new("first_name") { IsNullable = false, StoreType = "varchar(80)" };
+    public static readonly global::Chetah.Column<string> LastName = new("last_name") { IsNullable = false, StoreType = "varchar(80)" };
+    public static readonly global::Chetah.Column<int?> EnrollmentYear = new("enrollment_year") { StoreType = "int4" };
+    public static readonly global::Chetah.Column<string?> Phone = new("phone") { StoreType = "varchar(30)" };
+    public static readonly global::Chetah.Column<bool?> TestFlag = new("test_flag") { StoreType = "bool" };
+    public static readonly global::Chetah.Column<int?> InvalidReference = new("invalid_reference") { StoreType = "int4" };
 
-    public static readonly Chetah.Table Table = new("students", new Chetah.Column[] { Id, DepartmentId, IndexNumber, FirstName, LastName, EnrollmentYear, Phone, TestFlag, InvalidReference });
+    public static readonly global::Chetah.Table Table = new("students", new global::Chetah.Column[] { Id, DepartmentId, IndexNumber, FirstName, LastName, EnrollmentYear, Phone, TestFlag, InvalidReference });
 
-    public static readonly System.Collections.Generic.IReadOnlyDictionary<string, string> PropertyColumns =
-        new System.Collections.Generic.Dictionary<string, string>(System.StringComparer.Ordinal)
+    public static readonly global::System.Collections.Generic.IReadOnlyDictionary<string, string> PropertyColumns =
+        new global::System.Collections.Generic.Dictionary<string, string>(global::System.StringComparer.Ordinal)
         {
             [nameof(Student.Id)] = "id",
             [nameof(Student.DepartmentId)] = "department_id",
@@ -37,7 +35,7 @@ public static class StudentsTable
             [nameof(Student.InvalidReference)] = "invalid_reference",
         };
 
-    public static Student Map(NpgsqlDataReader reader)
+    public static Student Map(global::Npgsql.NpgsqlDataReader reader)
     {
         var enrollmentYearOrdinal = reader.GetOrdinal("enrollment_year");
         var phoneOrdinal = reader.GetOrdinal("phone");
@@ -57,7 +55,7 @@ public static class StudentsTable
         );
     }
 
-    public static Student MapAt(NpgsqlDataReader reader, int offset)
+    public static Student MapAt(global::Npgsql.NpgsqlDataReader reader, int offset)
     {
         return new Student(
             reader.GetInt64(offset + 0),
@@ -78,6 +76,6 @@ public sealed record Student(long Id, int DepartmentId, string IndexNumber, stri
 
 public static partial class ChetahSchema
 {
-    public static readonly Chetah.Postgres.TableBinding<Student> StudentBinding = new(StudentsTable.Table, StudentsTable.Map, StudentsTable.MapAt, StudentsTable.PropertyColumns);
+    public static readonly global::Chetah.Postgres.TableBinding<Student> StudentBinding = new(StudentsTable.Table, StudentsTable.Map, StudentsTable.MapAt, StudentsTable.PropertyColumns);
 }
 

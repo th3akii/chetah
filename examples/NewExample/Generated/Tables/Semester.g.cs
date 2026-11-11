@@ -5,22 +5,20 @@
 
 #nullable enable
 
-using Npgsql;
-
 namespace Chetah.Generated;
 
 public static class SemestersTable
 {
-    public static readonly Chetah.Column<int> Id = new("id") { IsNullable = false, HasDefault = true };
-    public static readonly Chetah.Column<string> AcademicYear = new("academic_year") { IsNullable = false };
-    public static readonly Chetah.Column<string> Term = new("term") { IsNullable = false };
-    public static readonly Chetah.Column<DateTime> StartsAt = new("starts_at") { IsNullable = false };
-    public static readonly Chetah.Column<DateTime> EndsAt = new("ends_at") { IsNullable = false };
+    public static readonly global::Chetah.Column<int> Id = new("id") { IsNullable = false, HasDefault = true, StoreType = "int4" };
+    public static readonly global::Chetah.Column<string> AcademicYear = new("academic_year") { IsNullable = false, StoreType = "varchar(9)" };
+    public static readonly global::Chetah.Column<string> Term = new("term") { IsNullable = false, StoreType = "varchar(12)" };
+    public static readonly global::Chetah.Column<global::System.DateTime> StartsAt = new("starts_at") { IsNullable = false, StoreType = "timestamp" };
+    public static readonly global::Chetah.Column<global::System.DateTime> EndsAt = new("ends_at") { IsNullable = false, StoreType = "timestamp" };
 
-    public static readonly Chetah.Table Table = new("semesters", new Chetah.Column[] { Id, AcademicYear, Term, StartsAt, EndsAt });
+    public static readonly global::Chetah.Table Table = new("semesters", new global::Chetah.Column[] { Id, AcademicYear, Term, StartsAt, EndsAt });
 
-    public static readonly System.Collections.Generic.IReadOnlyDictionary<string, string> PropertyColumns =
-        new System.Collections.Generic.Dictionary<string, string>(System.StringComparer.Ordinal)
+    public static readonly global::System.Collections.Generic.IReadOnlyDictionary<string, string> PropertyColumns =
+        new global::System.Collections.Generic.Dictionary<string, string>(global::System.StringComparer.Ordinal)
         {
             [nameof(Semester.Id)] = "id",
             [nameof(Semester.AcademicYear)] = "academic_year",
@@ -29,7 +27,7 @@ public static class SemestersTable
             [nameof(Semester.EndsAt)] = "ends_at",
         };
 
-    public static Semester Map(NpgsqlDataReader reader)
+    public static Semester Map(global::Npgsql.NpgsqlDataReader reader)
     {
         return new Semester(
             reader.GetInt32(reader.GetOrdinal("id")),
@@ -40,7 +38,7 @@ public static class SemestersTable
         );
     }
 
-    public static Semester MapAt(NpgsqlDataReader reader, int offset)
+    public static Semester MapAt(global::Npgsql.NpgsqlDataReader reader, int offset)
     {
         return new Semester(
             reader.GetInt32(offset + 0),
@@ -53,10 +51,10 @@ public static class SemestersTable
 
 }
 
-public sealed record Semester(int Id, string AcademicYear, string Term, DateTime StartsAt, DateTime EndsAt);
+public sealed record Semester(int Id, string AcademicYear, string Term, global::System.DateTime StartsAt, global::System.DateTime EndsAt);
 
 public static partial class ChetahSchema
 {
-    public static readonly Chetah.Postgres.TableBinding<Semester> SemesterBinding = new(SemestersTable.Table, SemestersTable.Map, SemestersTable.MapAt, SemestersTable.PropertyColumns);
+    public static readonly global::Chetah.Postgres.TableBinding<Semester> SemesterBinding = new(SemestersTable.Table, SemestersTable.Map, SemestersTable.MapAt, SemestersTable.PropertyColumns);
 }
 

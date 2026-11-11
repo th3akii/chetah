@@ -5,27 +5,25 @@
 
 #nullable enable
 
-using Npgsql;
-
 namespace Chetah.Generated;
 
 public static class DepartmentsTable
 {
-    public static readonly Chetah.Column<int> Id = new("id") { IsNullable = false, HasDefault = true };
-    public static readonly Chetah.Column<string> Code = new("code") { IsNullable = false };
-    public static readonly Chetah.Column<string> Name = new("name") { IsNullable = false };
+    public static readonly global::Chetah.Column<int> Id = new("id") { IsNullable = false, HasDefault = true, StoreType = "int4" };
+    public static readonly global::Chetah.Column<string> Code = new("code") { IsNullable = false, StoreType = "varchar(16)" };
+    public static readonly global::Chetah.Column<string> Name = new("name") { IsNullable = false, StoreType = "varchar(120)" };
 
-    public static readonly Chetah.Table Table = new("departments", new Chetah.Column[] { Id, Code, Name });
+    public static readonly global::Chetah.Table Table = new("departments", new global::Chetah.Column[] { Id, Code, Name });
 
-    public static readonly System.Collections.Generic.IReadOnlyDictionary<string, string> PropertyColumns =
-        new System.Collections.Generic.Dictionary<string, string>(System.StringComparer.Ordinal)
+    public static readonly global::System.Collections.Generic.IReadOnlyDictionary<string, string> PropertyColumns =
+        new global::System.Collections.Generic.Dictionary<string, string>(global::System.StringComparer.Ordinal)
         {
             [nameof(Department.Id)] = "id",
             [nameof(Department.Code)] = "code",
             [nameof(Department.Name)] = "name",
         };
 
-    public static Department Map(NpgsqlDataReader reader)
+    public static Department Map(global::Npgsql.NpgsqlDataReader reader)
     {
         return new Department(
             reader.GetInt32(reader.GetOrdinal("id")),
@@ -34,7 +32,7 @@ public static class DepartmentsTable
         );
     }
 
-    public static Department MapAt(NpgsqlDataReader reader, int offset)
+    public static Department MapAt(global::Npgsql.NpgsqlDataReader reader, int offset)
     {
         return new Department(
             reader.GetInt32(offset + 0),
@@ -49,6 +47,6 @@ public sealed record Department(int Id, string Code, string Name);
 
 public static partial class ChetahSchema
 {
-    public static readonly Chetah.Postgres.TableBinding<Department> DepartmentBinding = new(DepartmentsTable.Table, DepartmentsTable.Map, DepartmentsTable.MapAt, DepartmentsTable.PropertyColumns);
+    public static readonly global::Chetah.Postgres.TableBinding<Department> DepartmentBinding = new(DepartmentsTable.Table, DepartmentsTable.Map, DepartmentsTable.MapAt, DepartmentsTable.PropertyColumns);
 }
 
