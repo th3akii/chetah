@@ -212,6 +212,15 @@ public class PostgresCompilerTests
         });
 
         Assert.All(compound.Parameters, parameter => Assert.Null(parameter.TargetColumn));
+
+        // An IN member is a value of the input column too, so the DateTime binding rule reaches it.
+        var membership = Compile(q => q with
+        {
+            Predicate = new SqlIn(Age, [new SqlValue(18, typeof(int)), new SqlValue(21, typeof(int))]),
+        });
+
+        Assert.Equal(2, membership.Parameters.Count);
+        Assert.All(membership.Parameters, parameter => Assert.Equal("age", parameter.TargetColumn!.Name));
     }
 
     [Fact]

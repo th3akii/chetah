@@ -998,13 +998,17 @@ public static class PostgresCompiler
             // Known-null members never participate in the SQL IN list: an explicit IS NULL branch
             // decides membership, so the whole result stays two-valued even under negation. The
             // repeated input renders strictly in SQL text order so parameters keep encounter order.
+            // Each member is a value of the input column, so it carries that column's type.
+            var inputColumn = PeerColumn(node.Input);
+            string RenderMember(SqlValue member) => RenderValue(member, inputColumn);
+
             var nonNull = node.Values.Where(v => v.Value is not null).ToArray();
             if (node.Values.Any(v => v.Value is null))
             {
                 var input = RenderChild(node.Input);
                 if (nonNull.Length == 0)
                     return $"{input} IS NULL";
-                var members = string.Join(", ", nonNull.Select(RenderExpression));
+                var members = string.Join(", ", nonNull.Select(RenderMember));
                 var inputForNull = RenderChild(node.Input);
                 return $"({input} IN ({members}) OR {inputForNull} IS NULL)";
             }
@@ -1012,7 +1016,7 @@ public static class PostgresCompiler
             if (nonNull.Length == 0)
                 return "FALSE";
 
-            var comparison = $"{RenderChild(node.Input)} IN ({string.Join(", ", nonNull.Select(RenderExpression))})";
+            var comparison = $"{RenderChild(node.Input)} IN ({string.Join(", ", nonNull.Select(RenderMember))})";
             return node.Input.CanBeNull ? $"({comparison}) IS TRUE" : comparison;
         }
 

@@ -44,7 +44,8 @@ public class PostgresRoundTripTests
     /// A DateTime is bound by its Kind and by the column's declared store type: a `timestamp`
     /// column keeps the wall clock, a `timestamptz` column keeps the instant, and an Unspecified
     /// value — which names no instant — is refused for `timestamptz` instead of being read in the
-    /// session zone. The session zone is deliberately not UTC.
+    /// session zone. The session zone is deliberately not UTC, and the store types carry type
+    /// modifiers (`timestamp(3)`, `timestamptz(6)`) so the modifier is not mistaken for the type.
     /// </summary>
     [Fact]
     public async Task DateTimeParameterBinding_HonorsColumnTypeAndKind()
@@ -58,8 +59,8 @@ public class PostgresRoundTripTests
         var metadata = new Table(tableName, new Column[]
         {
             new Column<int>("id") { IsNullable = false },
-            new Column<DateTime>("wall") { IsNullable = false, StoreType = "timestamp" },
-            new Column<DateTime>("instant") { IsNullable = false, StoreType = "timestamptz" },
+            new Column<DateTime>("wall") { IsNullable = false, StoreType = "timestamp(3)" },
+            new Column<DateTime>("instant") { IsNullable = false, StoreType = "timestamptz(6)" },
         });
         var db = new PostgresDb(connectionString, new Dictionary<Type, ITableBinding>
         {
@@ -75,7 +76,7 @@ public class PostgresRoundTripTests
         await connection.OpenAsync();
         try
         {
-            await Execute(connection, $"CREATE TABLE \"{tableName}\" (id int NOT NULL, wall timestamp NOT NULL, instant timestamptz NOT NULL)");
+            await Execute(connection, $"CREATE TABLE \"{tableName}\" (id int NOT NULL, wall timestamp(3) NOT NULL, instant timestamptz(6) NOT NULL)");
 
             await db.Insert<Probe>().Values(new Probe(1, noon, noon)).ExecuteAsync();
 
