@@ -164,6 +164,7 @@ counted; an upsert counts each row it inserted or updated.
 | rows with different column sets in one statement | split the statement or supply every column |
 | explicit or omitted NULL for a `NOT NULL` column without a default | rejected before the connection opens |
 | unsupported CLR parameter types | only `int`, `long`, `decimal`, `string`, `bool`, `Guid` and `DateTime` are supported today |
+| a `DateTime` with `Kind = Unspecified` for a `timestamptz` column | it names no instant, and the session zone must not decide it ([`writing-a-schema.md`](writing-a-schema.md#datetime-values)); pass `Kind = Utc` |
 | transaction management | kept out of this API; connections and commands are disposed per execution |
 
 `CHECK`, `UNIQUE` (without a conflict clause) and foreign-key violations are

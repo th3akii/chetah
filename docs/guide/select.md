@@ -84,6 +84,11 @@ expression tree, so C# patterns do not compile there: use `== null` / `!= null`
 Captured values and collections are snapshotted at the fluent call, so mutating
 the captured variable afterwards cannot change a query you already built.
 
+A captured `DateTime` is bound by its `Kind` and by the column it is compared with
+([`writing-a-schema.md`](writing-a-schema.md#datetime-values)): a UTC instant filters
+`timestamp` and `timestamptz` columns alike, and an `Unspecified` value compared with
+a `timestamptz` column is refused instead of being shifted by the session zone.
+
 ## Project, order and page
 
 ```csharp

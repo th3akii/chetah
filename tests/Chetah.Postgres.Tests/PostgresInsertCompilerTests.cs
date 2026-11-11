@@ -48,6 +48,10 @@ public class PostgresInsertCompilerTests
     private static InsertQuery Insert(Table table, params InsertRow[] rows) =>
         new(table) { Rows = rows };
 
+    /// <summary>The metadata instance a compiled parameter for a Student column must reference.</summary>
+    private static Column StudentsColumn(string name) =>
+        Students.Columns.First(column => column.Name == name);
+
     // ---------- single and multi-row SQL ----------
 
     [Fact]
@@ -61,7 +65,11 @@ public class PostgresInsertCompilerTests
             """INSERT INTO "students" ("first_name", "age") VALUES ($1, $2)""",
             compiled.Sql);
         Assert.Equal(
-            new[] { new CompiledParameter("Marko", typeof(string)), new CompiledParameter(20, typeof(int?)) },
+            new[]
+            {
+                new CompiledParameter("Marko", typeof(string)) { TargetColumn = StudentsColumn("first_name") },
+                new CompiledParameter(20, typeof(int?)) { TargetColumn = StudentsColumn("age") },
+            },
             compiled.Parameters);
     }
 

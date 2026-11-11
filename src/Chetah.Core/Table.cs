@@ -25,6 +25,14 @@ public record Column(string Name, Type ClrType)
     public bool HasDefault { get; init; }
 
     public ColumnGeneration Generation { get; init; }
+
+    /// <summary>
+    /// The column's PostgreSQL type as declared, in canonical form and including modifiers
+    /// (<c>timestamptz</c>, <c>timestamp(3)</c>, <c>varchar(100)</c>); null when the metadata was
+    /// built by hand and the type is unknown. Parameter binding uses it to choose the provider type
+    /// a value is written as.
+    /// </summary>
+    public string? StoreType { get; init; }
 }
 
 /// <summary>A column carrying its CLR type, so generated table classes can expose typed access.</summary>

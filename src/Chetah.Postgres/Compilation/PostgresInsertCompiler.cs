@@ -54,7 +54,7 @@ public static class PostgresInsertCompiler
                     sql.Append(value switch
                     {
                         SqlDefault => "DEFAULT",
-                        SqlValue parameter => fragments.RenderValueFragment(parameter),
+                        SqlValue parameter => fragments.RenderValueFragment(parameter, column),
                         _ => throw new NotSupportedException(
                             $"INSERT value for column '{column.Name}' must be a parameter or DEFAULT, found {value.GetType().Name}."),
                     });
@@ -292,7 +292,7 @@ public static class PostgresInsertCompiler
 
         ValidateColumnValueType(target, parameter);
         fragments.ValidateValueFragment(parameter);
-        return fragments.RenderValueFragment(parameter);
+        return fragments.RenderValueFragment(parameter, target);
     }
 
     private static string RenderIncoming(

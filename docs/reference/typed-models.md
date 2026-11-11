@@ -136,12 +136,13 @@ One accessor class, one record and the table binding per table. In the default
 public static class UsersTable
 {
     // Typed column metadata. Non-default write rules are emitted only when set:
-    // IsNullable = false, HasDefault = true, Generation = ….
-    public static readonly global::Chetah.Column<int> Id = new("id") { IsNullable = false, HasDefault = true };
-    public static readonly global::Chetah.Column<string> Name = new("name") { IsNullable = false };
-    public static readonly global::Chetah.Column<int?> Age = new("age");
+    // IsNullable = false, HasDefault = true, Generation = …; the canonical
+    // PostgreSQL type (StoreType) is always emitted.
+    public static readonly global::Chetah.Column<int> Id = new("id") { IsNullable = false, HasDefault = true, StoreType = "int4" };
+    public static readonly global::Chetah.Column<string> Name = new("name") { IsNullable = false, StoreType = "text" };
+    public static readonly global::Chetah.Column<int?> Age = new("age") { StoreType = "int4" };
     public static readonly global::Chetah.Column<string> Display =
-        new("display") { IsNullable = false, Generation = global::Chetah.ColumnGeneration.Computed };
+        new("display") { IsNullable = false, Generation = global::Chetah.ColumnGeneration.Computed, StoreType = "text" };
 
     // Table metadata handed to the query objects (schema order = output order).
     public static readonly global::Chetah.Table Table =
@@ -173,7 +174,12 @@ public static partial class ChetahSchema
 ```
 
 `Column` metadata is also what INSERT and UPDATE validate against: nullability,
-database defaults, identity generation and computed columns. Descriptions of the
+database defaults, identity generation and computed columns. `StoreType` carries
+the column's canonical PostgreSQL type; parameter binding reads it to decide the
+provider type a value is written as — which matters for `DateTime`, where
+`timestamp` and `timestamptz` share one CLR type but not one semantics
+([`writing-a-schema.md`](../guide/writing-a-schema.md#datetime-values)).
+Descriptions of the
 write surface are in [`../guide/insert.md`](../guide/insert.md) and [`../guide/update.md`](../guide/update.md).
 
 `Chetah.Schema.g.cs` holds the rest of the registry, so the public API is
@@ -245,7 +251,11 @@ stay bare — they cannot be shadowed.
 
 Type map: `integer`→`int`, `bigint`→`long`, `text`→`string`,
 `boolean`→`bool`, `uuid`→`global::System.Guid`,
-`timestamp`→`global::System.DateTime`.
+`timestamp`→`global::System.DateTime`, `timestamptz`→`global::System.DateTime`,
+`date`→`global::System.DateOnly`, `time`→`global::System.TimeOnly`,
+`numeric`→`decimal`. The complete list, with aliases and modifiers, is the
+types table in [`writing-a-schema.md`](../guide/writing-a-schema.md#types). A
+type outside it is refused by the generator with the column named.
 
 The binding validates its mapping at construction: every key must name a
 readable public instance property of the model, every table column must be
@@ -411,9 +421,8 @@ documented in [`../guide/insert.md`](../guide/insert.md), [`../guide/update.md`]
 Schema-to-database tooling and catalog introspection live in `src/Chetah.Db`
 instead — see [`schema-tooling.md`](schema-tooling.md).
 Query lambdas outside the
-frozen translator surface fail explicitly (no evaluation fallback). The
-`timestamp with time zone` type and other PostgreSQL types are not in
-the type map yet. Mapping trusts the schema's
+frozen translator surface fail explicitly (no evaluation fallback).
+Mapping trusts the schema's
 nullability claim — a DB that
 returns `NULL` for a `"nullable": false` column will surface as a runtime
 error from the reader, not silent mis-mapping.

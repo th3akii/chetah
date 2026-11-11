@@ -300,6 +300,31 @@ is still a valid declaration for the schema and validator. Code generation refus
 it with the column named, because inventing a CLR type would silently read the
 wrong data.
 
+### DateTime values
+
+`timestamp` and `timestamptz` both map to `DateTime`, so the column's type decides
+how the `Kind` of a value is honored:
+
+| Column | `Kind = Utc` | `Kind = Local` | `Kind = Unspecified` |
+|---|---|---|---|
+| `timestamptz` | stored as that instant | converted to UTC, then stored | **refused** before the connection opens |
+| `timestamp` | its UTC wall clock, stored unshifted | converted to UTC, then that wall clock | stored as written |
+
+No value is reinterpreted through the server session's `TimeZone`, so the same
+statement stores the same value on every server. A `timestamp` column written with
+an instant holds that instant's UTC wall clock.
+
+Refusing is the one case that cannot be guessed: an `Unspecified` value names no
+instant, and PostgreSQL would read it in the session zone, which makes the stored
+value depend on server configuration. Pass `DateTime.UtcNow`, or
+`DateTime.SpecifyKind(value, DateTimeKind.Utc)` — the exception names the column and
+the rule. The same applies to a column whose metadata was built by hand without
+`StoreType`: the column type is unknown there, so only `Utc` and `Local` values are
+accepted.
+
+A value that is not tied to a column — an arithmetic operand, a `LIMIT` — keeps the
+provider defaults: `timestamp` for `Unspecified`, `timestamptz` for a known instant.
+
 The migration engine executes a smaller set: `int4`, `int8`, `text`, `varchar`,
 `bool`, `uuid`, `timestamp`, with modifiers. Anything else is refused by
 `diff`/`apply` with its path (see [What the migration engine executes](#what-the-migration-engine-executes)).

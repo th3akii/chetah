@@ -185,6 +185,36 @@ public class PostgresCompilerTests
     }
 
     [Fact]
+    public void ComparisonWithABareColumnCarriesThatColumnIntoTheParameter()
+    {
+        // The value is the column's value whichever side it is written on...
+        var columnFirst = Compile(q => q with
+        {
+            Predicate = new SqlBinary(SqlBinaryOperator.LessThan, Age, new SqlValue(18, typeof(int)), typeof(bool), false),
+        });
+        var valueFirst = Compile(q => q with
+        {
+            Predicate = new SqlBinary(SqlBinaryOperator.GreaterThan, new SqlValue(18, typeof(int)), Age, typeof(bool), false),
+        });
+
+        Assert.Equal("age", Assert.Single(columnFirst.Parameters).TargetColumn!.Name);
+        Assert.Equal("age", Assert.Single(valueFirst.Parameters).TargetColumn!.Name);
+
+        // ...but an operand of a compound expression is not, so it carries no column.
+        var compound = Compile(q => q with
+        {
+            Predicate = new SqlBinary(
+                SqlBinaryOperator.GreaterThan,
+                new SqlBinary(SqlBinaryOperator.Add, Age, new SqlValue(1, typeof(int)), typeof(int), true),
+                new SqlValue(18, typeof(int)),
+                typeof(bool),
+                false),
+        });
+
+        Assert.All(compound.Parameters, parameter => Assert.Null(parameter.TargetColumn));
+    }
+
+    [Fact]
     public void NullableRelationalComparisonKeepsSqlThreeValuedLogic()
     {
         var compiled = Compile(q => q with

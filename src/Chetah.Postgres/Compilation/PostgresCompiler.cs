@@ -120,8 +120,11 @@ public static class PostgresCompiler
             ValidateClauses();
         }
 
-        /// <summary>Renders a value as a positional parameter, adding it to the shared slot list.</summary>
-        internal string RenderValueFragment(SqlValue value) => RenderValue(value);
+        /// <summary>
+        /// Renders a value as a positional parameter, adding it to the shared slot list.
+        /// <paramref name="target"/> is the column the value is written to, when the caller knows it.
+        /// </summary>
+        internal string RenderValueFragment(SqlValue value, Column? target = null) => RenderValue(value, target);
 
         internal void ValidateValueFragment(SqlValue value) => ValidateValue(value);
 
@@ -135,8 +138,12 @@ public static class PostgresCompiler
             ValidateTree(expression);
         }
 
-        /// <summary>Renders an assignment value; the right of SET is a complete expression context.</summary>
-        internal string RenderSetValueFragment(SqlExpression expression) => RenderExpression(expression);
+        /// <summary>
+        /// Renders an assignment value; the right of SET is a complete expression context. Only a
+        /// bare value is the column's value, so only it inherits the target column's type.
+        /// </summary>
+        internal string RenderSetValueFragment(SqlExpression expression, Column? target = null) =>
+            expression is SqlValue value ? RenderValue(value, target) : RenderExpression(expression);
 
         /// <summary>Renders a statement predicate (UPDATE … WHERE).</summary>
         internal string RenderPredicateFragment(SqlExpression expression) => RenderExpression(expression);
@@ -945,10 +952,10 @@ public static class PostgresCompiler
             return $"{RenderExpression(item.Expression)} AS {QuoteIdentifier(alias)}";
         }
 
-        private string RenderValue(SqlValue value)
+        private string RenderValue(SqlValue value, Column? target = null)
         {
             var normalized = NormalizeValue(value);
-            _parameters.Add(new CompiledParameter(normalized, value.ClrType));
+            _parameters.Add(new CompiledParameter(normalized, value.ClrType) { TargetColumn = target });
             return $"${_parameters.Count}";
         }
 
@@ -1052,6 +1059,22 @@ public static class PostgresCompiler
         private string RenderPresence(SqlPresence presence) =>
             $"\"t{presence.SourceId}\".{QuoteIdentifier(_presenceMarkers[presence.SourceId])}";
 
+        /// <summary>
+        /// A comparison operand. A value compared with a bare column is that column's value, so it
+        /// carries the column's declared type into the parameter; any other operand renders as usual.
+        /// </summary>
+        private string RenderComparisonOperand(SqlExpression operand, SqlExpression peer) =>
+            operand is SqlValue value && PeerColumn(peer) is { } column
+                ? RenderValue(value, column)
+                : RenderChild(operand);
+
+        /// <summary>The metadata of a bare column reference, or null when the peer is not a column.</summary>
+        private Column? PeerColumn(SqlExpression expression) =>
+            expression is SqlColumn column && _sources.TryGetValue(column.SourceId, out var table)
+                ? table.Columns.FirstOrDefault(
+                    candidate => string.Equals(candidate.Name, column.Name, StringComparison.Ordinal))
+                : null;
+
         private string RenderBinary(SqlBinary node) => node.Operator switch
         {
             SqlBinaryOperator.Equal => RenderEquality(node, negated: false),
@@ -1088,8 +1111,8 @@ public static class PostgresCompiler
                 return $"{RenderChild(node.Left)} IS{not} NULL";
             if (leftNull)
                 return $"{RenderChild(node.Right)} IS{not} NULL";
-            var left = RenderChild(node.Left);
-            var right = RenderChild(node.Right);
+            var left = RenderComparisonOperand(node.Left, node.Right);
+            var right = RenderComparisonOperand(node.Right, node.Left);
             if (node.Left.CanBeNull || node.Right.CanBeNull)
                 return $"{left} IS {notPrefix}DISTINCT FROM {right}";
             return negated ? $"{left} <> {right}" : $"{left} = {right}";
@@ -1107,8 +1130,8 @@ public static class PostgresCompiler
             if (IsKnownNull(node.Left) || IsKnownNull(node.Right))
                 return node.CanBeNull ? "NULL" : "FALSE";
 
-            var left = RenderChild(node.Left);
-            var right = RenderChild(node.Right);
+            var left = RenderComparisonOperand(node.Left, node.Right);
+            var right = RenderComparisonOperand(node.Right, node.Left);
             var comparison = $"{left} {symbol} {right}";
             if (!node.CanBeNull && (node.Left.CanBeNull || node.Right.CanBeNull))
                 return $"({comparison}) IS TRUE";

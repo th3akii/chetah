@@ -172,6 +172,7 @@ nothing matched.
 | arbitrary SQL fragments in `SET` | use `Set` and `SetDefault` |
 | expressions outside the SELECT translator surface (`Trim()`, method calls, client evaluation) | no client-side evaluation exists, so they fail loudly before I/O |
 | unsupported CLR parameter types | only `int`, `long`, `decimal`, `string`, `bool`, `Guid` and `DateTime` are supported today |
+| a `DateTime` with `Kind = Unspecified` assigned to a `timestamptz` column | it names no instant, and the session zone must not decide it ([`writing-a-schema.md`](writing-a-schema.md#datetime-values)); pass `Kind = Utc` |
 | transaction management | kept out of this API; connections and commands are disposed per execution |
 
 `CHECK`, `UNIQUE` and foreign-key violations are PostgreSQL's to decide and

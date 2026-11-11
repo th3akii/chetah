@@ -355,7 +355,8 @@ public static class GeneratedSource
     private static string QualifyClrTypes(string text) => BclTypeNames.Replace(text, "global::System.$1");
 
     /// <summary>Write-side metadata INSERT validation uses. Defaults are omitted when they match
-    /// <see cref="Chetah.Column"/>'s initial values, keeping generated files short.</summary>
+    /// <see cref="Chetah.Column"/>'s initial values, keeping generated files short; the canonical
+    /// PostgreSQL type is always emitted so parameter binding knows the column's store type.</summary>
     private static string ColumnMetadata(ColumnSchema column)
     {
         var members = new List<string>();
@@ -367,8 +368,9 @@ public static class GeneratedSource
             members.Add("Generation = global::Chetah.ColumnGeneration.Computed");
         else if (column.Identity?.Generation == "ALWAYS")
             members.Add("Generation = global::Chetah.ColumnGeneration.Always");
+        members.Add($"StoreType = {CSharpStringLiteral(column.Type.SqlType)}");
 
-        return members.Count == 0 ? "" : $" {{ {string.Join(", ", members)} }}";
+        return $" {{ {string.Join(", ", members)} }}";
     }
 
     private static string Identifier(string name)

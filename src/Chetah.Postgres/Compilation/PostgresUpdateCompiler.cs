@@ -45,6 +45,7 @@ public static class PostgresUpdateCompiler
             sql.Append(" AS ").Append(PostgresCompiler.QuoteIdentifier("t0"));
         sql.Append(" SET ");
 
+        var tableColumns = query.Table.Columns.ToDictionary(column => column.Name, StringComparer.Ordinal);
         for (var index = 0; index < query.Assignments.Count; index++)
         {
             if (index > 0)
@@ -54,7 +55,7 @@ public static class PostgresUpdateCompiler
             sql.Append(PostgresCompiler.QuoteIdentifier(assignment.Column)).Append(" = ");
             sql.Append(assignment.Value is SqlDefault
                 ? "DEFAULT"
-                : fragments.RenderSetValueFragment(assignment.Value));
+                : fragments.RenderSetValueFragment(assignment.Value, tableColumns[assignment.Column]));
         }
 
         PostgresJoinSources.AppendSources(sql, fragments, query.Joins, query.Predicate, "FROM");
