@@ -752,9 +752,6 @@ public static class SchemaParser
             if (!IsValidIdentifier(name))
                 throw Error(path, "Enum names must be plain identifiers.");
 
-            if (IsCSharpKeyword(name))
-                throw Error(path, $"Enum name '{name}' is a C# keyword.");
-
             var value = property.Value;
             JsonElement valuesElement;
             var schema = "public";
