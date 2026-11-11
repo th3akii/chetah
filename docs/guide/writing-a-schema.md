@@ -515,7 +515,10 @@ value would be lost). Keep the id when renaming:
 }
 ```
 
-- `diff` records missing `"$id"` members; you never assign them.
+- `diff` records missing `"$id"` members; you never assign them. A declaration
+  without an `"$id"` adopts the id the database holds for that name, unless
+  another declaration in the same scope already carries it: renaming an object
+  and declaring a new one under the old name gives the new object a fresh id.
 - Ids are never reused; a dropped object's id stays tombstoned in the database.
 - A brand-new id next to a tracked object that vanished is refused, not guessed:
   for a real replacement run with `--drop-add users.display_name`, which still

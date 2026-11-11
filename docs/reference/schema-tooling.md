@@ -174,7 +174,11 @@ column therefore carries a persistent `"$id"` in `chetah-schema.json`:
   a dropped object stops the run with the offending pair.
 - **Existing files adopt.** A schema file without `"$id"`s keeps the ids the
   registry already holds for its names, so a declaration written before
-  identities existed is not mistaken for a rewrite.
+  identities existed is not mistaken for a rewrite. Adoption only fills a gap:
+  an id that another declaration in the same scope (tables, or a table's
+  columns) already carries explicitly is never adopted a second time, so
+  renaming an object and declaring a new one under the old name gives the new
+  object a fresh id.
 - **The file is the portable half.** Development resolves and records the ids;
   staging and production apply the same file and end up with the same
   identities. The registry is the applied half: it knows which ids this database

@@ -301,9 +301,9 @@ internal static class Identity
         var refusals = new List<string>();
         var tables = new Dictionary<string, ResolvedTable>(StringComparer.Ordinal);
         var columns = new Dictionary<(string Table, string Column), ResolvedColumn>();
-        var claimedTables = new HashSet<long>();
+        var claimedTables = new Dictionary<long, string>();
         // Column ids are scoped to their table, so the table is part of the key.
-        var claimedColumns = new HashSet<(long TableId, long Id)>();
+        var claimedColumns = new Dictionary<(long TableId, long Id), string>();
 
         foreach (var table in schema.Tables)
         {
@@ -330,8 +330,11 @@ internal static class Identity
 
             // An id this database has never seen, for a name it already tracks under another id: the
             // file and the database were adopted separately. Remapping either side silently would
-            // turn one of them into a different object.
-            if (row is null && registry.Live("table").FirstOrDefault(live => live.Name == table.Name) is { } tracked)
+            // turn one of them into a different object. An id another declaration resolves to is not a
+            // contradiction: that declaration is the tracked object under its new name.
+            if (row is null
+                && registry.Live("table").FirstOrDefault(live =>
+                    live.Name == table.Name && !ids.Tables.Values.Contains(live.Id)) is { } tracked)
             {
                 refusals.Add(
                     $"Table '{table.Name}': the schema file says \"$id\" {id}, but this database tracks that table "
@@ -351,7 +354,17 @@ internal static class Identity
                 continue;
             }
 
-            claimedTables.Add(id);
+            // Nothing may be persisted with two declarations claiming one id: the file would stop
+            // parsing and the registry write would collide.
+            if (claimedTables.TryGetValue(id, out var claimedByTable))
+            {
+                refusals.Add(
+                    $"Table '{table.Name}': \"$id\" {id} is already claimed by table '{claimedByTable}'. "
+                    + "Ids identify one table forever; delete the duplicated \"$id\" so a fresh one is allocated.");
+                continue;
+            }
+
+            claimedTables.Add(id, table.Name);
             tables[table.Name] = new ResolvedTable(table.Name, id, row?.Name);
         }
 
@@ -385,8 +398,11 @@ internal static class Identity
                 }
 
                 if (row is null
-                    && registry.Live("column")
-                        .FirstOrDefault(live => live.TableId == resolved.Id && live.Name == column.Name) is { } trackedColumn)
+                    && registry.Live("column").FirstOrDefault(live =>
+                        live.TableId == resolved.Id
+                        && live.Name == column.Name
+                        && !ids.Columns.Any(claimed => claimed.Key.Table == table.Name && claimed.Value == live.Id))
+                        is { } trackedColumn)
                 {
                     refusals.Add(
                         $"Column '{table.Name}.{column.Name}': the schema file says \"$id\" {id}, but this database "
@@ -407,7 +423,16 @@ internal static class Identity
                     continue;
                 }
 
-                claimedColumns.Add((resolved.Id, id));
+                if (claimedColumns.TryGetValue((resolved.Id, id), out var claimedByColumn))
+                {
+                    refusals.Add(
+                        $"Column '{table.Name}.{column.Name}': \"$id\" {id} is already claimed by column "
+                        + $"'{claimedByColumn}' in table '{table.Name}'. Ids identify one column forever within their "
+                        + "table; delete the duplicated \"$id\" so a fresh one is allocated.");
+                    continue;
+                }
+
+                claimedColumns.Add((resolved.Id, id), $"{table.Name}.{column.Name}");
                 columns[(table.Name, column.Name)] = new ResolvedColumn(
                     table.Name,
                     resolved.Id,
@@ -433,12 +458,12 @@ internal static class Identity
         IReadOnlySet<string> dropAdd,
         Dictionary<string, ResolvedTable> tables,
         Dictionary<(string Table, string Column), ResolvedColumn> columns,
-        HashSet<long> claimedTables,
-        HashSet<(long TableId, long Id)> claimedColumns,
+        IReadOnlyDictionary<long, string> claimedTables,
+        IReadOnlyDictionary<(long TableId, long Id), string> claimedColumns,
         List<string> refusals)
     {
         var vanishedTables = registry.Live("table")
-            .Where(row => !claimedTables.Contains(row.Id))
+            .Where(row => !claimedTables.ContainsKey(row.Id))
             .Select(row => row.Name)
             .ToArray();
 
@@ -464,7 +489,7 @@ internal static class Identity
                 continue;
 
             var vanished = registry.Live("column")
-                .Where(row => row.TableId == resolved.Id && !claimedColumns.Contains((resolved.Id, row.Id)))
+                .Where(row => row.TableId == resolved.Id && !claimedColumns.ContainsKey((resolved.Id, row.Id)))
                 .Select(row => row.Name)
                 .ToArray();
 

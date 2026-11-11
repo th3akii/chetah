@@ -41,6 +41,14 @@ internal static class SchemaFile
             .Where(row => row.TableId is not null)
             .ToDictionary(row => (row.TableId!.Value, row.Name), row => row.Id);
 
+        // A declaration with an explicit "$id" claims it: adoption by name must not hand the same
+        // id to a second declaration in that scope. A rename keeps its id, so a new object
+        // declared under the old name is a fresh identity, not a second claimant.
+        var claimedTables = schema.Tables
+            .Where(table => table.Id is not null)
+            .Select(table => table.Id!.Value)
+            .ToHashSet();
+
         // A table id has to be unique among tables, so tables share one counter.
         var nextTable = Math.Max(DeclaredTableMax(schema), registry.MaxTableId) + 1;
 
@@ -50,7 +58,7 @@ internal static class SchemaFile
             {
                 tables[table.Name] = declared;
             }
-            else if (knownTables.TryGetValue(table.Name, out var known))
+            else if (knownTables.TryGetValue(table.Name, out var known) && !claimedTables.Contains(known))
             {
                 tables[table.Name] = known;
             }
@@ -68,6 +76,10 @@ internal static class SchemaFile
         {
             var tableId = tables[table.Name];
             var nextColumn = Math.Max(DeclaredColumnMax(table), registry.MaxColumnId(tableId)) + 1;
+            var claimedColumns = table.Columns
+                .Where(column => column.Id is not null)
+                .Select(column => column.Id!.Value)
+                .ToHashSet();
 
             foreach (var column in table.Columns)
             {
@@ -75,7 +87,8 @@ internal static class SchemaFile
                 {
                     columns[(table.Name, column.Name)] = declared;
                 }
-                else if (knownColumns.TryGetValue((tableId, column.Name), out var known))
+                else if (knownColumns.TryGetValue((tableId, column.Name), out var known)
+                    && !claimedColumns.Contains(known))
                 {
                     columns[(table.Name, column.Name)] = known;
                 }

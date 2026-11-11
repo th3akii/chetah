@@ -107,6 +107,32 @@ public class SchemaFileTests : IDisposable
     }
 
     [Fact]
+    public void DoesNotAdoptAnIdAnotherDeclarationAlreadyClaims()
+    {
+        // `users` was registered with table id 1, and its column `email` with id 2. The file renames
+        // that column to `email_old` (keeping 2) and declares a new `email` in the same edit: the new
+        // declaration must not adopt 2 again, or the file would carry the id twice.
+        var registry = new IdentityRegistry(
+        [
+            new IdentityRow(1, "table", null, "users", false),
+            new IdentityRow(1, "column", 1, "id", false),
+            new IdentityRow(2, "column", 1, "email", false),
+        ]);
+        const string json = """
+            { "tables": { "users": { "columns": {
+              "id": { "type": "integer", "nullable": false },
+              "email_old": { "$id": 2, "type": "text" },
+              "email": { "type": "text" } } } } }
+            """;
+
+        var ids = SchemaFile.ResolveIds(SchemaParser.Parse(json).Schema!, registry);
+
+        Assert.Equal(2, ids.Columns[("users", "email_old")]);
+        Assert.Equal(3, ids.Columns[("users", "email")]);
+        Assert.Contains(("column", 1L, 3L), ids.Assigned);
+    }
+
+    [Fact]
     public async Task SecondRun_WritesNothing()
     {
         const string json = """{ "tables": { "t": { "columns": { "c": { "type": "text" } } } } }""";
