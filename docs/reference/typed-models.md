@@ -50,7 +50,8 @@ Rules:
   produce a valid C# accessor class (everything else, e.g. spaces or quotes)
   are rejected with that reason in the error.
 - `model` — optional C# model name. Default: PascalCase of the table name.
-  Model and accessor names must be unique across the whole schema.
+  Model and accessor names must be unique across the whole schema, and a keyword
+  (`class`, `event`, `params`) is rejected.
 - A key in `columns` — a PostgreSQL type expression: `integer`, `bigint`,
   `text`, `boolean`, `uuid`, `timestamp`, `timestamptz`, `date`, `time`,
   `numeric`, `jsonb`, `bytea`, `T[]`, a declared enum, and so on. The CLR

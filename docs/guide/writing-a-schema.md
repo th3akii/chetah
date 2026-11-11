@@ -127,6 +127,7 @@ metadata is unqualified and would target whatever `search_path` resolves.
 | Table names are unique | rejected |
 | Table name must produce a valid C# accessor (`PascalCase + "Table"`) | rejected |
 | `model` and accessor names are unique across tables | rejected (set an explicit `"model"`) |
+| `model` must not be a C# keyword (`class`, `event`, `params`) | rejected |
 | Table, sequence, view and materialized view names share PostgreSQL's relation namespace | duplicate names rejected |
 | `"schema"` other than `public` | rejected by code generation (and by migrations) |
 
