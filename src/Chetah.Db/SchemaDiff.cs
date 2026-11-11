@@ -30,17 +30,20 @@ internal sealed record OperationTarget(string Kind, string Table, string? Column
 
 /// <summary>One DDL statement the plan wants to execute. <paramref name="Reason"/> is the
 /// destructive justification and is null for safe statements; <paramref name="Dependents"/> names
-/// foreign objects whose removal the statement would cause, which blocks the plan.</summary>
+/// foreign objects whose removal the statement would cause, which blocks the plan.
+/// <paramref name="Refusal"/> blocks a statement for a reason that is not a removal — a relation the
+/// schema file cannot express already holds the name the statement would use.</summary>
 internal sealed record Operation(
     string Statement,
     string Slug,
     string? Reason,
     IReadOnlyList<string>? Dependents = null,
-    OperationTarget? Target = null)
+    OperationTarget? Target = null,
+    string? Refusal = null)
 {
     public bool Destructive => Reason is not null;
 
-    public bool Blocked => Dependents is { Count: > 0 };
+    public bool Blocked => Refusal is not null || Dependents is { Count: > 0 };
 }
 
 internal sealed record MigrationPlan(IReadOnlyList<Operation> Operations)
@@ -81,6 +84,37 @@ internal static class SchemaDiff
         var operations = new List<Operation>();
         var probeTable = new Dictionary<string, string>(StringComparer.Ordinal);
         var probeColumn = new Dictionary<(string Table, string Column), string>();
+
+        // A partitioned table and its partitions cannot be declared, so they are not read as tables.
+        // A declaration that carries one of their names is refused here instead of being planned as
+        // CREATE TABLE over a name PostgreSQL already holds (42P07), and the declaration leaves the
+        // desired state so no other statement — column, key or index — is planned against a relation
+        // the file cannot describe.
+        var unexpressible = desired.Tables
+            .Where(table => live.Unexpressible.Any(relation => relation.Name == table.Name))
+            .Select(table => table.Name)
+            .ToArray();
+
+        if (unexpressible.Length > 0)
+        {
+            var declared = unexpressible.ToHashSet(StringComparer.Ordinal);
+            desired = desired with
+            {
+                Tables = desired.Tables.Where(table => !declared.Contains(table.Name)).ToArray(),
+                Constraints = desired.ScopedConstraints.Where(constraint => !declared.Contains(constraint.Table)).ToArray(),
+                Indexes = desired.ScopedIndexes.Where(index => !declared.Contains(index.Table)).ToArray(),
+            };
+
+            foreach (var name in unexpressible)
+            {
+                var relation = live.Unexpressible.First(candidate => candidate.Name == name);
+                operations.Add(new Operation(
+                    $"CREATE TABLE {Quote(name)}",
+                    $"unsupported_{name}",
+                    null,
+                    Refusal: $"{Quote(name)} exists as a {relation.Kind}, which the schema file cannot express"));
+            }
+        }
 
         if (identities is not null)
             live = ApplyRenames(desired, live, identities, operations, probeTable, probeColumn);

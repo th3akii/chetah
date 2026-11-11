@@ -18,7 +18,9 @@ composite UNIQUE / FOREIGN KEY and `ON DELETE` / `ON UPDATE` (including
 `SET NULL` / `SET DEFAULT` on both directions, removal, and renames of the
 tables or columns they cover); expression, partial, covering (`INCLUDE`) and
 non-btree indexes, non-default opclasses and non-default sort orders protected
-instead of matched or dropped; foreign keys from another schema detected;
+instead of matched or dropped; partitioned tables and partitions read as
+unexpressible relations instead of being dropped or re-created (see item 25);
+foreign keys from another schema detected;
 a declared unique index is not duplicated on top of a live unique constraint
 (the skip is silent — see item 9); statement-level failure reporting;
 renaming a table or column carries its constraints and indexes with it; a
@@ -98,6 +100,7 @@ Also fixed by the ordering pass:
 | 22 | Low | Identities | A hand-written `"$id"` that matches an existing object in its scope is indistinguishable from a rename, so it will rename that object rather than be rejected. Ids are tool-owned by rule; a signature over the file would be needed to enforce it, which git merges would break |
 | 23 | Low | Scope | No down/rollback migrations (**by design**) |
 | 24 | Low | Scope | No RLS, no INSERT/UPDATE/DELETE/UPSERT, no other dialect (**by design**) |
+| 25 | Medium | Catalog | Partitioning is not expressible: a partitioned table and its partitions are read as unexpressible relations, never planned as `CREATE TABLE`/`DROP TABLE`, and a declaration using one of their names is refused |
 
 ## Details
 
@@ -355,3 +358,24 @@ a convention with these refusals around it.
 
 Down/rollback migrations, seeds/data migrations, an automatic CI apply mode,
 RLS, INSERT/UPDATE/DELETE/UPSERT, and any database other than PostgreSQL.
+
+### 25. Partitioning is not expressible — by design
+
+`PARTITION BY` has no declaration, so a partitioned table (`relkind = 'p'`) and
+each partition (`relispartition`) are read as *unexpressible relations*: never
+read as tables, so no plan drops a partition, alters or drops their columns, or
+creates or drops their constraints and indexes. A file that declares a table
+with the name of one of them is refused with the relation named, before
+anything is written (the plan would otherwise emit `CREATE TABLE` and
+PostgreSQL would answer `42P07`):
+
+```text
+-- refused: "events" exists as a partitioned table, which the schema file cannot express
+```
+
+Rows of a partition belong to the partitioned table, and its partitioning
+clause cannot be described here, so a plan must never treat it as a table the
+file "removed".
+
+**Fix (when wanted):** add a `partitionBy` declaration (strategy, keys) and a
+partition list to the desired state, then remove this protection.

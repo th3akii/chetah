@@ -195,6 +195,11 @@ internal sealed class MigrationRunner
         return true;
     }
 
+    /// <summary>Why a statement is refused: the objects it would remove, or the conflict the plan
+    /// reported itself.</summary>
+    private static string Refusal(Operation operation) =>
+        operation.Refusal ?? $"would remove {string.Join(", ", operation.Dependents!)}";
+
     private async Task<int> DiffCoreAsync(
         NpgsqlConnection connection,
         Schema schema,
@@ -247,7 +252,7 @@ internal sealed class MigrationRunner
         foreach (var operation in plan.Operations)
         {
             if (operation.Blocked)
-                _output.WriteLine($"-- refused: would remove {string.Join(", ", operation.Dependents!)}");
+                _output.WriteLine($"-- refused: {Refusal(operation)}");
             _output.WriteLine(operation.Destructive
                 ? $"-- destructive: {operation.Reason}"
                 : "-- safe");
@@ -472,10 +477,10 @@ internal sealed class MigrationRunner
         var blocked = plan.Blocked;
         if (blocked.Count > 0)
         {
-            _output.WriteLine("Refusing to apply: these statements would remove objects the schema file does not express.");
+            _output.WriteLine("Refusing to apply: these statements would remove or conflict with objects the schema file does not express.");
             foreach (var operation in blocked)
-                _output.WriteLine($"  - {operation.Statement};  would remove {string.Join(", ", operation.Dependents!)}");
-            _output.WriteLine("No migration was written. Remove those objects yourself before this schema change.");
+                _output.WriteLine($"  - {operation.Statement};  {Refusal(operation)}");
+            _output.WriteLine("No migration was written. Remove or rename those objects yourself before this schema change.");
             return 1;
         }
 
@@ -674,10 +679,10 @@ internal sealed class MigrationRunner
     {
         if (plan.Blocked.Count > 0)
         {
-            _output.WriteLine($"Refusing to repair {entry.Id}: these statements would remove objects the schema file does not express.");
+            _output.WriteLine($"Refusing to repair {entry.Id}: these statements would remove or conflict with objects the schema file does not express.");
             foreach (var operation in plan.Blocked)
-                _output.WriteLine($"  - {operation.Statement};  would remove {string.Join(", ", operation.Dependents!)}");
-            _output.WriteLine("No migration file was modified. Remove those objects yourself before repairing.");
+                _output.WriteLine($"  - {operation.Statement};  {Refusal(operation)}");
+            _output.WriteLine("No migration file was modified. Remove or rename those objects yourself before repairing.");
             return null;
         }
 

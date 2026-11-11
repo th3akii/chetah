@@ -42,6 +42,12 @@ internal sealed record TableState(string Name, IReadOnlyList<ColumnState> Column
 /// refuse to remove it: PostgreSQL drops attached objects silently when their column or table goes.</summary>
 internal sealed record ForeignObject(string Table, string? Column, string Kind, string Name);
 
+/// <summary>A relation the schema file cannot describe either way: a partitioned table
+/// (<c>relkind = 'p'</c>) or one of its partitions. The partitioning clause has no declaration, so
+/// the relation is never read as a table — never diffed column by column and never dropped — and a
+/// declared table of the same name is refused instead of planned as <c>CREATE TABLE</c>.</summary>
+internal sealed record UnexpressibleRelation(string Name, string Kind);
+
 /// <summary>A constraint the schema file can express: primary key (<c>p</c>), unique (<c>u</c>) or
 /// foreign key (<c>f</c>). Matching is by definition — kind, columns, reference target and
 /// referential actions — so a hand-named constraint does not churn on every apply.</summary>
@@ -77,6 +83,12 @@ internal sealed record CatalogState(
 
     [JsonIgnore]
     public IReadOnlyList<IndexState> ScopedIndexes => Indexes ?? [];
+
+    /// <summary>Relations present in the live schema that no declaration describes. Set by the
+    /// catalog reader only and never serialized: a snapshot describes the state a migration
+    /// produced, while this is a fact about the database that was just read.</summary>
+    [JsonIgnore]
+    public IReadOnlyList<UnexpressibleRelation> Unexpressible { get; init; } = [];
 }
 
 /// <summary>Translates the parsed schema file into the same catalog shape introspection returns.</summary>
@@ -290,6 +302,7 @@ internal static class PostgresCatalog
             LEFT JOIN pg_attrdef d ON d.adrelid = c.oid AND d.adnum = a.attnum
             WHERE n.nspname = $1
               AND c.relkind = 'r'
+              AND NOT c.relispartition
               AND a.attnum > 0
               AND NOT a.attisdropped
             """,
@@ -354,9 +367,24 @@ internal static class PostgresCatalog
         LEFT JOIN pg_attrdef d ON d.adrelid = c.oid AND d.adnum = a.attnum
         WHERE n.nspname = $1
           AND c.relkind = 'r'
+          AND NOT c.relispartition
           AND a.attnum > 0
           AND NOT a.attisdropped
         ORDER BY c.relname, a.attnum
+        """;
+
+    /// <summary>The partitioned tables and partitions of the schema. They are excluded from every
+    /// other query above and below: their definition includes a partitioning clause the file cannot
+    /// express, so a plan that read them as tables would drop each partition it does not declare and
+    /// build a duplicate over a partitioned parent. Reading their names is what lets a declaration
+    /// that collides with one be refused instead.</summary>
+    private const string UnexpressibleRelationsQuery = """
+        SELECT c.relname, CASE WHEN c.relispartition THEN 'partition' ELSE 'partitioned table' END
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = $1
+          AND (c.relkind = 'p' OR (c.relkind = 'r' AND c.relispartition))
+        ORDER BY c.relname
         """;
 
     /// <summary>Constraints the schema file can express, with the columns they cover and — for a
@@ -384,6 +412,8 @@ internal static class PostgresCatalog
         LEFT JOIN pg_class rc ON rc.oid = con.confrelid
         LEFT JOIN pg_namespace rn ON rn.oid = rc.relnamespace
         WHERE n.nspname = $1
+          AND c.relkind = 'r'
+          AND NOT c.relispartition
           AND con.contype IN ('p', 'u', 'f')
         ORDER BY c.relname, con.conname
         """;
@@ -405,7 +435,9 @@ internal static class PostgresCatalog
     /// constraint is already reported as that constraint, and reporting both would double the noise.
     /// A foreign key also records the referenced index in <c>conindid</c>, but it does not own it, so
     /// the filter asks for the constraint kinds that do. Expression and partial indexes are excluded
-    /// here too — their definition is not just a column list, so they are protected instead.</summary>
+    /// here too — their definition is not just a column list, so they are protected instead. So are
+    /// partitioned indexes (<c>relkind = 'I'</c>) and the indexes of a partition: they belong to a
+    /// relation the schema file cannot express.</summary>
     private const string IndexesQuery = """
         SELECT ic.relname,
                c.relname,
@@ -419,6 +451,8 @@ internal static class PostgresCatalog
         JOIN pg_namespace n ON n.oid = c.relnamespace
         JOIN pg_am am ON am.oid = ic.relam
         WHERE n.nspname = $1
+          AND ic.relkind = 'i'
+          AND NOT ic.relispartition
           AND i.indexprs IS NULL
           AND i.indpred IS NULL
           AND am.amname = 'btree'
@@ -498,7 +532,26 @@ internal static class PostgresCatalog
             tables,
             foreign,
             constraints,
-            indexes);
+            indexes)
+        {
+            Unexpressible = await ReadUnexpressibleAsync(connection, schema, cancellationToken),
+        };
+    }
+
+    private static async Task<List<UnexpressibleRelation>> ReadUnexpressibleAsync(
+        NpgsqlConnection connection,
+        string schema,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand(UnexpressibleRelationsQuery, connection);
+        command.Parameters.Add(new NpgsqlParameter { Value = schema });
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+
+        var relations = new List<UnexpressibleRelation>();
+        while (await reader.ReadAsync(cancellationToken))
+            relations.Add(new UnexpressibleRelation(reader.GetString(0), reader.GetString(1)));
+
+        return relations;
     }
 
     private static async Task<List<TableState>> ReadTablesAsync(

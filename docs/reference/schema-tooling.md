@@ -263,7 +263,11 @@ constraints and expression, partial, covering (`INCLUDE`), non-btree,
 non-default-opclass or non-default-sort-order indexes that exist in the database
 but are not declared are read from the catalog, never dropped, and a statement
 that would remove one is refused. So is a foreign key from another schema that
-points at a managed table. An index differing only by `COLLATE`,
+points at a managed table. A partitioned table and its partitions are
+unexpressible for the same reason — `PARTITION BY` has no declaration — so they
+are read and left alone: never planned as `CREATE TABLE` or `DROP TABLE`, never
+diffed column by column, and a declaration using the name of one of them is
+refused with the relation named. An index differing only by `COLLATE`,
 `NULLS NOT DISTINCT` or a storage option is not distinguished — see
 [`migration-limitations.md`](../notes/migration-limitations.md).
 
@@ -295,8 +299,9 @@ points at a managed table. An index differing only by `COLLATE`,
   holds NULLs require an interactive `yes`. Non-interactive runs refuse instead
   of assuming consent.
 - **Unexpressible objects block:** check/exclusion constraints, expression,
-  partial, covering and non-btree indexes, and foreign keys from another schema
-  are read from `pg_constraint`/`pg_index` and never matched against a declared
+  partial, covering and non-btree indexes, partitioned tables and partitions,
+  and foreign keys from another schema are read from
+  `pg_constraint`/`pg_index`/`pg_class` and never matched against a declared
   object or removed; a statement that would take one down is refused with the
   object names before anything is written. Check constraints and advanced
   indexes can be *declared* since schema format v1, but the engine does not

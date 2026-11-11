@@ -2288,6 +2288,51 @@ public class MigrationApplyTests
         Assert.Equal(2, await fixture.CountAsync("SELECT count(*) FROM chetah.migrations"));
     }
 
+    /// <summary>A partition owns copies of the parent's primary key and indexes, and both carry the
+    /// partition's name in the catalog. Partitioning cannot be expressed, so those objects belong to
+    /// an unexpressible relation: they are never read as managed constraints or indexes, and no plan
+    /// removes them — the rows are the parent's rows.</summary>
+    [PostgresFact]
+    public async Task APartitionedTablesKeysAndIndexesAreNotPlannedForRemoval()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        await fixture.ExecuteAsync("""
+            CREATE TABLE events (id bigint PRIMARY KEY, at timestamp NOT NULL) PARTITION BY RANGE (id);
+            CREATE TABLE events_p1 PARTITION OF events FOR VALUES FROM (0) TO (100);
+            CREATE INDEX events_at_idx ON events (at);
+            INSERT INTO events VALUES (1, now());
+            """);
+
+        const string declared = """
+            { "tables": { "unrelated": { "columns": { "id": { "type": "integer" } } } } }
+            """;
+        var output = new StringWriter();
+        Assert.Equal(0, await fixture.Runner(output).DiffAsync(fixture.Parse(declared)));
+
+        // Only the declared table is created: no DROP of the partition, its key or its index.
+        var diff = output.ToString();
+        Assert.Contains("CREATE TABLE \"unrelated\"", diff, StringComparison.Ordinal);
+        Assert.DoesNotContain("DROP", diff, StringComparison.Ordinal);
+        Assert.DoesNotContain("events", diff, StringComparison.Ordinal);
+
+        // Declaring the partitioned table itself cannot be planned as CREATE TABLE (42P07): the
+        // declaration is refused with the relation named, and nothing is written.
+        var colliding = new StringWriter();
+        var refused = await fixture.Runner(colliding).ApplyAsync(fixture.Parse("""
+            { "tables": { "events": { "columns": {
+              "id": { "type": "bigint", "nullable": false },
+              "at": { "type": "timestamp", "nullable": false } } } } }
+            """));
+        Assert.Equal(1, refused);
+        Assert.Contains("CREATE TABLE \"events\"", colliding.ToString(), StringComparison.Ordinal);
+        Assert.Contains(
+            "\"events\" exists as a partitioned table, which the schema file cannot express",
+            colliding.ToString(),
+            StringComparison.Ordinal);
+        Assert.Equal(1, await fixture.CountAsync("SELECT count(*) FROM events"));
+        Assert.Empty(new MigrationStore(fixture.MigrationsDirectory).ReadJournal().Entries);
+    }
+
     private static string TableExists(string name) =>
         $"SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '{name}'";
 
