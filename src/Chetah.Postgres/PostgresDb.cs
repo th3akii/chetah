@@ -35,6 +35,10 @@ public sealed class PostgresDb
     public TypedUpdateQuery<T> Update<T>() =>
         new(this, Resolve<T>());
 
+    /// <summary>Starts a DELETE of the table registered for model T.</summary>
+    public TypedDeleteQuery<T> Delete<T>() =>
+        new(this, Resolve<T>());
+
     internal TableBinding<T> Resolve<T>()
     {
         if (_bindings is not null && _bindings.TryGetValue(typeof(T), out var binding))

@@ -1,7 +1,7 @@
 namespace Chetah.Postgres;
 
 /// <summary>
-/// Shared reading half of a write statement with RETURNING (INSERT or UPDATE). The compile step is
+/// Shared reading half of a write statement with RETURNING (INSERT, UPDATE or DELETE). The compile step is
 /// supplied by the statement's builder so scope rules stay where the fluent state lives; the
 /// projection plan and compiled mapper are the SELECT machinery. Terminals judge the returned row
 /// count rather than assuming one row: a write can affect none or many.
