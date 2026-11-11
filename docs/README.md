@@ -19,8 +19,10 @@ docs/
 | I want to… | Read |
 |---|---|
 | write or change `chetah-schema.json` | [guide/writing-a-schema.md](guide/writing-a-schema.md) |
-| read rows (filter, project, order, page, join, group, count) | [guide/querying.md](guide/querying.md) |
-| insert, update or delete rows, use defaults, upsert and return written rows | [guide/writing-data.md](guide/writing-data.md) |
+| read rows (filter, project, order, page, join, group, count) | [guide/select.md](guide/select.md) |
+| insert rows, use defaults, upsert, return inserted rows | [guide/insert.md](guide/insert.md) |
+| change rows, assign values or expressions, update from joined tables | [guide/update.md](guide/update.md) |
+| remove rows, delete using joined tables | [guide/delete.md](guide/delete.md) |
 | understand the diff/apply workflow, ids, gates and history | [reference/schema-tooling.md](reference/schema-tooling.md) |
 | use the generated models and the query API | [reference/typed-models.md](reference/typed-models.md), [reference/basic-select.md](reference/basic-select.md) |
 | know what the project is for | [project/spec.md](project/spec.md) |
@@ -35,10 +37,12 @@ docs/
 author needs (the complete property reference, rules, cookbook, common mistakes)
 is in [guide/writing-a-schema.md](guide/writing-a-schema.md), which is also the
 file to hand an AI assistant: it ends with an explicit rule set and a template.
-Reading and querying rows (terminals, filters, projections, ordering, paging,
-joins, grouping) is [guide/querying.md](guide/querying.md); writing rows
-(inserts, updates, deletes, defaults, conflicts, `RETURNING`) is
-[guide/writing-data.md](guide/writing-data.md).
+There is one guide per statement: [guide/select.md](guide/select.md) (terminals,
+filters, projections, ordering, paging, joins, grouping),
+[guide/insert.md](guide/insert.md) (defaults, multi-row, conflicts),
+[guide/update.md](guide/update.md) (assignments, scoping, `UPDATE … FROM`) and
+[guide/delete.md](guide/delete.md) (scoping, `DELETE … USING`). UPDATE and DELETE
+reuse SELECT's `Where` and join rules, and all three writes share `RETURNING`.
 
 **`reference/`** — behaviour that is already implemented, described precisely:
 the migration tool (diff, identities, history, safety gates), the generated

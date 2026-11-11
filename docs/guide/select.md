@@ -1,7 +1,8 @@
 # Reading data with SELECT — a guide
 
 > Status: delivered · covers `db.Select<T>()` and its terminal operators
-> Reference detail: [`typed-models.md`](../reference/typed-models.md),
+> Related: [`insert.md`](insert.md) · [`update.md`](update.md) ·
+> [`delete.md`](delete.md) · reference [`typed-models.md`](../reference/typed-models.md),
 > [`basic-select.md`](../reference/basic-select.md)
 
 How to query PostgreSQL through the generated models. Everything here compiles
@@ -161,10 +162,11 @@ count statement — it cannot change how many rows a query returns — but it is
 still validated, so an invalid chain fails here exactly as it would on `ToListAsync`.
 
 Also not implemented: transactions, RIGHT/FULL/CROSS joins,
-automatic relationship loading, and dialects other than PostgreSQL. INSERT,
-UPDATE and DELETE are covered by [`writing-data.md`](writing-data.md). See
-[`roadmap.md`](../project/roadmap.md) for the stage each belongs to, and
-[`decisions.md`](../project/decisions.md) D004/D009/D011/D012/D013 for the
+automatic relationship loading, and dialects other than PostgreSQL. Writes have
+their own guides — [`insert.md`](insert.md), [`update.md`](update.md) and
+[`delete.md`](delete.md); UPDATE and DELETE reuse this guide's `Where` and join
+rules. See [`roadmap.md`](../project/roadmap.md) for the stage each belongs to,
+and [`decisions.md`](../project/decisions.md) D004/D009/D011/D012/D013 for the
 rationale.
 
 ## Checklist for a new query

@@ -274,7 +274,7 @@ Not implemented, not hidden: transactions, RIGHT/FULL/CROSS joins and automatic
 relationship loading (Stage 5 candidates), expressions outside the frozen
 translator surface (they fail explicitly before any connection), dialects other
 than PostgreSQL. `INSERT`/`UPDATE`/`DELETE` and their typed `RETURNING` chains
-are documented in [`../guide/writing-data.md`](../guide/writing-data.md).
+are documented in [`../guide/insert.md`](../guide/insert.md), [`../guide/update.md`](../guide/update.md) and [`../guide/delete.md`](../guide/delete.md).
 Typed model generation and typed column/nullability metadata arrived in milestone 002; write-side
 column metadata (`IsNullable`, `HasDefault`, identity/computed generation)
 arrived with INSERT. The boundaries above (Core data objects / dialect compiler

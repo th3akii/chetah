@@ -11,7 +11,7 @@ generator emits deterministic source files, and the Postgres
 executor returns strongly typed records. Since Stage 2 those typed models also
 drive `Where`/`Select`/join/group chains (see the "Typed queries" step and
 [`decisions.md`](../project/decisions.md) D004). For a task-oriented walkthrough
-of the query API, see [`../guide/querying.md`](../guide/querying.md).
+of the query API, see [`../guide/select.md`](../guide/select.md).
 
 ```
 chetah-schema.json → Chetah.CodeGen → Generated/Tables/*.g.cs → db.Select<T>()… → List<User>
@@ -170,7 +170,7 @@ public static partial class ChetahSchema
 
 `Column` metadata is also what INSERT and UPDATE validate against: nullability,
 database defaults, identity generation and computed columns. Descriptions of the
-write surface are in [`../guide/writing-data.md`](../guide/writing-data.md).
+write surface are in [`../guide/insert.md`](../guide/insert.md) and [`../guide/update.md`](../guide/update.md).
 
 `Chetah.Schema.g.cs` holds the rest of the registry, so the public API is
 unchanged whether you use `split` or `single`:
@@ -370,7 +370,7 @@ Backward compatibility of milestone 001 is covered by the unchanged
 
 Not implemented, not hidden: SQL Server, Roslyn source generators, automatic
 relationship management, RIGHT/FULL/CROSS joins. INSERT, UPDATE and DELETE are
-documented in [`../guide/writing-data.md`](../guide/writing-data.md).
+documented in [`../guide/insert.md`](../guide/insert.md), [`../guide/update.md`](../guide/update.md) and [`../guide/delete.md`](../guide/delete.md).
 Schema-to-database tooling and catalog introspection live in `src/Chetah.Db`
 instead — see [`schema-tooling.md`](schema-tooling.md).
 Query lambdas outside the
