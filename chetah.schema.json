@@ -104,7 +104,7 @@
         "schema": {
           "$ref": "#/$defs/identifier",
           "default": "public",
-          "description": "PostgreSQL namespace. Defaults to public. Only public can be migrated today."
+          "description": "PostgreSQL namespace. Defaults to public. Only public is supported today: migrations and code generation both refuse any other namespace."
         },
         "model": {
           "$ref": "#/$defs/identifier",

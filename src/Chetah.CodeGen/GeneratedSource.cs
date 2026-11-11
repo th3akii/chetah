@@ -19,6 +19,7 @@ public static class GeneratedSource
         string @namespace,
         GeneratedLayout layout)
     {
+        ValidateTableSchemas(schema);
         ValidateClrMappings(schema);
         ValidateGeneratedNames(schema);
 
@@ -246,6 +247,21 @@ public static class GeneratedSource
             sb.AppendLine($"            {expression}{comma}");
         }
         sb.AppendLine("        );");
+    }
+
+    /// <summary>Table metadata carries the table name alone, and that is what every compiler emits,
+    /// so a table declared in another schema would be read and written wherever <c>search_path</c>
+    /// resolves its name. Migrations refuse the same declarations (Chetah.Db SchemaCapabilities).</summary>
+    private static void ValidateTableSchemas(Schema schema)
+    {
+        foreach (var table in schema.Tables)
+        {
+            if (table.Schema != "public")
+                throw new InvalidOperationException(
+                    $"tables.{table.Name}.schema: only the default PostgreSQL schema (public) can be generated, "
+                    + $"but the table declares '{table.Schema}'. Move the table to public, or keep it out of the "
+                    + "schema file.");
+        }
     }
 
     private static void ValidateClrMappings(Schema schema)

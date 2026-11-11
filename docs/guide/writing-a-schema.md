@@ -99,7 +99,9 @@ booleans, `null` and `{ "sql": ... }` need no marker. Both tools read `$schema`;
 editors use it for completion and structural validation.
 
 PostgreSQL's `public` is the default namespace; any object may set `"schema"` to
-another namespace.
+another namespace. Only `public` is supported today: migrations refuse any other
+namespace, and code generation refuses it for tables, because generated table
+metadata is unqualified and would target whatever `search_path` resolves.
 
 ---
 
@@ -126,6 +128,7 @@ another namespace.
 | Table name must produce a valid C# accessor (`PascalCase + "Table"`) | rejected |
 | `model` and accessor names are unique across tables | rejected (set an explicit `"model"`) |
 | Table, sequence, view and materialized view names share PostgreSQL's relation namespace | duplicate names rejected |
+| `"schema"` other than `public` | rejected by code generation (and by migrations) |
 
 `model` also decides the generated class name, so set it when the table name is
 plural: `"model": "User"` for `users`.
