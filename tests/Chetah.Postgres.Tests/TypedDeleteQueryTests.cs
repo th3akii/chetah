@@ -150,6 +150,29 @@ public class TypedDeleteQueryTests
     }
 
     [Fact]
+    public void MembershipAcceptsOnlyTheDefaultCollectionComparer()
+    {
+        // A comparer cannot be reproduced by SQL equality, so a comparer-carrying collection is
+        // accepted only with the default comparer for its element type.
+        var ids = new HashSet<int> { 4, 6 };
+        var compiled = Db.Delete<Student>().Where(student => ids.Contains(student.Id)).Compile();
+        Assert.Contains("IN (", compiled.Sql);
+        Assert.Equal(2, compiled.Parameters.Count);
+
+        // Ordered sets carry an IComparer instead of an IEqualityComparer.
+        var sorted = new SortedSet<int> { 4 };
+        Assert.Contains("IN (", Db.Delete<Student>().Where(student => sorted.Contains(student.Id)).Compile().Sql);
+
+        var caseInsensitive = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "ada" };
+        var error = Assert.Throws<NotSupportedException>(() => Db.Delete<Student>()
+            .Where(student => caseInsensitive.Contains(student.Nickname!)).Compile());
+        Assert.Contains("comparer", error.Message, StringComparison.Ordinal);
+        var lenientSorted = new SortedSet<string>(StringComparer.OrdinalIgnoreCase) { "ada" };
+        Assert.Throws<NotSupportedException>(() => Db.Delete<Student>()
+            .Where(student => lenientSorted.Contains(student.Nickname!)).Compile());
+    }
+
+    [Fact]
     public void CapturedPredicateValuesAreSnapshottedAtTheFluentCall()
     {
         var age = 20;

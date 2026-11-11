@@ -67,7 +67,12 @@ Accepted in `Where`:
   (the pattern is a parameter, wildcards escaped);
 - membership: a captured or inline collection's `Contains`, compiled to a
   parameterized `IN` — `new int?[] { 18, null }.Contains(u.Age)` handles the
-  null member explicitly;
+  null member explicitly. `IN` compares with SQL equality, so a collection that
+  carries a comparer (`HashSet<T>`, `SortedSet<T>`, the immutable sets) is
+  accepted only with the default comparer for its element type: a
+  `new HashSet<string>(StringComparer.OrdinalIgnoreCase)` throws
+  `NotSupportedException` instead of silently matching case-sensitively, exactly
+  as `Enumerable.Contains(…, comparer)` does;
 - aggregates (`Sql.Sum(...)` and friends) inside a grouped query only.
 
 Everything else throws `NotSupportedException` naming the expression — for

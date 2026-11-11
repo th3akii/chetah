@@ -343,12 +343,39 @@ internal sealed class QueryExpressionTranslator(IReadOnlyDictionary<ParameterExp
         }
         if (!TryValue(expression, out var raw)) throw Unsupported(expression);
         if (raw is null) throw new ArgumentNullException("collection");
+        RequireDefaultComparer(raw, expression);
         var type = raw.GetType();
         if (raw is not IEnumerable enumerable || raw is string || !type.IsArray
             && !type.GetInterfaces().Any(candidate => candidate.IsGenericType
                 && (candidate.GetGenericTypeDefinition() == typeof(ICollection<>) || candidate.GetGenericTypeDefinition() == typeof(IReadOnlyCollection<>))))
             throw Unsupported(expression);
         return enumerable;
+    }
+
+    /// <summary>
+    /// A membership collection resolves to parameterized <c>IN</c>, which compares with SQL
+    /// equality and cannot reproduce a comparer. A comparer-carrying collection
+    /// (<c>HashSet&lt;T&gt;</c>, <c>SortedSet&lt;T&gt;</c>, the immutable sets…) is therefore
+    /// refused unless its comparer is the default one for its element type, matching the
+    /// refusal of <c>Enumerable.Contains(…, comparer)</c>.
+    /// </summary>
+    private static void RequireDefaultComparer(object collection, Expression expression)
+    {
+        foreach (var property in collection.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance))
+        {
+            if (!property.CanRead || property.GetIndexParameters().Length > 0 || !property.PropertyType.IsGenericType) continue;
+            var definition = property.PropertyType.GetGenericTypeDefinition();
+            if (definition != typeof(IEqualityComparer<>) && definition != typeof(IComparer<>)) continue;
+            var element = property.PropertyType.GetGenericArguments()[0];
+            var defaultComparer = (definition == typeof(IEqualityComparer<>)
+                    ? typeof(EqualityComparer<>).MakeGenericType(element)
+                    : typeof(Comparer<>).MakeGenericType(element))
+                .GetProperty(nameof(Comparer<int>.Default), BindingFlags.Public | BindingFlags.Static)!
+                .GetValue(null);
+            if (!ReferenceEquals(property.GetValue(collection), defaultComparer))
+                throw new NotSupportedException(
+                    $"Unsupported query expression: {expression} (the collection's {property.Name} is not the default comparer for {element.Name}; IN compares with SQL equality and cannot reproduce it).");
+        }
     }
 
     internal static bool TryValue(Expression expression, out object? value)
