@@ -456,7 +456,7 @@ Optional index properties: `unique`, `method` (default `btree`), `where`,
 
 | Rule | What happens |
 |---|---|
-| `name` required, a plain identifier, unique across the schema | rejected |
+| `name` required, a plain identifier, unique across the schema and never the name of a constraint | rejected |
 | `keys` non-empty; column keys must name declared columns | rejected |
 | `include` entries must be declared columns, listed once | rejected |
 | `direction`/`nulls`/`method`/`opclass` validated against PostgreSQL's vocabulary | rejected |

@@ -1342,8 +1342,9 @@ public static class SchemaValidator
             }
         }
 
-        /// <summary>Constraint names are kept unique across the schema: primary keys and unique
-        /// constraints create indexes there, and a duplicate would collide at apply time.</summary>
+        /// <summary>Constraint and index names share one namespace, because PostgreSQL creates an
+        /// index for every primary key and unique constraint: a duplicate would collide at apply
+        /// time.</summary>
         private void ValidateConstraints(Schema schema)
         {
             var seen = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -1359,7 +1360,7 @@ public static class SchemaValidator
                 if (seen.TryAdd(name, path))
                     return;
 
-                Report(path, $"Constraint name '{name}' is already used at {seen[name]}.");
+                Report(path, $"Name '{name}' is already used at {seen[name]}. Constraints and indexes share one namespace.");
             }
 
             foreach (var table in schema.Tables)
@@ -1446,8 +1447,12 @@ public static class SchemaValidator
 
                 foreach (var index in table.Indexes ?? [])
                 {
+                    // PostgreSQL keeps indexes and constraints in one namespace per schema, so an
+                    // index may not reuse a constraint name (SchemaDiff relies on the same rule).
                     if (!indexNames.Add(index.Name))
                         Report($"{tablePath}.indexes", $"Index '{index.Name}' is declared more than once. Index names are unique within a schema.");
+                    else
+                        Check(index.Name, $"{tablePath}.indexes");
 
                     if (relations.Contains((table.Schema, index.Name)))
                         Report($"{tablePath}.indexes", $"Index '{index.Name}' collides with another relation in schema '{table.Schema}'.");
