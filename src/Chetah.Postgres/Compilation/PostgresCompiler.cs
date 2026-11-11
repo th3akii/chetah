@@ -89,10 +89,10 @@ public static class PostgresCompiler
         /// <summary>LEFT-join source id → presence-marker column name appended to its derived source.</summary>
         private readonly Dictionary<int, string> _presenceMarkers = new();
         private readonly HashSet<string> _projectionAliases = new();
-        /// <summary>Group-key subtree → its first rendered SQL; reuse keeps composite keys SQL-identical everywhere. Scanned with structural equality because membership-list keys are not record-equal.</summary>
-        private readonly List<(SqlExpression Key, string Sql)> _groupKeyRenders = new();
-        /// <summary>True while rendering SELECT items, GROUP BY, HAVING or ORDER BY, where group-key subtrees must reuse their first rendered SQL.</summary>
-        private bool _captureGroupKeys;
+        /// <summary>Shared subtree → its first rendered SQL; reuse keeps expressions PostgreSQL compares by parse tree SQL-identical. Scanned with structural equality because membership-list nodes are not record-equal.</summary>
+        private readonly List<(SqlExpression Key, string Sql)> _sharedRenders = new();
+        /// <summary>True while rendering SELECT items, GROUP BY, HAVING or ORDER BY, where a shared subtree must reuse its first rendered SQL.</summary>
+        private bool _captureSharedRenders;
 
         internal Compilation(SelectQuery query, bool countOnly = false)
         {
@@ -766,9 +766,9 @@ public static class PostgresCompiler
 
                 if (_query.Projection is { } projection)
                 {
-                    _captureGroupKeys = true;
+                    _captureSharedRenders = true;
                     _sql.Append(string.Join(", ", projection.Select((item, index) => RenderSelectItem(item, index))));
-                    _captureGroupKeys = false;
+                    _captureSharedRenders = false;
                 }
                 else
                     _sql.Append(string.Join(
@@ -793,17 +793,17 @@ public static class PostgresCompiler
             if (_query.GroupKeys.Count > 0)
             {
                 _sql.Append(" GROUP BY ");
-                _captureGroupKeys = true;
+                _captureSharedRenders = true;
                 _sql.Append(string.Join(", ", _query.GroupKeys.Select(RenderExpression)));
-                _captureGroupKeys = false;
+                _captureSharedRenders = false;
             }
 
             if (_query.Having is { } having)
             {
                 _sql.Append(" HAVING ");
-                _captureGroupKeys = true;
+                _captureSharedRenders = true;
                 _sql.Append(RenderExpression(having));
-                _captureGroupKeys = false;
+                _captureSharedRenders = false;
             }
 
             // Count validates ordering but never renders it: it can pick which rows a LIMIT keeps,
@@ -811,12 +811,12 @@ public static class PostgresCompiler
             if (!_countOnly && _query.Orderings.Count > 0)
             {
                 _sql.Append(" ORDER BY ");
-                _captureGroupKeys = true;
+                _captureSharedRenders = true;
                 _sql.Append(string.Join(
                     ", ",
                     _query.Orderings.Select(term =>
                         $"{RenderExpression(term.Expression)}{(term.Descending ? " DESC" : " ASC")}")));
-                _captureGroupKeys = false;
+                _captureSharedRenders = false;
             }
 
             if (_query.Limit is int limit)
@@ -885,22 +885,36 @@ public static class PostgresCompiler
 
         private string RenderExpression(SqlExpression expression)
         {
-            if (_captureGroupKeys && _query.GroupKeys.Any(key => StructurallyEqual(key, expression)))
+            if (_captureSharedRenders && IsSharedRender(expression))
             {
                 // A composite group key may surface inside SELECT, HAVING, ORDER BY and the key list
-                // itself; PostgreSQL only accepts grouped expressions with identical SQL, so every
-                // structurally repeated subtree reuses its first rendered text (and parameter slots).
-                var cached = _groupKeyRenders.FirstOrDefault(entry => StructurallyEqual(entry.Key, expression));
+                // itself, and PostgreSQL only accepts grouped expressions with identical SQL; a
+                // DISTINCT query's ORDER BY is matched against the select list by parse tree, so a
+                // projected expression ordered by itself must be identical too. Every structurally
+                // repeated subtree reuses its first rendered text (and parameter slots).
+                var cached = _sharedRenders.FirstOrDefault(entry => StructurallyEqual(entry.Key, expression));
                 if (cached != default)
                     return cached.Sql;
 
                 var rendered = RenderExpressionCore(expression);
-                _groupKeyRenders.Add((expression, rendered));
+                _sharedRenders.Add((expression, rendered));
                 return rendered;
             }
 
             return RenderExpressionCore(expression);
         }
+
+        /// <summary>
+        /// True for a subtree that must render identically everywhere it appears: a group key
+        /// (grouped queries compare SQL text), or any selected expression of a DISTINCT query
+        /// (PostgreSQL compares a DISTINCT ORDER BY with the select list by parse tree, so a
+        /// re-rendered parameterized expression is a different expression).
+        /// </summary>
+        private bool IsSharedRender(SqlExpression expression) =>
+            _query.GroupKeys.Any(key => StructurallyEqual(key, expression))
+            || (_query.IsDistinct
+                && _query.Projection is { } projection
+                && projection.Any(item => StructurallyEqual(item.Expression, expression)));
 
         private string RenderExpressionCore(SqlExpression expression) => expression switch
         {

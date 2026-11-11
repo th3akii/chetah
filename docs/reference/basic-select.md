@@ -115,7 +115,10 @@ SELECT [DISTINCT] → FROM → JOIN … ON → WHERE → GROUP BY → HAVING →
   during that traversal, so a parameter list read in order matches the SQL.
   Pagination values (`LIMIT`/`OFFSET`) are parameters too. A group key that
   appears in SELECT, GROUP BY and ORDER BY is rendered identically each time
-  and reuses its existing parameter slot rather than re-binding.
+  and reuses its existing parameter slot rather than re-binding; the same holds
+  for a DISTINCT query's selected expression when it orders by that expression,
+  because PostgreSQL matches a DISTINCT `ORDER BY` against the select list by
+  parse tree.
 - Every identifier is wrapped in double quotes with embedded quotes doubled
   (Postgres' escaping rule), so a table/column literally named `my"table`
   still produces a valid statement.
