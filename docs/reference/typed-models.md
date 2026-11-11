@@ -77,7 +77,8 @@ Rules:
 - Column names must be plain identifiers (`[A-Za-z_][A-Za-z0-9_]*`) because they
   become C# property names (`first_name` → `FirstName`) and database rows are
   read by name. PostgreSQL columns that require quoting (spaces, `@`…) are
-  rejected rather than half-supported.
+  rejected rather than half-supported. The parser applies exactly this ASCII
+  pattern, the same one the JSON Schema contract publishes.
 - Unknown properties are rejected rather than ignored, so a typo cannot silently
   change nullability or drop a setting.
 - Validation errors: empty/duplicate names, unsupported types, invalid or

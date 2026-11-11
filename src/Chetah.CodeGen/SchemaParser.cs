@@ -1207,8 +1207,8 @@ public static class SchemaParser
 
     internal static bool IsValidIdentifier(string name) =>
         name.Length > 0
-        && (char.IsLetter(name[0]) || name[0] == '_')
-        && name.All(c => char.IsLetterOrDigit(c) || c == '_');
+        && (char.IsAsciiLetter(name[0]) || name[0] == '_')
+        && name.All(c => char.IsAsciiLetterOrDigit(c) || c == '_');
 
     /// <summary>Singular-safe default naming: "users" → "Users", "user_profiles" → "UserProfile".</summary>
     public static string PascalCase(string identifier)

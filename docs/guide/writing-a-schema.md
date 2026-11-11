@@ -174,6 +174,7 @@ plural: `"model": "User"` for `users`.
 | Rule | What happens |
 |---|---|
 | Column names must be valid C# identifiers | rejected |
+| Identifiers are ASCII only (`[A-Za-z_][A-Za-z0-9_]*`), as the JSON Schema contract states | rejected |
 | Generated C# property names must be unique per table (`user_id` vs `userId`) | rejected |
 | A property that would shadow something the generator emits — `Table`, `PropertyColumns`, `Map`, `MapAt`, the model name, or a record member such as `ToString` — is renamed with a `Column` suffix (`table` → `TableColumn`) | generated |
 | `identity` requires `integer` or `bigint` | rejected |
