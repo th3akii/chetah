@@ -39,6 +39,33 @@ public class AuditLeadTests
         Assert.Equal(1, Assert.Single(rows).Id);
     }
 
+    // Expected: an Unspecified DateTime written to a timestamptz column is never reinterpreted in the server
+    // session's TimeZone. Either Chetah refuses the ambiguous value before execution (Npgsql's own policy for
+    // timestamptz) or it stores the wall clock as UTC; silently storing 17:00Z for 12:00 under
+    // America/New_York changes the instant depending on server configuration (PG casts timestamp →
+    // timestamptz through the session TimeZone).
+    [PostgresFact]
+    [Trait("Category", "Audit")]
+    public async Task LEAD03_InsertUnspecifiedDateTimeIntoTimestamptzColumn_IsNotShiftedBySessionTimeZone()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var wallClock = new DateTime(2026, 1, 1, 12, 0, 0, DateTimeKind.Unspecified);
+
+        Exception? refused = null;
+        try
+        {
+            await fixture.Db.Insert<Event>().Values(new Event(1, wallClock)).ExecuteAsync();
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or ArgumentException or NotSupportedException)
+        {
+            refused = exception;
+        }
+
+        if (refused is not null)
+            return;
+        Assert.Equal(true, await fixture.ScalarAsync("SELECT at = '2026-01-01 12:00:00+00' FROM events WHERE id = 1"));
+    }
+
     private sealed class Fixture : IAsyncDisposable
     {
         private readonly string _root;
