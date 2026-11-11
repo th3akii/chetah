@@ -1,9 +1,9 @@
 # Correctness audit — 2026-11-11
 
-> Status: open. These are the findings of the pre-release correctness audit, done before CLI work
-> and NuGet packaging. Every confirmed bug has a regression test that **fails on the audited
-> code** (`ba29c45`). The tests assert the correct behavior and are tagged
-> `[Trait("Category", "Audit")]`. No production code was changed.
+> Status: **resolved** (2026-11-11). All 16 confirmed bugs are fixed on `test/correctness-audit`;
+> see [Resolution](#resolution). Every confirmed bug has a regression test that **failed on the
+> audited code** (`ba29c45`) and passes after the fix. The tests assert the correct behavior and
+> are tagged `[Trait("Category", "Audit")]`.
 > Branch: `test/correctness-audit`.
 
 PostgreSQL used: **17.11** (x86_64-windows) in a throwaway cluster with trust auth on port 55432.
@@ -18,9 +18,43 @@ dotnet test tests/Chetah.Postgres.Tests --filter "Category=Audit"
 dotnet test tests/Chetah.CodeGen.Tests  --filter "Category=Audit"
 ```
 
-Last full RED run on `test/correctness-audit`: Db.Tests 11 failed / 0 passed, Postgres.Tests
-4 failed / 0 passed, CodeGen.Tests 16 failed / 0 passed. That is 31 regression tests, all failing
-for the reasons listed below.
+Last full RED run on the audited code: Db.Tests 11 failed / 0 passed, Postgres.Tests 4 failed /
+0 passed, CodeGen.Tests 16 failed / 0 passed. That is 31 regression tests, all failing for the
+reasons listed below. After the fixes all 31 pass.
+
+## Resolution
+
+| ID | Resolution | Commit |
+|---|---|---|
+| AUD-01 | Replay validation ignores objects the entry's own earlier drops remove and keys/indexes owned by a table the entry drops; journal operations record the dropped object's name. Foreign dependents still refuse. | `107f0ae` |
+| AUD-02 | `Column.StoreType` (generated for every column) and the compared/assigned column travel with each parameter. `timestamptz`: Utc/Local bind as instants, Unspecified is refused before I/O. `timestamp`: Utc/Local keep their UTC wall clock, Unspecified binds as is. Column of unknown type: instants bind as `timestamptz`, Unspecified is refused. Rules in `writing-a-schema.md#datetime-values`. | `1d4dc8d`, `bf920b3` |
+| AUD-03 | Generation refuses a table whose `schema` is not `public` (`tables.<t>.schema`), matching migrations. Deliberate restriction, no qualified metadata. | `eb34d83` |
+| AUD-04 | Under DISTINCT, an ORDER BY key equal to a selected expression reuses its rendered SQL and parameter slot. | `a0688f4` |
+| AUD-05 | A registry id is adopted by name only when no declaration in the scope claims it explicitly; `Identity.Resolve` refuses duplicate claims before anything is persisted. | `8ef7f16` |
+| AUD-06 | `ADD GENERATED … AS IDENTITY` is planned after `DROP DEFAULT` and `SET NOT NULL`; `DROP IDENTITY` still precedes `SET DEFAULT`. | `9445029` |
+| AUD-07 | Partitioned parents and partitions are read as unexpressible relations: never planned as tables to drop, and a declaration using their name is refused. | `761b624` |
+| AUD-08 | Identity implies NOT NULL in the parser; an explicit `"nullable": true` on an identity column is rejected. | `a161d21` |
+| AUD-09 | Membership over a collection whose comparer is not the default is refused with `NotSupportedException`. | `044edb2` |
+| AUD-10, AUD-11 | Property names that collide with generated members, the model/accessor name or record-synthesized members get a `Column` suffix; two columns that land on one property are refused. | `1609d40` |
+| AUD-12 | Generated code `global::`-qualifies every namespace and non-keyword BCL type reference. | `1609d40`, `c410a0e` |
+| AUD-13 | A C# keyword as an explicit `"model"` name is rejected (the keyword list is shared with `--namespace`). | `19255c7`, `15a36d6` |
+| AUD-14 | Index and constraint names are validated in one namespace. | `c686998` |
+| AUD-15 | The parser accepts ASCII identifiers only, matching `$defs.identifier`. | `32fb27e` |
+| AUD-16 | The UPDATE nullability proof credits every operand of a conjunction in the true branch and of a disjunction in the false branch. | `cc38022` |
+
+Checked-in generated models were regenerated once afterwards (`cca3812`).
+`examples/NewExample` `Grade.Grade` became `GradeColumn`; the old output did not compile (an AUD-11 instance).
+
+Known limits left by the fixes:
+
+- A dropped table's own check/exclusion constraints and unexpressible indexes still refuse a replay,
+  because the catalog does not record their owner. Tool-generated journals cannot contain such a
+  drop, so only hand-written journals hit this.
+- DateTime operands wrapped in `CASE` or casts are not tied to a column, so they use the
+  rule for untied values.
+- Enums in non-public schemas are still generated, while tables in them are refused.
+- Comparer checks compare by reference: `HashSet<string>(StringComparer.Ordinal)` is refused even
+  though it behaves like the default.
 
 ## Executive summary
 
