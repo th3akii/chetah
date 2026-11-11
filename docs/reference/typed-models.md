@@ -133,19 +133,19 @@ public static class UsersTable
 {
     // Typed column metadata. Non-default write rules are emitted only when set:
     // IsNullable = false, HasDefault = true, Generation = ….
-    public static readonly Chetah.Column<int> Id = new("id") { IsNullable = false, HasDefault = true };
-    public static readonly Chetah.Column<string> Name = new("name") { IsNullable = false };
-    public static readonly Chetah.Column<int?> Age = new("age");
-    public static readonly Chetah.Column<string> Display =
-        new("display") { IsNullable = false, Generation = Chetah.ColumnGeneration.Computed };
+    public static readonly global::Chetah.Column<int> Id = new("id") { IsNullable = false, HasDefault = true };
+    public static readonly global::Chetah.Column<string> Name = new("name") { IsNullable = false };
+    public static readonly global::Chetah.Column<int?> Age = new("age");
+    public static readonly global::Chetah.Column<string> Display =
+        new("display") { IsNullable = false, Generation = global::Chetah.ColumnGeneration.Computed };
 
     // Table metadata handed to the query objects (schema order = output order).
-    public static readonly Chetah.Table Table =
-        new("users", new Chetah.Column[] { Id, Name, Age, Display });
+    public static readonly global::Chetah.Table Table =
+        new("users", new global::Chetah.Column[] { Id, Name, Age, Display });
 
     // Explicit property-name → raw column-name snapshot, Ordinal comparison.
-    public static readonly IReadOnlyDictionary<string, string> PropertyColumns =
-        new Dictionary<string, string>(StringComparer.Ordinal)
+    public static readonly global::System.Collections.Generic.IReadOnlyDictionary<string, string> PropertyColumns =
+        new global::System.Collections.Generic.Dictionary<string, string>(global::System.StringComparer.Ordinal)
         {
             [nameof(User.Id)] = "id",
             [nameof(User.Name)] = "name",
@@ -154,8 +154,8 @@ public static class UsersTable
         };
 
     // Hand-written (generated) row mappers — no reflection.
-    public static User Map(NpgsqlDataReader reader) { … }            // name-based; full-row reads
-    public static User MapAt(NpgsqlDataReader reader, int offset) { … } // ordinal offset; joined/partial slots
+    public static User Map(global::Npgsql.NpgsqlDataReader reader) { … }            // name-based; full-row reads
+    public static User MapAt(global::Npgsql.NpgsqlDataReader reader, int offset) { … } // ordinal offset; joined/partial slots
 }
 
 public sealed record User(int Id, string Name, int? Age, string Display);
@@ -163,7 +163,7 @@ public sealed record User(int Id, string Name, int? Age, string Display);
 // The same file also contributes its binding to the shared registry type.
 public static partial class ChetahSchema
 {
-    public static readonly TableBinding<User> UserBinding =
+    public static readonly global::Chetah.Postgres.TableBinding<User> UserBinding =
         new(UsersTable.Table, UsersTable.Map, UsersTable.MapAt, UsersTable.PropertyColumns);
 }
 ```
@@ -178,8 +178,12 @@ unchanged whether you use `split` or `single`:
 ```csharp
 public static partial class ChetahSchema
 {
-    static ChetahSchema() { Bindings = new Dictionary<Type, ITableBinding> { [typeof(User)] = UserBinding, … }; }
-    public static readonly IReadOnlyDictionary<Type, ITableBinding> Bindings;
+    static ChetahSchema()
+    {
+        Bindings = new global::System.Collections.Generic.Dictionary<global::System.Type, global::Chetah.Postgres.ITableBinding>
+        { [typeof(User)] = UserBinding, … };
+    }
+    public static readonly global::System.Collections.Generic.IReadOnlyDictionary<global::System.Type, global::Chetah.Postgres.ITableBinding> Bindings;
 }
 ```
 
@@ -206,6 +210,29 @@ Naming: accessor class = PascalCase(table name) + `"Table"` (`users` →
 `UsersTable`); record = `model` or PascalCase(table name) (`User`).
 Non-nullable columns keep their bare CLR type (`int`, `string`); nullable
 columns become `int?` / `string?`.
+
+### Column property names
+
+A column's C# property is PascalCase(column): `created_at` → `CreatedAt`,
+`map_at` → `MapAt`. That name is used in all four places the property appears —
+the `Column` accessor, the `Table` column list, the `PropertyColumns` map and the
+record parameter — so they never disagree.
+
+When the plain name is already taken it is suffixed with `Column`, and the suffix
+applies to all four places at once. Taken means: the model record's name (`users`
+in model `Users` → `UsersColumn`), the accessor class's name, one of the
+accessor's own members (`Table`, `PropertyColumns`, `Map`, `MapAt`), or a member
+the record compiler synthesizes (`Equals`, `GetHashCode`, `ToString`,
+`PrintMembers`, `Deconstruct`, `Clone`, `EqualityContract`). Names that do not
+collide are emitted unchanged, so existing schemas keep their exact generated
+API. Two columns of one table that would end up with the same property (say
+`map` and `map_column`, both `MapColumn`) fail generation with the table and both
+column names.
+
+Every namespace reference in generated code is `global::`-qualified
+(`global::Chetah.Column`, `global::System.Collections.Generic…`,
+`global::Npgsql.NpgsqlDataReader`), so a table whose model is named `System`,
+`Chetah` or `Npgsql` does not shadow the namespace its own file needs.
 
 Type map: `integer`→`int`, `bigint`→`long`, `text`→`string`,
 `boolean`→`bool`, `uuid`→`Guid`, `timestamp`→`DateTime`.

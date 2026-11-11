@@ -48,7 +48,6 @@ public static class GeneratedSource
     {
         var sb = new StringBuilder();
         AppendHeader(sb);
-        AppendNpgsqlUsing(sb);
         AppendNamespace(sb, @namespace);
 
         foreach (var @enum in schema.Enums ?? [])
@@ -74,7 +73,6 @@ public static class GeneratedSource
     {
         var sb = new StringBuilder();
         AppendHeader(sb);
-        AppendNpgsqlUsing(sb);
         AppendNamespace(sb, @namespace);
         RenderTable(sb, table);
 
@@ -107,12 +105,6 @@ public static class GeneratedSource
         sb.AppendLine();
     }
 
-    private static void AppendNpgsqlUsing(StringBuilder sb)
-    {
-        sb.AppendLine("using Npgsql;");
-        sb.AppendLine();
-    }
-
     private static void AppendNamespace(StringBuilder sb, string @namespace)
     {
         sb.AppendLine($"namespace {@namespace};");
@@ -134,7 +126,7 @@ public static class GeneratedSource
 
         sb.AppendLine("    static ChetahSchema()");
         sb.AppendLine("    {");
-        sb.AppendLine("        Bindings = new System.Collections.Generic.Dictionary<System.Type, Chetah.Postgres.ITableBinding>");
+        sb.AppendLine("        Bindings = new global::System.Collections.Generic.Dictionary<global::System.Type, global::Chetah.Postgres.ITableBinding>");
         sb.AppendLine("        {");
         foreach (var table in schema.Tables)
             sb.AppendLine($"            [typeof({table.ModelName})] = {table.ModelName}Binding,");
@@ -142,13 +134,13 @@ public static class GeneratedSource
         sb.AppendLine("    }");
         sb.AppendLine();
         sb.AppendLine(
-            "    public static readonly System.Collections.Generic.IReadOnlyDictionary<System.Type, Chetah.Postgres.ITableBinding> Bindings;");
+            "    public static readonly global::System.Collections.Generic.IReadOnlyDictionary<global::System.Type, global::Chetah.Postgres.ITableBinding> Bindings;");
         sb.AppendLine("}");
         sb.AppendLine();
     }
 
     private static string BindingField(TableSchema table) =>
-        $"public static readonly Chetah.Postgres.TableBinding<{table.ModelName}> {table.ModelName}Binding = "
+        $"public static readonly global::Chetah.Postgres.TableBinding<{table.ModelName}> {table.ModelName}Binding = "
         + $"new({table.AccessorName}.Table, {table.AccessorName}.Map, {table.AccessorName}.MapAt, "
         + $"{table.AccessorName}.PropertyColumns);";
 
@@ -158,7 +150,7 @@ public static class GeneratedSource
         sb.AppendLine($"/// <summary>Labels of the PostgreSQL enum <c>{qualified}</c>, in declaration order.</summary>");
         sb.AppendLine($"public static class {EnumTypeName(@enum)}");
         sb.AppendLine("{");
-        sb.AppendLine("    public static readonly System.Collections.Generic.IReadOnlyList<string> Values = new string[]");
+        sb.AppendLine("    public static readonly global::System.Collections.Generic.IReadOnlyList<string> Values = new string[]");
         sb.AppendLine("    {");
         foreach (var value in @enum.Values)
             sb.AppendLine($"        {CSharpStringLiteral(value)},");
@@ -174,21 +166,21 @@ public static class GeneratedSource
 
         foreach (var column in table.Columns)
             sb.AppendLine(
-                $"    public static readonly Chetah.Column<{PropertyType(column)}> {Identifier(column.Name)} = "
+                $"    public static readonly global::Chetah.Column<{PropertyType(column)}> {PropertyName(table, column)} = "
                 + $"new({CSharpStringLiteral(column.Name)}){ColumnMetadata(column)};");
 
         sb.AppendLine();
         sb.AppendLine(
-            "    public static readonly Chetah.Table Table = new("
-            + CSharpStringLiteral(table.Name) + ", new Chetah.Column[] { "
-            + string.Join(", ", table.Columns.Select(c => Identifier(c.Name)))
+            "    public static readonly global::Chetah.Table Table = new("
+            + CSharpStringLiteral(table.Name) + ", new global::Chetah.Column[] { "
+            + string.Join(", ", table.Columns.Select(c => PropertyName(table, c)))
             + " });");
         sb.AppendLine();
-        sb.AppendLine("    public static readonly System.Collections.Generic.IReadOnlyDictionary<string, string> PropertyColumns =");
-        sb.AppendLine("        new System.Collections.Generic.Dictionary<string, string>(System.StringComparer.Ordinal)");
+        sb.AppendLine("    public static readonly global::System.Collections.Generic.IReadOnlyDictionary<string, string> PropertyColumns =");
+        sb.AppendLine("        new global::System.Collections.Generic.Dictionary<string, string>(global::System.StringComparer.Ordinal)");
         sb.AppendLine("        {");
         foreach (var column in table.Columns)
-            sb.AppendLine($"            [nameof({table.ModelName}.{Identifier(column.Name)})] = {CSharpStringLiteral(column.Name)},");
+            sb.AppendLine($"            [nameof({table.ModelName}.{PropertyName(table, column)})] = {CSharpStringLiteral(column.Name)},");
         sb.AppendLine("        };");
         sb.AppendLine();
 
@@ -197,7 +189,7 @@ public static class GeneratedSource
         sb.AppendLine("}");
         sb.AppendLine();
 
-        var properties = string.Join(", ", table.Columns.Select(c => $"{PropertyType(c)} {Identifier(c.Name)}"));
+        var properties = string.Join(", ", table.Columns.Select(c => $"{PropertyType(c)} {PropertyName(table, c)}"));
         sb.AppendLine($"public sealed record {table.ModelName}({properties});");
         sb.AppendLine();
     }
@@ -205,7 +197,7 @@ public static class GeneratedSource
     /// <summary>Generated mapper with one ordinal per nullable column, one expression per property.</summary>
     private static void RenderMap(StringBuilder sb, TableSchema table)
     {
-        sb.AppendLine($"    public static {table.ModelName} Map(NpgsqlDataReader reader)");
+        sb.AppendLine($"    public static {table.ModelName} Map(global::Npgsql.NpgsqlDataReader reader)");
         sb.AppendLine("    {");
 
         foreach (var nullable in table.Columns.Where(c => c.Nullable))
@@ -225,7 +217,7 @@ public static class GeneratedSource
     /// <summary>Generated mapper keyed by schema order at an ordinal offset, for projected/joined results.</summary>
     private static void RenderMapAt(StringBuilder sb, TableSchema table)
     {
-        sb.AppendLine($"    public static {table.ModelName} MapAt(NpgsqlDataReader reader, int offset)");
+        sb.AppendLine($"    public static {table.ModelName} MapAt(global::Npgsql.NpgsqlDataReader reader, int offset)");
         sb.AppendLine("    {");
         RenderReads(sb, table, (_, index) => $"offset + {index}");
         sb.AppendLine("    }");
@@ -296,6 +288,7 @@ public static class GeneratedSource
             Reserve(types, table.ModelName, $"table '{table.Name}' model");
             Reserve(types, table.AccessorName, $"table '{table.Name}' accessor");
             Reserve(files, $"Tables/{table.ModelName}.g.cs", $"table '{table.Name}'");
+            ValidatePropertyNames(table);
         }
 
         foreach (var @enum in schema.Enums ?? [])
@@ -322,6 +315,21 @@ public static class GeneratedSource
         used.Add(name, description);
     }
 
+    /// <summary>Two columns must not render as the same property, whatever the disambiguation did
+    /// to their names, because the record and the accessor would then declare it twice.</summary>
+    private static void ValidatePropertyNames(TableSchema table)
+    {
+        var properties = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var column in table.Columns)
+        {
+            var property = PropertyName(table, column);
+            if (!properties.TryAdd(property, column.Name))
+                throw new InvalidOperationException(
+                    $"Table '{table.Name}': columns '{properties[property]}' and '{column.Name}' both generate "
+                    + $"the property '{property}'. Rename one of them.");
+        }
+    }
+
     private static string EnumTypeName(EnumSchema @enum) =>
         SchemaParser.PascalCase(@enum.Schema == "public" ? @enum.Name : $"{@enum.Schema}_{@enum.Name}");
 
@@ -341,9 +349,9 @@ public static class GeneratedSource
         if (column.Default is not null || column.Identity is not null)
             members.Add("HasDefault = true");
         if (column.Generated is not null)
-            members.Add("Generation = Chetah.ColumnGeneration.Computed");
+            members.Add("Generation = global::Chetah.ColumnGeneration.Computed");
         else if (column.Identity?.Generation == "ALWAYS")
-            members.Add("Generation = Chetah.ColumnGeneration.Always");
+            members.Add("Generation = global::Chetah.ColumnGeneration.Always");
 
         return members.Count == 0 ? "" : $" {{ {string.Join(", ", members)} }}";
     }
@@ -354,6 +362,41 @@ public static class GeneratedSource
         return pascal.Length == 0 || !char.IsLetter(pascal[0]) || !pascal.All(char.IsLetterOrDigit)
             ? "@" + pascal
             : pascal;
+    }
+
+    /// <summary>Names a column's C# property cannot take: the enclosing accessor class and model
+    /// record names, the accessor's own members, and the members the record compiler synthesizes.
+    /// Each would otherwise be CS0102, CS0542 or CS8866.</summary>
+    private static readonly HashSet<string> ReservedPropertyNames = new(StringComparer.Ordinal)
+    {
+        // Generated accessor members.
+        "Table",
+        "PropertyColumns",
+        "Map",
+        "MapAt",
+
+        // Members a record synthesizes on top of System.Object's.
+        "Equals",
+        "GetHashCode",
+        "ToString",
+        "PrintMembers",
+        "Deconstruct",
+        "Clone",
+        "EqualityContract",
+    };
+
+    /// <summary>The property name for a column: <see cref="Identifier"/>, suffixed with
+    /// <c>Column</c> when the plain name is reserved. Every emitted reference to the property — the
+    /// Column accessor, the table's column list, the property map and the record parameter — uses
+    /// this one name.</summary>
+    private static string PropertyName(TableSchema table, ColumnSchema column)
+    {
+        var name = Identifier(column.Name);
+        var reserved = ReservedPropertyNames.Contains(name)
+            || string.Equals(name, table.ModelName, StringComparison.Ordinal)
+            || string.Equals(name, table.AccessorName, StringComparison.Ordinal);
+
+        return reserved ? name + "Column" : name;
     }
 
     private static string OrdinalLocal(string name)

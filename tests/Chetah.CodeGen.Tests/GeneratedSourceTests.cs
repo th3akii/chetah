@@ -58,6 +58,57 @@ public class GeneratedSourceTests
     }
 
     [Fact]
+    public void ColumnPropertyNamesShadowingGeneratedMembersGainAColumnSuffix()
+    {
+        var schema = SchemaParser.Parse("""
+            {
+              "tables": {
+                "users": {
+                  "columns": {
+                    "id": { "type": "integer", "nullable": false },
+                    "map": { "type": "text" },
+                    "table": { "type": "text" },
+                    "users": { "type": "text" }
+                  }
+                }
+              }
+            }
+            """).Schema!;
+
+        var users = GeneratedSource.RenderFiles(schema, "N", GeneratedLayout.Split)
+            .Single(file => file.RelativePath == "Tables/Users.g.cs").Content;
+
+        Assert.Contains(
+            "public sealed record Users(int Id, string? MapColumn, string? TableColumn, string? UsersColumn);",
+            users,
+            StringComparison.Ordinal);
+        Assert.Contains("[nameof(Users.UsersColumn)] = \"users\"", users, StringComparison.Ordinal);
+        Assert.Contains("global::Chetah.Column<string?> MapColumn = new(\"map\")", users, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TwoColumnsThatDisambiguateToTheSamePropertyAreRejected()
+    {
+        var schema = SchemaParser.Parse("""
+            {
+              "tables": {
+                "points": {
+                  "columns": {
+                    "id": { "type": "integer", "nullable": false },
+                    "map": { "type": "text" },
+                    "map_column": { "type": "text" }
+                  }
+                }
+              }
+            }
+            """).Schema!;
+
+        var refusal = Assert.Throws<InvalidOperationException>(
+            () => GeneratedSource.RenderFiles(schema, "N", GeneratedLayout.Split));
+        Assert.Contains("'map' and 'map_column'", refusal.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void CompiledFixtureMetadataMatchesSchemaValues()
     {
         // Generated metadata values, checked against the compiled fixture — not rendered text.

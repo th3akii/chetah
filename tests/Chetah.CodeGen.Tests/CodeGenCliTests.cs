@@ -53,7 +53,7 @@ public class CodeGenCliTests
 
         var users = File.ReadAllText(temp.Combine("Generated", "Tables", "User.g.cs"));
         Assert.Contains("public sealed record User(int Id, string Status);", users, StringComparison.Ordinal);
-        Assert.Contains("public static readonly Chetah.Postgres.TableBinding<User> UserBinding", users, StringComparison.Ordinal);
+        Assert.Contains("public static readonly global::Chetah.Postgres.TableBinding<User> UserBinding", users, StringComparison.Ordinal);
         Assert.DoesNotContain("record Order", users, StringComparison.Ordinal);
 
         var orders = File.ReadAllText(temp.Combine("Generated", "Tables", "Order.g.cs"));

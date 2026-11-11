@@ -175,10 +175,18 @@ plural: `"model": "User"` for `users`.
 |---|---|
 | Column names must be valid C# identifiers | rejected |
 | Generated C# property names must be unique per table (`user_id` vs `userId`) | rejected |
+| A property that would shadow something the generator emits — `Table`, `PropertyColumns`, `Map`, `MapAt`, the model name, or a record member such as `ToString` — is renamed with a `Column` suffix (`table` → `TableColumn`) | generated |
 | `identity` requires `integer` or `bigint` | rejected |
 | `identity` and `default` on one column | rejected |
 | `generated` and `default`, or `generated` and `identity` | rejected |
 | `"primaryKey": true` with `"nullable": true` | rejected |
+
+The property name is PascalCase(`column`), so `created_at` becomes `CreatedAt`
+and `users` in table `users` (model `Users`) becomes `UsersColumn`; every other
+name is emitted unchanged. The same name is used by the column accessor, the
+table's column list, the property→column map and the record parameter, so no
+consumer sees the difference. See
+[`typed-models.md`](../reference/typed-models.md#column-property-names).
 
 ### Defaults
 
@@ -611,3 +619,4 @@ the tool emits `true`/`false`, which is what the catalog stores.
 - [Migration limitations](../notes/migration-limitations.md)
 - [Decision log](../project/decisions.md) — D002, D005–D008
 - [Roadmap](../project/roadmap.md)
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               
