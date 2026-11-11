@@ -280,6 +280,9 @@ points at a managed table. An index differing only by `COLLATE`,
   alters, then primary keys and unique constraints, then foreign keys, then
   index creates. Nothing is removed implicitly through the object that carried
   it, and a foreign key can point at a table created in the same migration.
+  Within a column, `DROP DEFAULT` and `SET NOT NULL` come before
+  `ADD GENERATED … AS IDENTITY`, and `DROP IDENTITY` comes before `SET DEFAULT`,
+  because PostgreSQL requires both prerequisites in that order.
 - **Definitions, not names:** constraints and indexes are matched on kind,
   columns, reference target, referential actions, match type, deferrability and
   uniqueness, so a hand-named equivalent does not churn on every apply.

@@ -279,6 +279,26 @@ public class SchemaDiffTests
     }
 
     [Fact]
+    public async Task DroppingIdentity_PrecedesTheNewDefault()
+    {
+        var desired = Desired("""
+            { "$schema": "./chetah.schema.json", "tables": { "t": { "columns": {
+              "a": { "type": "integer", "nullable": false, "default": 7 } } } } }
+            """);
+        var live = Live(new TableState("t", [new ColumnState("a", "int4", true, Identity: true)]));
+
+        var plan = await SchemaDiff.ComputeAsync(desired, live, NoNulls);
+
+        Assert.Equal(
+            new[]
+            {
+                "ALTER TABLE \"t\" ALTER COLUMN \"a\" DROP IDENTITY",
+                "ALTER TABLE \"t\" ALTER COLUMN \"a\" SET DEFAULT 7",
+            },
+            plan.Operations.Select(operation => operation.Statement));
+    }
+
+    [Fact]
     public async Task RenameOfATableWithConstraints_IsJustTheRename()
     {
         var desired = Desired("""
