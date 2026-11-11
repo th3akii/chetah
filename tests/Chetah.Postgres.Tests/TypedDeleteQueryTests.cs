@@ -345,6 +345,21 @@ public class TypedDeleteQueryTests
     }
 
     [Fact]
+    public void HandBuiltDeletesRejectANonBooleanJoinCondition()
+    {
+        // PostgreSQL rejects `WHERE $1 AND …` with an integer operand; the compiler must refuse it
+        // before I/O, exactly as it refuses a non-boolean WHERE.
+        var query = new DeleteQuery(StudentsTable)
+        {
+            Joins = [new JoinClause(JoinKind.Inner, 1, ScoresTable, new SqlValue(1, typeof(int)))],
+            Predicate = new SqlValue(true, typeof(bool)),
+        };
+
+        var error = Assert.Throws<ArgumentException>(() => PostgresDeleteCompiler.Compile(query));
+        Assert.Contains("boolean", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void JoinedColumnsAreUsableInWhereAndReturning()
     {
         var compiled = Db.Delete<Student>()
