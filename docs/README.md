@@ -29,6 +29,7 @@ docs/
 | know why something is the way it is | [project/decisions.md](project/decisions.md) |
 | see what is planned or delivered | [project/roadmap.md](project/roadmap.md) |
 | know what is unsupported, and whether it is safe to ignore | [notes/migration-limitations.md](notes/migration-limitations.md) |
+| see the confirmed bugs from the pre-release correctness audit | [notes/correctness-audit-2026-11-11.md](notes/correctness-audit-2026-11-11.md) |
 | understand a design that is not implemented yet | [notes/constraint-metadata.md](notes/constraint-metadata.md) |
 
 ## The folders
