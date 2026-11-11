@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace Chetah.CodeGen;
 
@@ -232,9 +233,10 @@ public static class GeneratedSource
         {
             var column = table.Columns[i];
             var ord = ordinal(column, i);
+            var read = QualifyClrTypes(string.Format(column.Type.Clr!.Read, ord));
             var expression = column.Nullable
-                ? $"reader.IsDBNull({ord}) ? null : {string.Format(column.Type.Clr!.Read, ord)}"
-                : string.Format(column.Type.Clr!.Read, ord);
+                ? $"reader.IsDBNull({ord}) ? null : {read}"
+                : read;
             var comma = i == table.Columns.Count - 1 ? "" : ",";
             sb.AppendLine($"            {expression}{comma}");
         }
@@ -337,7 +339,20 @@ public static class GeneratedSource
         @enum.Schema == "public" ? @enum.Name : $"{@enum.Schema}.{@enum.Name}";
 
     private static string PropertyType(ColumnSchema column) =>
-        column.Nullable ? column.Type.Clr!.NullableName : column.Type.Clr!.Name;
+        QualifyClrTypes(column.Nullable ? column.Type.Clr!.NullableName : column.Type.Clr!.Name);
+
+    /// <summary>The CLR types generated code names that C# does not spell as keywords, so a model
+    /// with one of these names would shadow them exactly as it shadows a namespace. Ordered
+    /// longest first so <c>DateTimeOffset</c> is not matched as <c>DateTime</c>.</summary>
+    private static readonly Regex BclTypeNames = new(
+        @"(?<![:\w])(DateTimeOffset|DateOnly|TimeOnly|DateTime|TimeSpan|Guid)\b",
+        RegexOptions.Compiled);
+
+    /// <summary>Qualifies <see cref="BclTypeNames"/> in a rendered CLR type or reader expression:
+    /// <c>Guid?</c> → <c>global::System.Guid?</c>, <c>GetFieldValue&lt;DateOnly&gt;</c> →
+    /// <c>GetFieldValue&lt;global::System.DateOnly&gt;</c>. Keyword types (<c>int</c>,
+    /// <c>string</c>, <c>byte[]</c>) cannot be shadowed and stay bare.</summary>
+    private static string QualifyClrTypes(string text) => BclTypeNames.Replace(text, "global::System.$1");
 
     /// <summary>Write-side metadata INSERT validation uses. Defaults are omitted when they match
     /// <see cref="Chetah.Column"/>'s initial values, keeping generated files short.</summary>

@@ -232,10 +232,16 @@ column names.
 Every namespace reference in generated code is `global::`-qualified
 (`global::Chetah.Column`, `global::System.Collections.Generic…`,
 `global::Npgsql.NpgsqlDataReader`), so a table whose model is named `System`,
-`Chetah` or `Npgsql` does not shadow the namespace its own file needs.
+`Chetah` or `Npgsql` does not shadow the namespace its own file needs. The same
+holds for the CLR types C# does not spell as keywords: property types, nullable
+variants and reader expressions use `global::System.` (`global::System.Guid?`,
+`reader.GetFieldValue<global::System.DateOnly>`), so a model named `Guid` or
+`DateTime` is safe too. Keyword types (`int`, `string`, `bool`, `byte[]`, …)
+stay bare — they cannot be shadowed.
 
 Type map: `integer`→`int`, `bigint`→`long`, `text`→`string`,
-`boolean`→`bool`, `uuid`→`Guid`, `timestamp`→`DateTime`.
+`boolean`→`bool`, `uuid`→`global::System.Guid`,
+`timestamp`→`global::System.DateTime`.
 
 The binding validates its mapping at construction: every key must name a
 readable public instance property of the model, every table column must be

@@ -109,6 +109,37 @@ public class GeneratedSourceTests
     }
 
     [Fact]
+    public void BclTypesAreEmittedAsGlobalSystemReferences()
+    {
+        // A model named Guid shadows System.Guid for the whole file, so no CLR type is emitted
+        // unqualified: property types, nullable variants and reader expressions all use global::.
+        var schema = SchemaParser.Parse("""
+            {
+              "tables": {
+                "guid": {
+                  "columns": {
+                    "id": { "type": "integer", "nullable": false },
+                    "value": { "type": "uuid" },
+                    "seen_at": { "type": "timestamp", "nullable": false },
+                    "expires_on": { "type": "date" }
+                  }
+                }
+              }
+            }
+            """).Schema!;
+
+        var source = GeneratedSource.Render(schema, "N");
+
+        Assert.Contains(
+            "public sealed record Guid(int Id, global::System.Guid? Value, global::System.DateTime SeenAt, global::System.DateOnly? ExpiresOn);",
+            source,
+            StringComparison.Ordinal);
+        Assert.Contains("global::Chetah.Column<global::System.Guid?> Value", source, StringComparison.Ordinal);
+        Assert.Contains("global::Chetah.Column<global::System.DateTime> SeenAt", source, StringComparison.Ordinal);
+        Assert.Contains("reader.GetFieldValue<global::System.DateOnly>(", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void CompiledFixtureMetadataMatchesSchemaValues()
     {
         // Generated metadata values, checked against the compiled fixture — not rendered text.
