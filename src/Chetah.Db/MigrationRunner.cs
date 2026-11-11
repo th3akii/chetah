@@ -868,26 +868,46 @@ internal sealed class MigrationRunner
             return false;
         }
 
-        var drops = entry.Operations
-            .Where(operation => operation.Kind is OperationKinds.DropColumn or OperationKinds.DropTable)
-            .ToArray();
-
-        if (drops.Length > 0)
+        // The catalog is read once, as it stands before the entry runs, and the entry's own drops are
+        // honoured in journal order: an object a recorded statement removes is not an unexplained
+        // dependent of a later one.
+        if (entry.Operations.Any(operation => operation.Kind is OperationKinds.DropColumn or OperationKinds.DropTable))
         {
             var live = await PostgresCatalog.ReadAsync(connection, _schema, cancellationToken);
-            foreach (var drop in drops)
+            var removed = new HashSet<(string Table, string Name)>();
+
+            // PostgreSQL takes a dropped table's own keys and indexes with it, so the entry never drops
+            // them explicitly and they are not dependents of anything.
+            var droppedTables = entry.Operations
+                .Where(operation => operation.Kind == OperationKinds.DropTable)
+                .Select(operation => operation.Table)
+                .ToHashSet(StringComparer.Ordinal);
+
+            foreach (var operation in entry.Operations)
             {
-                var dependents = SchemaDiff.ReplayDependents(
-                    live,
-                    drop.Table,
-                    drop.Kind == OperationKinds.DropTable ? null : drop.Column);
-                if (dependents is null)
+                if (operation.Kind is OperationKinds.DropIndex or OperationKinds.DropConstraint)
+                {
+                    if (operation.Name is { } name)
+                        removed.Add((operation.Table, name));
+                    continue;
+                }
+
+                if (operation.Kind is not (OperationKinds.DropColumn or OperationKinds.DropTable))
                     continue;
 
-                _output.WriteLine(
-                    $"Refusing to replay {entry.Id}: {drop.Statement} would remove {string.Join(", ", dependents)}.");
-                _output.WriteLine("Nothing was executed. Remove those objects yourself first.");
-                return false;
+                var dependents = SchemaDiff.ReplayDependents(
+                    live,
+                    operation.Table,
+                    operation.Kind == OperationKinds.DropTable ? null : operation.Column,
+                    removed,
+                    droppedTables);
+                if (dependents is not null)
+                {
+                    _output.WriteLine(
+                        $"Refusing to replay {entry.Id}: {operation.Statement} would remove {string.Join(", ", dependents)}.");
+                    _output.WriteLine("Nothing was executed. Remove those objects yourself first.");
+                    return false;
+                }
             }
         }
 

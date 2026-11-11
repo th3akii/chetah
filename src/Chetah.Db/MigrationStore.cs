@@ -6,8 +6,16 @@ using System.Text.Json;
 namespace Chetah.Db;
 
 /// <summary>One recorded statement, reduced to what replay validation needs. <see cref="Statement"/>
-/// is repeated here so a refused replay can name the SQL without re-parsing the file.</summary>
-internal sealed record JournalOperation(string Kind, string Table, string? Column, bool Destructive, string Statement);
+/// is repeated here so a refused replay can name the SQL without re-parsing the file, and
+/// <see cref="Name"/> is the dropped constraint or index itself, so replay knows the entry already
+/// removes it. Journals written before this member existed leave it null.</summary>
+internal sealed record JournalOperation(
+    string Kind,
+    string Table,
+    string? Column,
+    bool Destructive,
+    string Statement,
+    string? Name = null);
 
 internal sealed record JournalEntry(
     string Id,
@@ -175,7 +183,8 @@ internal sealed class MigrationStore
                 operation.Target?.Table ?? "",
                 operation.Target?.Column,
                 operation.Destructive,
-                operation.Statement))
+                operation.Statement,
+                operation.Target?.Name))
             .ToArray();
 
         return recorded.Length == 0 ? null : recorded;

@@ -24,8 +24,9 @@ internal static class OperationKinds
 }
 
 /// <summary>What a statement acts on. Only the drop kinds drive replay validation, but every
-/// statement records its target so the journal stays self-describing.</summary>
-internal sealed record OperationTarget(string Kind, string Table, string? Column);
+/// statement records its target so the journal stays self-describing. <paramref name="Name"/> is the
+/// dropped object's own name, so replay can tell what the entry itself removes.</summary>
+internal sealed record OperationTarget(string Kind, string Table, string? Column, string? Name = null);
 
 /// <summary>One DDL statement the plan wants to execute. <paramref name="Reason"/> is the
 /// destructive justification and is null for safe statements; <paramref name="Dependents"/> names
@@ -445,7 +446,7 @@ internal static class SchemaDiff
             $"ALTER TABLE {Quote(constraint.Table)} DROP CONSTRAINT {Quote(constraint.Name)}",
             $"drop_{constraint.Name}",
             "removes the constraint",
-            Target: new OperationTarget(OperationKinds.DropConstraint, constraint.Table, null));
+            Target: new OperationTarget(OperationKinds.DropConstraint, constraint.Table, null, constraint.Name));
 
     private static Operation AddConstraint(ConstraintState constraint) =>
         new(
@@ -473,7 +474,8 @@ internal static class SchemaDiff
             Target: new OperationTarget(
                 OperationKinds.DropIndex,
                 index.Table,
-                index.Columns.Count == 1 ? index.Columns[0] : null));
+                index.Columns.Count == 1 ? index.Columns[0] : null,
+                index.Name));
 
     private static Operation CreateIndex(IndexState index) =>
         new(
@@ -661,20 +663,42 @@ internal static class SchemaDiff
                     $"declared foreign key {Quote(constraint.Name)} on {Quote(constraint.Table)}")));
 
     /// <summary>The same check for a migration recorded earlier and replayed now: at that point every
-    /// attached object is foreign, because the schema file that recorded the drop is not the state
-    /// being applied to.</summary>
-    internal static IReadOnlyList<string>? ReplayDependents(CatalogState live, string table, string? column) =>
+    /// attached object counts as foreign, because the schema file that recorded the drop is not the
+    /// state being applied to. Two things are not foreign and must not refuse the replay:
+    /// <paramref name="removed"/> holds the objects (table, name) the entry's own earlier statements
+    /// drop — a <c>drop_index</c> before the <c>drop_column</c> that would otherwise report it — and an
+    /// object on a table in <paramref name="droppedTables"/> goes with that table's own
+    /// <c>DROP TABLE</c>. Objects the schema file cannot express stay blocking, because a recorded plan
+    /// never removed them silently.</summary>
+    internal static IReadOnlyList<string>? ReplayDependents(
+        CatalogState live,
+        string table,
+        string? column,
+        IReadOnlySet<(string Table, string Name)>? removed = null,
+        IReadOnlySet<string>? droppedTables = null) =>
         Names(live.Foreign
             .Where(foreign => foreign.Table == table
                 && (column is null || foreign.Column is null || foreign.Column == column))
             .Select(foreign => $"{foreign.Kind} {Quote(foreign.Name)}")
             .Concat(live.ScopedConstraints
                 .Where(constraint => constraint.Table == table
+                    && !Explained(constraint.Table, constraint.Name, removed, droppedTables)
                     && (column is null || constraint.Columns.Contains(column)))
                 .Select(constraint => $"constraint {Quote(constraint.Name)}"))
             .Concat(live.ScopedIndexes
-                .Where(index => index.Table == table && (column is null || index.Columns.Contains(column)))
+                .Where(index => index.Table == table
+                    && !Explained(index.Table, index.Name, removed, droppedTables)
+                    && (column is null || index.Columns.Contains(column)))
                 .Select(index => $"index {Quote(index.Name)}")));
+
+    /// <summary>Whether a constraint or index on <paramref name="table"/> is already accounted for:
+    /// the entry's own statements drop it, or the entry drops the table that owns it.</summary>
+    private static bool Explained(
+        string table,
+        string name,
+        IReadOnlySet<(string Table, string Name)>? removed,
+        IReadOnlySet<string>? droppedTables) =>
+        removed?.Contains((table, name)) == true || droppedTables?.Contains(table) == true;
 
     /// <summary>Orders objects so that each is emitted only after everything it must follow.
     /// <paramref name="mustFollow"/> reads "the candidate has to be dropped after the other one".

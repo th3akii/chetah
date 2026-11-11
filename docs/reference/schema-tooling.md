@@ -75,17 +75,22 @@ A diff/push tool in the drizzle-kit mental model, with cheap inspection added:
    Statements inside a file are separated by `--> statement-breakpoint`.
    Each journal entry stores the UTC stamp, slug, sha256 of the SQL payload,
    statement count, and per-statement operation metadata (kind, table, column,
-   destructive flag). `apply` verifies each file's hash against the journal
-   before executing, so hand-edits cannot silently diverge from what was
-   recorded. Snapshots exist for auditability; diffing always uses the catalog.
+   dropped object's name, destructive flag). `apply` verifies each file's hash
+   against the journal before executing, so hand-edits cannot silently diverge
+   from what was recorded. Snapshots exist for auditability; diffing always uses
+   the catalog.
 
    A pending entry is replayed only after re-validation: its recorded drops are
-   checked against the *current* catalog (a drop would now remove an index or
-   constraint → refused), and any recorded destructive statement is confirmed
-   again before it runs. A hash match proves the file is unchanged, not that the
-   database is; replaying against a different database (*e.g.* with redirected
-   stdin) therefore cannot slip a destructive change through. Entries without
-   metadata cannot be checked and require confirmation.
+   checked against the *current* catalog, taken as it will be once the entry's own
+   earlier statements have run (a drop would now remove an index or constraint
+   that the entry does not remove itself → refused), and any recorded destructive
+   statement is confirmed again before it runs. An object the entry drops by name
+   is not a dependent, and neither is a constraint or index owned by a table the
+   entry drops: PostgreSQL removes those with the table. A hash match proves the
+   file is unchanged, not that the database is; replaying against a different
+   database (*e.g.* with redirected stdin) therefore cannot slip a destructive
+   change through. Entries without metadata cannot be checked and require
+   confirmation.
 
 ## Commands
 
@@ -298,9 +303,12 @@ points at a managed table. An index differing only by `COLLATE`,
   live unique constraint already covers is considered satisfied, and that
   constraint is not dropped for being "undeclared" under a different spelling.
 - **Pending migrations are re-validated, not trusted:** the dependency check
-  runs again on every replay, against the catalog as it is now, which counts
-  every attached constraint and index — including ones the schema file does
-  express — because the recorded drop predates them. A recorded destructive
+  runs again on every replay, against the catalog as it is now, and counts every
+  attached constraint and index the entry is not itself responsible for — except
+  those its own earlier statements drop and those owned by a table it drops,
+  which PostgreSQL removes with the table. An object that appeared since the
+  entry was recorded still refuses the replay even when the schema file would
+  express it, because the recorded drop predates it. A recorded destructive
   change is confirmed again, and a non-interactive replay refuses.
 - **Failed migrations are recoverable:** a failure marker distinguishes an
   attempted migration from one a fresh checkout has never run, so a clone can
@@ -411,7 +419,9 @@ skipped ones.
   index was added to its target column is refused before confirmation; a pending
   destructive entry is refused when the confirmation gate says no and applied
   when it says yes; a pending entry without metadata is refused unless
-  confirmed; a safe pending entry is replayed without consulting the gate.
+  confirmed; a safe pending entry is replayed without consulting the gate; a
+  fresh database replays a journal entry that drops its own index before the
+  column, and one that drops a table the catalog still shows keys and indexes on.
 - **Live concurrency** — two runners with separate checkouts race on one
   database: both succeed, the migration row exists once, and only one checkout
   records the create.
