@@ -60,7 +60,9 @@ Rules:
   CLR mapping (a domain, a composite) is a valid declaration but code generation
   refuses it with the column named.
 - `nullable` — optional. **Omitted means nullable**, matching PostgreSQL's own
-  default. `"nullable": false` marks a NOT NULL column.
+  default. `"nullable": false` marks a NOT NULL column. A primary key or identity
+  column is always NOT NULL, so it generates `int`/`long` and an explicit
+  `"nullable": true` on one is rejected.
 - `$id` — maintained by `chetah-db`, not by hand: the tool writes a persistent
   identity onto every table and column and uses it to tell a rename from a drop
   plus an add ([`schema-tooling.md`](schema-tooling.md), D006).

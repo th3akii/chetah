@@ -267,6 +267,13 @@ public static class SchemaParser
                 throw Error($"{path}.nullable", "A primary key column cannot be nullable.");
 
             var identitySchema = ParseIdentity(element, path, type);
+
+            // An identity column is NOT NULL in PostgreSQL whether or not the file says so.
+            if (identitySchema is not null && element.TryGetProperty("nullable", out _) && nullable)
+                throw Error($"{path}.nullable", "An identity column cannot be nullable.");
+
+            var notNull = keyColumn || identitySchema is not null;
+
             var generated = ParseGenerated(element, path);
             var columnDefault = element.TryGetProperty("default", out var defaultElement)
                 ? ParseDefault(defaultElement, $"{path}.default", contractDeclared)
@@ -284,7 +291,7 @@ public static class SchemaParser
             columns.Add(new ColumnSchema(
                 columnName,
                 type,
-                keyColumn ? false : nullable,
+                notNull ? false : nullable,
                 columnId,
                 columnDefault,
                 identitySchema,

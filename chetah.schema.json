@@ -157,7 +157,7 @@
         },
         "nullable": {
           "type": "boolean",
-          "description": "Omitted means nullable, PostgreSQL's own default. false produces NOT NULL. A primary key column is never nullable."
+          "description": "Omitted means nullable, PostgreSQL's own default. false produces NOT NULL. A primary key or identity column is never nullable, and an explicit true is rejected for one."
         },
         "default": {
           "description": "A literal (string, number, boolean, null) or an explicit SQL expression: { \"sql\": \"now()\" }. Strings are quoted and escaped; they are never interpreted as SQL. Because the previous format used raw SQL here, a string default requires \"$schema\"; numbers, booleans, null and { \"sql\": ... } need no marker.",
@@ -178,7 +178,7 @@
           "examples": ["pending", 0, true, { "sql": "gen_random_uuid()" }]
         },
         "identity": {
-          "description": "GENERATED ... AS IDENTITY. true is BY DEFAULT with PostgreSQL's own start and increment. Integer and bigint columns only.",
+          "description": "GENERATED ... AS IDENTITY. true is BY DEFAULT with PostgreSQL's own start and increment. Integer and bigint columns only. An identity column is always NOT NULL.",
           "oneOf": [
             { "type": "boolean" },
             {

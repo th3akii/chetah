@@ -164,9 +164,9 @@ plural: `"model": "User"` for `users`.
 | Property | Meaning |
 |---|---|
 | `type` | Required. Any PostgreSQL type expression (see [Types](#types)). |
-| `nullable` | Omitted means nullable, PostgreSQL's default. `false` produces `NOT NULL`. A primary key column is never nullable. |
+| `nullable` | Omitted means nullable, PostgreSQL's default. `false` produces `NOT NULL`. A primary key or identity column is never nullable. |
 | `default` | Literal scalar, or `{ "sql": "..." }` for an expression. See [Defaults](#defaults). |
-| `identity` | `true`, or `{ "generation", "start", "increment" }`. Integer and bigint only. |
+| `identity` | `true`, or `{ "generation", "start", "increment" }`. Integer and bigint only. Always `NOT NULL`. |
 | `generated` | `{ "expression": "...", "stored": true }`. |
 | `primaryKey` | `true` for a single-column primary key. |
 | `unique` | `true` for a single-column UNIQUE constraint. |
@@ -182,6 +182,7 @@ plural: `"model": "User"` for `users`.
 | `identity` and `default` on one column | rejected |
 | `generated` and `default`, or `generated` and `identity` | rejected |
 | `"primaryKey": true` with `"nullable": true` | rejected |
+| `"identity"` with `"nullable": true` | rejected |
 
 The property name is PascalCase(`column`), so `created_at` becomes `CreatedAt`
 and `users` in table `users` (model `Users`) becomes `UsersColumn`; every other
@@ -235,6 +236,11 @@ is shorthand for PostgreSQL's documented default:
 `"generation": "ALWAYS"` is accepted and validated. The migration engine currently
 executes only the shorthand (`BY DEFAULT`); `ALWAYS`, `start` and `increment` are
 refused explicitly rather than approximated.
+
+An identity column is `NOT NULL` in PostgreSQL, so the declaration implies it:
+the generated model uses `int`/`long` (never `int?`), and an explicit
+`"nullable": true` is rejected with the column's path, exactly like a nullable
+primary key.
 
 ### Generated columns
 
