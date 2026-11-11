@@ -20,7 +20,7 @@ public static class PostgresUpdateCompiler
     {
         ArgumentNullException.ThrowIfNull(query);
 
-        ValidateJoins(query);
+        PostgresJoinSources.Validate(query.Joins, "UPDATE");
 
         var aliased = query.Joins.Count > 0;
         var sources = Sources(query);
@@ -57,42 +57,7 @@ public static class PostgresUpdateCompiler
                 : fragments.RenderSetValueFragment(assignment.Value));
         }
 
-        if (aliased)
-        {
-            sql.Append(" FROM ").Append(fragments.RenderJoinEntryFragment(query.Joins[0]));
-            for (var index = 1; index < query.Joins.Count; index++)
-            {
-                var join = query.Joins[index];
-                sql.Append(ReferencesSource(join.On, 0)
-                    ? fragments.RenderJoinWithoutConditionFragment(join)
-                    : fragments.RenderJoinFragment(join));
-            }
-        }
-
-        // The target is not a FROM item, so no join ON clause may reference it. The first join always
-        // links the target to source 1 and lives here; a later INNER join whose condition mentions the
-        // target is equivalent as a filter here; a later LEFT join with one cannot be expressed.
-        var conditions = new List<SqlExpression>();
-        if (query.Joins.Count > 0)
-            conditions.Add(query.Joins[0].On);
-        for (var index = 1; index < query.Joins.Count; index++)
-        {
-            var join = query.Joins[index];
-            if (!ReferencesSource(join.On, 0))
-                continue;
-            if (join.Kind != JoinKind.Inner)
-                throw new InvalidOperationException(
-                    $"Join source {join.SourceId} is LEFT-joined and its condition references the UPDATE target. "
-                    + "PostgreSQL cannot outer-join the target inside FROM; join through the previous source "
-                    + "instead (for example ON label.student_id = score.student_id) and keep target filtering in Where.");
-            conditions.Add(join.On);
-        }
-
-        if (query.Predicate is { } userPredicate)
-            conditions.Add(userPredicate);
-
-        if (conditions.Count > 0)
-            sql.Append(" WHERE ").Append(fragments.RenderPredicateFragment(Combine(conditions)));
+        PostgresJoinSources.AppendSources(sql, fragments, query.Joins, query.Predicate, "FROM");
 
         if (returning is { } items)
         {
@@ -102,44 +67,6 @@ public static class PostgresUpdateCompiler
 
         return new CompiledQuery(sql.ToString(), fragments.ParameterSnapshot());
     }
-
-    private static void ValidateJoins(UpdateQuery query)
-    {
-        // PostgreSQL has no outer target: unmatched target rows are never updated, so the first
-        // join links the target to the first source and cannot be a LEFT JOIN.
-        if (query.Joins.Count > 0 && query.Joins[0].Kind != JoinKind.Inner)
-            throw new InvalidOperationException(
-                "The first join of an UPDATE links the target table to a source, and PostgreSQL cannot "
-                + "outer-join the target because unmatched target rows are never updated. Use InnerJoin "
-                + "for the first join; LeftJoin is meaningful from the second source onward.");
-    }
-
-    /// <summary>Left-associative AND chain; the renderer parenthesizes each operand.</summary>
-    private static SqlExpression Combine(IReadOnlyList<SqlExpression> conditions)
-    {
-        var combined = conditions[0];
-        for (var index = 1; index < conditions.Count; index++)
-            combined = new SqlBinary(SqlBinaryOperator.And, combined, conditions[index], typeof(bool), false);
-        return combined;
-    }
-
-    /// <summary>True when the expression reads a column or presence marker of the given source.</summary>
-    private static bool ReferencesSource(SqlExpression expression, int sourceId) => expression switch
-    {
-        SqlColumn column => column.SourceId == sourceId,
-        SqlPresence presence => presence.SourceId == sourceId,
-        SqlBinary binary => ReferencesSource(binary.Left, sourceId) || ReferencesSource(binary.Right, sourceId),
-        SqlUnary unary => ReferencesSource(unary.Operand, sourceId),
-        SqlCast cast => ReferencesSource(cast.Operand, sourceId),
-        SqlCase caseExpression =>
-            ReferencesSource(caseExpression.Test, sourceId)
-            || ReferencesSource(caseExpression.IfTrue, sourceId)
-            || ReferencesSource(caseExpression.IfFalse, sourceId),
-        SqlLike like => ReferencesSource(like.Input, sourceId),
-        SqlIn inOp => ReferencesSource(inOp.Input, sourceId),
-        SqlAggregate { Argument: { } argument } => ReferencesSource(argument, sourceId),
-        _ => false,
-    };
 
     private static Dictionary<int, Source> Sources(UpdateQuery query)
     {

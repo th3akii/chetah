@@ -837,25 +837,25 @@ public static class PostgresCompiler
 
         private void RenderJoin(JoinClause join) => _sql.Append(RenderJoinFragment(join));
 
-        /// <summary>Renders a join (operator, source and ON) for UPDATE … FROM.</summary>
+        /// <summary>Renders a join (operator, source and ON) for a write statement's source list.</summary>
         internal string RenderJoinFragment(JoinClause join) =>
             JoinOperator(join) + RenderJoinEntry(join) + " ON " + RenderExpression(join.On);
 
         /// <summary>
         /// Renders a join whose ON condition moved to WHERE, because that condition references the
-        /// UPDATE target and PostgreSQL rejects target references inside a FROM join's ON clause.
+        /// target and PostgreSQL rejects target references inside a source join's ON clause.
         /// An INNER JOIN without its condition is exactly a CROSS JOIN plus a WHERE filter.
         /// </summary>
         internal string RenderJoinWithoutConditionFragment(JoinClause join)
         {
             if (join.Kind != JoinKind.Inner)
                 throw new InvalidOperationException(
-                    $"Source {join.SourceId} is LEFT-joined and its condition references the UPDATE target; "
-                    + "PostgreSQL cannot express that in FROM.");
+                    $"Source {join.SourceId} is LEFT-joined and its condition references the target table; "
+                    + "PostgreSQL cannot express that in a source list.");
             return " CROSS JOIN " + RenderJoinEntry(join);
         }
 
-        /// <summary>Renders the first FROM item of an UPDATE … FROM; later sources use <see cref="RenderJoinFragment"/>.</summary>
+        /// <summary>Renders the first source item of a write statement; later sources use <see cref="RenderJoinFragment"/>.</summary>
         internal string RenderJoinEntryFragment(JoinClause join) => RenderJoinEntry(join);
 
         private static string JoinOperator(JoinClause join) => join.Kind switch
