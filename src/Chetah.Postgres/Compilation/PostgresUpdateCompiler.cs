@@ -213,10 +213,29 @@ public static class PostgresUpdateCompiler
     /// <summary>
     /// What a CASE condition proves inside a branch: columns that are non-null, and LEFT-joined
     /// sources whose row is present. Recognizes <c>column.HasValue</c>, <c>column != null</c>,
-    /// <c>joinedEntity == null</c>, and their negations.
+    /// <c>joinedEntity == null</c>, and their negations. A compound test contributes the facts its
+    /// operands prove only in the branch that has to satisfy all of them: a conjunction in the true
+    /// branch and a disjunction in the false branch. The converse proves nothing, because either
+    /// operand alone decides a disjunction true or a conjunction false, and its counterpart may be
+    /// unknown.
     /// </summary>
     private static Proof? Guarded(SqlExpression test, Proof? proof, bool nonNullBranch)
     {
+        // Negation swaps which branch the operand has to satisfy. It is unwrapped here rather than
+        // in NullCheckedColumn so that a compound test under `!(...)` stays reachable.
+        if (test is SqlUnary { Operator: SqlUnaryOperator.Not, Operand: var negated })
+            return Guarded(negated, proof, !nonNullBranch);
+        // CASE treats an unknown test as false, so the true branch has every conjunction operand
+        // TRUE and the false branch has every disjunction operand FALSE.
+        if (test is SqlBinary { Operator: SqlBinaryOperator.And } conjunction)
+            return nonNullBranch
+                ? Guarded(conjunction.Right, Guarded(conjunction.Left, proof, nonNullBranch: true), nonNullBranch: true)
+                : proof;
+        if (test is SqlBinary { Operator: SqlBinaryOperator.Or } disjunction)
+            return nonNullBranch
+                ? proof
+                : Guarded(disjunction.Right, Guarded(disjunction.Left, proof, nonNullBranch: false), nonNullBranch: false);
+
         if (NullCheckedColumn(test, nonNullBranch) is not { } guard)
             return proof;
 
@@ -243,8 +262,6 @@ public static class PostgresUpdateCompiler
             nonNullBranch ? (presence.SourceId, null) : null,
         SqlUnary { Operator: SqlUnaryOperator.IsNull, Operand: SqlPresence presence } =>
             nonNullBranch ? null : (presence.SourceId, null),
-        SqlUnary { Operator: SqlUnaryOperator.Not, Operand: var operand } =>
-            NullCheckedColumn(operand, !nonNullBranch),
         SqlBinary { Operator: SqlBinaryOperator.NotEqual } binary when IsNullValue(binary.Right) =>
             nonNullBranch ? NullChecked(binary.Left) : null,
         SqlBinary { Operator: SqlBinaryOperator.Equal } binary when IsNullValue(binary.Right) =>

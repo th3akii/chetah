@@ -368,6 +368,41 @@ public class TypedUpdateQueryTests
     }
 
     [Fact]
+    public void DisjunctiveGuardProvesANullableColumnInTheFalseBranch()
+    {
+        // OR is false only when every operand is false, so the ELSE branch knows both columns are
+        // non-null. Negating the same test makes the true branch the one that has to satisfy it.
+        var orBranch = Db.Update<Student>()
+            .Set(student => student.FirstName, student => student.Nickname == null || student.Age == null ? "unknown" : student.Nickname)
+            .Where(student => student.Id == 1)
+            .Compile();
+        var negated = Db.Update<Student>()
+            .Set(student => student.FirstName, student => !(student.Nickname == null || student.Age == null) ? student.Nickname : "unknown")
+            .Where(student => student.Id == 1)
+            .Compile();
+
+        Assert.Contains("ELSE \"nickname\"", orBranch.Sql, StringComparison.Ordinal);
+        Assert.Contains("THEN \"nickname\"", negated.Sql, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CompoundGuardsProveOnlyTheBranchThatSatisfiesEveryOperand()
+    {
+        // A disjunction is true with either operand alone, and a conjunction is false with either
+        // operand alone, so the column stays nullable in those branches.
+        Assert.Throws<InvalidOperationException>(
+            () => Db.Update<Student>()
+                .Set(student => student.FirstName, student => student.Nickname != null || student.Age > 0 ? student.Nickname : "unknown")
+                .Where(student => student.Id == 1)
+                .Compile());
+        Assert.Throws<InvalidOperationException>(
+            () => Db.Update<Student>()
+                .Set(student => student.FirstName, student => student.Nickname != null && student.Nickname != "" ? "unknown" : student.Nickname)
+                .Where(student => student.Id == 1)
+                .Compile());
+    }
+
+    [Fact]
     public void NullableValueCompilesToANullParameter()
     {
         var compiled = Db.Update<Student>()

@@ -625,7 +625,11 @@ and for DELETE by D013.
   the property alone cannot prove a non-null value. The check walks the
   assignment expression with the translator's own rules (COALESCE, CASE,
   IS NULL, comparisons), so a nullable expression that cannot yield NULL is
-  accepted and a nullable one into a `NOT NULL` column is refused.
+  accepted and a nullable one into a `NOT NULL` column is refused. A CASE
+  branch is credited only with what its test proves inside that branch: a null
+  check of its own, or the null checks a conjunction implies in the true branch
+  and a disjunction implies in the false branch. The converse directions prove
+  nothing, so an expression that can still yield NULL is never accepted.
 - Generated (computed) columns are never assignable — including `DEFAULT`, which
   PostgreSQL itself would accept for a stored generated column; Chetah treats
   the column as read-only. `GENERATED ALWAYS AS IDENTITY` accepts only
