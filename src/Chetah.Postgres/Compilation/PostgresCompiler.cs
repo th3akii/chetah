@@ -169,6 +169,8 @@ public static class PostgresCompiler
                 if (join.Kind == JoinKind.Left)
                     _presenceMarkers.Add(join.SourceId, DerivePresenceMarker(join.Table));
 
+                if (join.On.ClrType != typeof(bool))
+                    throw new ArgumentException($"Join source {join.SourceId}'s ON condition must be a boolean expression.");
                 if (ContainsAggregate(join.On))
                     throw new InvalidOperationException("Aggregate functions are not allowed in join ON clauses.");
                 ValidateTree(join.On);
